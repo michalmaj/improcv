@@ -168,12 +168,32 @@ def test_rotate_by_zero_degrees_preserves_content() -> None:
 
 
 def test_rotate_by_180_degrees_flips_content_around_center() -> None:
+    # Pixel-grid center of a 21-wide axis is (21-1)/2 = 10, not 21/2 = 10.5.
+    # 2*10 - 5 = 15, not 16.
     image = np.zeros((21, 21), dtype=np.uint8)
     image[5, 5] = 255
 
     result = im.rotate(image, angle=180, interpolation=cv2.INTER_NEAREST)
 
-    assert result[16, 16] == 255
+    assert result[15, 15] == 255
+
+
+@pytest.mark.parametrize("angle, k", [(90, 1), (180, 2), (270, 3)])
+def test_rotate_matches_np_rot90_for_even_square_image(angle: int, k: int) -> None:
+    image = _make_image(20, 20, channels=None)
+
+    result = im.rotate(image, angle=angle, interpolation=cv2.INTER_NEAREST)
+
+    np.testing.assert_array_equal(result, np.rot90(image, k=k))
+
+
+@pytest.mark.parametrize("angle, k", [(90, 1), (180, 2), (270, 3)])
+def test_rotate_matches_np_rot90_for_odd_square_image(angle: int, k: int) -> None:
+    image = _make_image(21, 21, channels=None)
+
+    result = im.rotate(image, angle=angle, interpolation=cv2.INTER_NEAREST)
+
+    np.testing.assert_array_equal(result, np.rot90(image, k=k))
 
 
 def test_rotate_preserves_shape_and_dtype() -> None:
@@ -245,6 +265,33 @@ def test_rotate_bound_does_not_over_expand_at_exact_90_degrees() -> None:
     result = im.rotate_bound(image, angle=90)
 
     assert result.shape[:2] == (40, 20)
+
+
+@pytest.mark.parametrize("angle, k", [(90, 1), (180, 2), (270, 3)])
+def test_rotate_bound_matches_np_rot90_for_even_square_image(angle: int, k: int) -> None:
+    image = _make_image(20, 20, channels=None)
+
+    result = im.rotate_bound(image, angle=angle, interpolation=cv2.INTER_NEAREST)
+
+    np.testing.assert_array_equal(result, np.rot90(image, k=k))
+
+
+@pytest.mark.parametrize("angle, k", [(90, 1), (180, 2), (270, 3)])
+def test_rotate_bound_matches_np_rot90_for_odd_square_image(angle: int, k: int) -> None:
+    image = _make_image(21, 21, channels=None)
+
+    result = im.rotate_bound(image, angle=angle, interpolation=cv2.INTER_NEAREST)
+
+    np.testing.assert_array_equal(result, np.rot90(image, k=k))
+
+
+@pytest.mark.parametrize("angle, k", [(90, 1), (180, 2), (270, 3)])
+def test_rotate_bound_matches_np_rot90_for_non_square_image(angle: int, k: int) -> None:
+    image = _make_image(20, 40, channels=None)  # height=20, width=40
+
+    result = im.rotate_bound(image, angle=angle, interpolation=cv2.INTER_NEAREST)
+
+    np.testing.assert_array_equal(result, np.rot90(image, k=k))
 
 
 def test_rotate_bound_does_not_mutate_input() -> None:

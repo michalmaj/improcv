@@ -187,7 +187,10 @@ def rotate(
     require_image_ndim(image)
     height, width = image.shape[:2]
     if center is None:
-        center = (width / 2, height / 2)
+        # Pixel centers sit at integer coordinates 0..N-1, so the center of
+        # the grid is (N-1)/2, not N/2 — the latter is off by half a pixel
+        # and loses a full row/column on 90/180-degree rotations.
+        center = ((width - 1) / 2, (height - 1) / 2)
     matrix = cv2.getRotationMatrix2D(center, angle, scale)
     return cv2.warpAffine(
         image,
@@ -235,7 +238,10 @@ def rotate_bound(
     """
     require_image_ndim(image)
     height, width = image.shape[:2]
-    center = (width / 2, height / 2)
+    # Pixel centers sit at integer coordinates 0..N-1, so the center of the
+    # grid is (N-1)/2, not N/2 — the latter is off by half a pixel and loses
+    # a full row/column on 90/180-degree rotations.
+    center = ((width - 1) / 2, (height - 1) / 2)
     matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
 
     cos = abs(matrix[0, 0])
@@ -249,8 +255,9 @@ def rotate_bound(
     new_width = math.ceil(round(height * sin + width * cos, 6))
     new_height = math.ceil(round(height * cos + width * sin, 6))
 
-    matrix[0, 2] += (new_width / 2) - center[0]
-    matrix[1, 2] += (new_height / 2) - center[1]
+    # Same off-by-half-pixel correction for the new canvas's center.
+    matrix[0, 2] += (new_width - 1) / 2 - center[0]
+    matrix[1, 2] += (new_height - 1) / 2 - center[1]
 
     return cv2.warpAffine(
         image,
