@@ -44,6 +44,17 @@ def require_non_negative(value: float, name: str) -> None:
         raise ValueError(f"{name} must be non-negative, got {value}")
 
 
+def require_finite(value: float, name: str) -> None:
+    """Raise ValueError unless `value` is finite (not NaN or infinite).
+
+    Unlike `require_positive`/`require_non_negative`, this carries no sign
+    constraint — for parameters where negative values are meaningful (e.g.
+    a brightness delta) but NaN/infinity are not.
+    """
+    if _is_nan_or_inf(value):
+        raise ValueError(f"{name} must be finite, got {value}")
+
+
 def require_positive_int(value: object, name: str) -> None:
     """Raise TypeError unless `value` is an int, then ValueError unless it's positive.
 

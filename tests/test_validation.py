@@ -4,6 +4,7 @@ import pytest
 from improcv._validation import (
     require_channels,
     require_dtype,
+    require_finite,
     require_image_ndim,
     require_non_negative,
     require_odd,
@@ -69,6 +70,21 @@ def test_require_non_negative_rejects_nan_and_infinity() -> None:
         require_non_negative(float("nan"), "factor")
     with pytest.raises(ValueError, match="finite"):
         require_non_negative(float("inf"), "factor")
+
+
+def test_require_finite_accepts_finite_value() -> None:
+    require_finite(-30.0, "delta")
+    require_finite(0, "delta")
+    require_finite(30.0, "delta")
+
+
+def test_require_finite_rejects_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(float("nan"), "delta")
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(float("inf"), "delta")
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(float("-inf"), "delta")
 
 
 def test_require_dtype_accepts_allowed_dtype() -> None:
