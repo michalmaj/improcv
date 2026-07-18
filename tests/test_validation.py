@@ -169,6 +169,13 @@ def test_require_channels_rejects_wrong_channel_count() -> None:
         require_channels(np.zeros((4, 4, 1)), 3)
 
 
+def test_require_channels_rejects_empty_image() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        require_channels(np.zeros((0, 10, 3)), 3)
+    with pytest.raises(ValueError, match="empty"):
+        require_channels(np.zeros((10, 0, 3)), 3)
+
+
 def test_require_odd_accepts_odd_value() -> None:
     require_odd(3, "kernel_size")
 

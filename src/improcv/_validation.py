@@ -169,12 +169,19 @@ def require_transform_matrix(
 
 
 def require_channels(image: np.ndarray, channels: int) -> None:
-    """Raise ValueError unless `image` has exactly `channels` channels."""
+    """Raise ValueError unless `image` has exactly `channels` channels and is non-empty.
+
+    The emptiness check matters on its own: a 3-channel *empty* image
+    (e.g. shape ``(0, 10, 3)``) previously passed this check and reached
+    a raw ``cv2.error`` at the actual OpenCV call site.
+    """
     if image.ndim != 3 or image.shape[2] != channels:
         raise ValueError(
             f"image must have {channels} channels with shape (H, W, {channels}), "
             f"got shape {image.shape}"
         )
+    if image.shape[0] == 0 or image.shape[1] == 0:
+        raise ValueError(f"image must not be empty, got shape {image.shape}")
 
 
 def require_odd(value: int, name: str) -> None:
