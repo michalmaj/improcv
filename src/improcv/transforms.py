@@ -5,6 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from improcv._validation import require_image_ndim, require_positive
+
 __all__ = ["resize"]
 
 
@@ -41,14 +43,13 @@ def resize(
         If both `width` and `height` are ``None``, if either is not a
         positive integer, or if `image` does not have 2 or 3 dimensions.
     """
-    if image.ndim not in (2, 3):
-        raise ValueError(f"image must have 2 or 3 dimensions, got {image.ndim}")
+    require_image_ndim(image)
     if width is None and height is None:
         raise ValueError("at least one of width or height must be given")
-    if width is not None and width <= 0:
-        raise ValueError(f"width must be positive, got {width}")
-    if height is not None and height <= 0:
-        raise ValueError(f"height must be positive, got {height}")
+    if width is not None:
+        require_positive(width, "width")
+    if height is not None:
+        require_positive(height, "height")
 
     source_height, source_width = image.shape[:2]
 
