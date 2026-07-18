@@ -24,10 +24,19 @@ classifiers = [
 ]
 dependencies = ["numpy>=1.24"]
 
-# improcv does not pin a specific OpenCV distribution (opencv-python,
-# opencv-python-headless, opencv-contrib-python, ...) as a hard runtime
-# dependency, to avoid installing a conflicting variant a user already has.
-# Install one of them yourself; see README.md.
+# improcv does not pin any one OpenCV distribution as a hard runtime
+# dependency, to avoid installing a conflicting variant a user already
+# has installed under a different name. Choose exactly one:
+#   pip install improcv[cv]                  # opencv-python
+#   pip install improcv[cv-headless]         # opencv-python-headless
+#   pip install improcv[cv-contrib]          # opencv-contrib-python
+#   pip install improcv[cv-contrib-headless] # opencv-contrib-python-headless
+# or install one of the four `opencv-*` packages yourself.
+[project.optional-dependencies]
+cv = ["opencv-python>=4.9"]
+cv-headless = ["opencv-python-headless>=4.9"]
+cv-contrib = ["opencv-contrib-python>=4.9"]
+cv-contrib-headless = ["opencv-contrib-python-headless>=4.9"]
 
 [project.urls]
 Homepage = "https://github.com/michalmaj/improcv"

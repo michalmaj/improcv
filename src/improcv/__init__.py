@@ -1,5 +1,18 @@
 """improcv: modern image-processing and computer-vision utilities for NumPy and OpenCV."""
 
+try:
+    import cv2 as _cv2  # noqa: F401
+except ImportError as _exc:
+    raise ImportError(
+        "improcv requires an OpenCV installation, which is not installed automatically "
+        "(to avoid conflicting with an OpenCV variant you may already have). Install "
+        "exactly one of: `pip install improcv[cv]` (opencv-python), "
+        "`pip install improcv[cv-headless]` (opencv-python-headless), "
+        "`pip install improcv[cv-contrib]` (opencv-contrib-python), or "
+        "`pip install improcv[cv-contrib-headless]` (opencv-contrib-python-headless) — "
+        "or install one of the four `opencv-*` packages yourself."
+    ) from _exc
+
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.filters import (
