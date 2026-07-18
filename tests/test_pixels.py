@@ -50,12 +50,44 @@ def test_adjust_brightness_clamps_to_255() -> None:
     assert result[0, 0] == 255
 
 
-def test_adjust_contrast_scales_pixel_values() -> None:
-    image = np.full((5, 5), 50, dtype=np.uint8)
+def test_adjust_brightness_decreases_pixel_values() -> None:
+    image = np.full((5, 5), 100, dtype=np.uint8)
+
+    result = im.adjust_brightness(image, delta=-30)
+
+    assert result[0, 0] == 70
+
+
+def test_adjust_brightness_negative_delta_clamps_to_zero_not_abs() -> None:
+    image = np.full((5, 5), 10, dtype=np.uint8)
+
+    result = im.adjust_brightness(image, delta=-50)
+
+    assert result[0, 0] == 0
+
+
+def test_adjust_contrast_expands_values_away_from_midpoint() -> None:
+    image = np.array([[200, 100]], dtype=np.uint8)
 
     result = im.adjust_contrast(image, factor=2.0)
 
-    assert result[0, 0] == 100
+    assert result[0, 0] == 255  # (200-128)*2+128 = 272 -> clamps to 255
+    assert result[0, 1] == 72  # (100-128)*2+128 = 72
+
+
+def test_adjust_contrast_preserves_midpoint() -> None:
+    image = np.full((5, 5), 128, dtype=np.uint8)
+
+    result = im.adjust_contrast(image, factor=3.0)
+
+    assert result[0, 0] == 128
+
+
+def test_adjust_contrast_rejects_negative_factor() -> None:
+    image = np.full((5, 5), 100, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.adjust_contrast(image, factor=-1.0)
 
 
 def test_alpha_blend_averages_two_images() -> None:

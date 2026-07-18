@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim
+from improcv._validation import require_image_ndim, require_non_negative
 
 __all__ = [
     "in_range",
@@ -59,25 +59,38 @@ def invert(image: np.ndarray) -> np.ndarray:
 def adjust_brightness(image: np.ndarray, delta: float) -> np.ndarray:
     """Add `delta` to every pixel value, clamped to the valid 8-bit range.
 
+    Uses saturating (clamping) arithmetic in both directions: a negative
+    `delta` that would push a pixel below 0 clamps to 0, it does not wrap
+    or reflect back to a positive value (unlike a naive
+    ``cv2.convertScaleAbs`` call, whose ``beta`` argument takes the
+    absolute value of the result rather than clamping it).
+
     Raises
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions.
     """
     require_image_ndim(image)
-    return cv2.convertScaleAbs(image, alpha=1.0, beta=delta)
+    return np.clip(image.astype(np.int32) + delta, 0, 255).astype(np.uint8)
 
 
 def adjust_contrast(image: np.ndarray, factor: float) -> np.ndarray:
-    """Scale pixel values by `factor`, clamped to the valid 8-bit range.
+    """Scale pixel values by `factor` around the mid-gray point (128).
+
+    Scaling around the midpoint (rather than around 0) keeps average
+    brightness roughly stable: values above 128 move further up, values
+    below 128 move further down, matching how "contrast" is defined in
+    standard image editors. Scaling around 0 would conflate contrast with
+    brightness (every pixel would move in the same direction).
 
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions.
+        If `image` does not have 2 or 3 dimensions, or `factor` is negative.
     """
     require_image_ndim(image)
-    return cv2.convertScaleAbs(image, alpha=factor, beta=0)
+    require_non_negative(factor, "factor")
+    return np.clip((image.astype(np.float64) - 128.0) * factor + 128.0, 0, 255).astype(np.uint8)
 
 
 def alpha_blend(image_a: np.ndarray, image_b: np.ndarray, alpha: float) -> np.ndarray:

@@ -35,6 +35,13 @@ def test_require_positive_rejects_zero_and_negative() -> None:
         require_positive(-1, "width")
 
 
+def test_require_positive_rejects_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        require_positive(float("nan"), "gamma")
+    with pytest.raises(ValueError, match="finite"):
+        require_positive(float("inf"), "gamma")
+
+
 def test_require_non_negative_accepts_zero() -> None:
     require_non_negative(0, "top")
 
@@ -42,6 +49,13 @@ def test_require_non_negative_accepts_zero() -> None:
 def test_require_non_negative_rejects_negative() -> None:
     with pytest.raises(ValueError, match="non-negative"):
         require_non_negative(-1, "top")
+
+
+def test_require_non_negative_rejects_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        require_non_negative(float("nan"), "factor")
+    with pytest.raises(ValueError, match="finite"):
+        require_non_negative(float("inf"), "factor")
 
 
 def test_require_channels_accepts_matching_channel_count() -> None:
