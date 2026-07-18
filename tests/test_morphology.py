@@ -43,6 +43,13 @@ def test_threshold_adaptive_rejects_even_block_size(make_image) -> None:
         im.threshold(image, method="adaptive_mean", block_size=4)
 
 
+def test_threshold_rejects_unknown_method() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="method"):
+        im.threshold(image, method="cokolwiek")  # type: ignore[arg-type]
+
+
 def test_dilate_grows_bright_region() -> None:
     image = np.zeros((11, 11), dtype=np.uint8)
     image[5, 5] = 255

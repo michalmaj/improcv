@@ -7,7 +7,12 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_non_negative, require_positive
+from improcv._validation import (
+    require_image_ndim,
+    require_non_negative,
+    require_one_of,
+    require_positive,
+)
 
 __all__ = [
     "resize",
@@ -274,8 +279,7 @@ def flip(image: np.ndarray, direction: FlipDirection) -> np.ndarray:
         one of the accepted values.
     """
     require_image_ndim(image)
-    if direction not in _FLIP_CODES:
-        raise ValueError(f"direction must be one of {tuple(_FLIP_CODES)}, got {direction!r}")
+    require_one_of(direction, _FLIP_CODES, "direction")
     return cv2.flip(image, _FLIP_CODES[direction])
 
 
@@ -398,8 +402,7 @@ def pad(
     require_non_negative(bottom, "bottom")
     require_non_negative(left, "left")
     require_non_negative(right, "right")
-    if mode not in _BORDER_MODES:
-        raise ValueError(f"mode must be one of {tuple(_BORDER_MODES)}, got {mode!r}")
+    require_one_of(mode, _BORDER_MODES, "mode")
 
     return cv2.copyMakeBorder(
         image, top, bottom, left, right, borderType=_BORDER_MODES[mode], value=value

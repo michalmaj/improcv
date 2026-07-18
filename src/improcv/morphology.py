@@ -7,7 +7,7 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_positive
+from improcv._validation import require_image_ndim, require_one_of, require_positive
 
 __all__ = [
     "threshold",
@@ -21,6 +21,12 @@ __all__ = [
 ]
 
 ThresholdMethod = Literal["binary", "otsu", "adaptive_mean", "adaptive_gaussian"]
+_THRESHOLD_METHODS: tuple[ThresholdMethod, ...] = (
+    "binary",
+    "otsu",
+    "adaptive_mean",
+    "adaptive_gaussian",
+)
 
 
 def threshold(
@@ -59,10 +65,12 @@ def threshold(
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions, or `block_size` is
-        not an odd integer greater than 1 (adaptive methods only).
+        If `image` does not have exactly 2 dimensions, `method` is not one
+        of the accepted values, or `block_size` is not an odd integer
+        greater than 1 (adaptive methods only).
     """
     require_image_ndim(image, ndims=(2,))
+    require_one_of(method, _THRESHOLD_METHODS, "method")
     if method == "binary":
         _, result = cv2.threshold(image, value, max_value, cv2.THRESH_BINARY)
         return result

@@ -5,6 +5,7 @@ from improcv._validation import (
     require_channels,
     require_image_ndim,
     require_non_negative,
+    require_one_of,
     require_positive,
 )
 
@@ -67,3 +68,12 @@ def test_require_channels_rejects_wrong_channel_count() -> None:
         require_channels(np.zeros((4, 4)), 3)
     with pytest.raises(ValueError, match="3 channels"):
         require_channels(np.zeros((4, 4, 1)), 3)
+
+
+def test_require_one_of_accepts_allowed_value() -> None:
+    require_one_of("horizontal", ("horizontal", "vertical"), "direction")
+
+
+def test_require_one_of_rejects_disallowed_value() -> None:
+    with pytest.raises(ValueError, match="direction"):
+        require_one_of("diagonal", ("horizontal", "vertical"), "direction")

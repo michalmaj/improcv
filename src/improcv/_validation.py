@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Collection
 
 import numpy as np
 
@@ -34,6 +35,18 @@ def require_non_negative(value: float, name: str) -> None:
         raise ValueError(f"{name} must be finite, got {value}")
     if value < 0:
         raise ValueError(f"{name} must be non-negative, got {value}")
+
+
+def require_one_of(value: object, allowed: Collection[object], name: str) -> None:
+    """Raise ValueError unless `value` is one of `allowed`.
+
+    Intended for runtime-checking string-literal (`Literal[...]`) parameters:
+    type checkers only catch invalid values at static-analysis time, so
+    every such parameter needs this check to reject bad values passed in
+    at runtime (e.g. from user input or untyped call sites).
+    """
+    if value not in allowed:
+        raise ValueError(f"{name} must be one of {tuple(allowed)}, got {value!r}")
 
 
 def require_channels(image: np.ndarray, channels: int) -> None:
