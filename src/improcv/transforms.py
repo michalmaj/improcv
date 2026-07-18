@@ -9,7 +9,7 @@ import numpy as np
 
 from improcv._validation import require_image_ndim, require_non_negative, require_positive
 
-__all__ = ["resize", "translate", "rotate", "rotate_bound", "flip", "crop", "center_crop"]
+__all__ = ["resize", "translate", "rotate", "rotate_bound", "flip", "crop", "center_crop", "pad"]
 
 
 def resize(
@@ -335,3 +335,61 @@ def center_crop(image: np.ndarray, width: int, height: int) -> np.ndarray:
     x = (source_width - width) // 2
     y = (source_height - height) // 2
     return crop(image, x, y, width, height)
+
+
+PadMode = Literal["constant", "reflect", "replicate", "wrap"]
+
+_BORDER_MODES: dict[PadMode, int] = {
+    "constant": cv2.BORDER_CONSTANT,
+    "reflect": cv2.BORDER_REFLECT_101,
+    "replicate": cv2.BORDER_REPLICATE,
+    "wrap": cv2.BORDER_WRAP,
+}
+
+
+def pad(
+    image: np.ndarray,
+    top: int,
+    bottom: int,
+    left: int,
+    right: int,
+    *,
+    mode: PadMode = "constant",
+    value: float | tuple[float, ...] = 0,
+) -> np.ndarray:
+    """Add a border around an image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    top, bottom, left, right : int
+        Border width in pixels on each side; must be non-negative.
+    mode : {"constant", "reflect", "replicate", "wrap"}, default "constant"
+        Border fill strategy.
+    value : float or tuple of float, default 0
+        Fill value used when `mode` is ``"constant"``.
+
+    Returns
+    -------
+    np.ndarray
+        A new, larger array with `image`'s content placed at
+        ``[top:top+H, left:left+W]``.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions, any border amount is
+        negative, or `mode` is not one of the accepted values.
+    """
+    require_image_ndim(image)
+    require_non_negative(top, "top")
+    require_non_negative(bottom, "bottom")
+    require_non_negative(left, "left")
+    require_non_negative(right, "right")
+    if mode not in _BORDER_MODES:
+        raise ValueError(f"mode must be one of {tuple(_BORDER_MODES)}, got {mode!r}")
+
+    return cv2.copyMakeBorder(
+        image, top, bottom, left, right, borderType=_BORDER_MODES[mode], value=value
+    )

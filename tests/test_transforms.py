@@ -354,3 +354,50 @@ def test_center_crop_rejects_size_larger_than_image() -> None:
 
     with pytest.raises(ValueError):
         im.center_crop(image, width=20, height=20)
+
+
+def test_pad_adds_border_of_expected_size() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    result = im.pad(image, top=1, bottom=2, left=3, right=4)
+
+    assert result.shape == (13, 17)
+
+
+def test_pad_constant_fills_with_given_value() -> None:
+    image = np.full((5, 5), 100, dtype=np.uint8)
+
+    result = im.pad(image, top=1, bottom=1, left=1, right=1, mode="constant", value=200)
+
+    assert result[0, 0] == 200
+    assert result[1, 1] == 100
+
+
+def test_pad_preserves_original_content_in_correct_position() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    result = im.pad(image, top=2, bottom=0, left=3, right=0)
+
+    np.testing.assert_array_equal(result[2:, 3:], image)
+
+
+@pytest.mark.parametrize("top, bottom, left, right", [(-1, 0, 0, 0), (0, -1, 0, 0)])
+def test_pad_rejects_negative_amount(top: int, bottom: int, left: int, right: int) -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.pad(image, top=top, bottom=bottom, left=left, right=right)
+
+
+def test_pad_rejects_invalid_mode() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="mode"):
+        im.pad(image, top=1, bottom=1, left=1, right=1, mode="diagonal")  # type: ignore[arg-type]
+
+
+def test_pad_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.pad(image, top=1, bottom=1, left=1, right=1)
