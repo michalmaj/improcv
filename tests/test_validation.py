@@ -17,6 +17,7 @@ from improcv._validation import (
     require_real_number,
     require_same_shape_and_dtype,
     require_size_2d,
+    require_transform_matrix,
 )
 
 
@@ -306,3 +307,26 @@ def test_require_size_2d_rejects_non_positive_element() -> None:
         require_size_2d((0, 5), "output_size")
     with pytest.raises(ValueError, match=r"output_size\[1\]"):
         require_size_2d((5, -5), "output_size")
+
+
+def test_require_transform_matrix_accepts_valid_matrix() -> None:
+    require_transform_matrix(np.eye(2, 3, dtype=np.float32), (2, 3), "matrix")
+    require_transform_matrix(np.eye(3, dtype=np.float64), (3, 3), "matrix")
+
+
+def test_require_transform_matrix_rejects_wrong_shape() -> None:
+    with pytest.raises(ValueError, match=r"\(2, 3\)"):
+        require_transform_matrix(np.eye(3, dtype=np.float32), (2, 3), "matrix")
+
+
+def test_require_transform_matrix_rejects_non_float_dtype() -> None:
+    with pytest.raises(TypeError, match="float32"):
+        require_transform_matrix(np.eye(2, 3, dtype=np.int32), (2, 3), "matrix")
+
+
+def test_require_transform_matrix_rejects_non_finite_values() -> None:
+    matrix = np.eye(2, 3, dtype=np.float32)
+    matrix[0, 2] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        require_transform_matrix(matrix, (2, 3), "matrix")

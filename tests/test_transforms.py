@@ -231,6 +231,29 @@ def test_rotate_rejects_1d_array() -> None:
         im.rotate(image, angle=10)
 
 
+def test_rotate_rejects_non_finite_angle() -> None:
+    image = _make_image(20, 20)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.rotate(image, angle=float("nan"))
+
+
+def test_rotate_rejects_non_positive_scale() -> None:
+    image = _make_image(20, 20)
+
+    with pytest.raises(ValueError, match="positive"):
+        im.rotate(image, angle=10, scale=-1)
+    with pytest.raises(ValueError, match="finite"):
+        im.rotate(image, angle=10, scale=float("nan"))
+
+
+def test_rotate_rejects_non_finite_center() -> None:
+    image = _make_image(20, 20)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.rotate(image, angle=10, center=(float("nan"), 0.0))
+
+
 def test_rotate_bound_by_zero_degrees_preserves_size_and_content() -> None:
     image = _make_image(20, 20)
 
@@ -317,6 +340,16 @@ def test_rotate_bound_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.rotate_bound(image, angle=10)
+
+
+def test_rotate_bound_rejects_non_finite_angle() -> None:
+    # Previously reached an accidental Python ValueError ("cannot convert
+    # float NaN to integer") from math.ceil() deep in the canvas-size
+    # computation, not a clear validation error raised up front.
+    image = _make_image(20, 20)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.rotate_bound(image, angle=float("nan"))
 
 
 def test_flip_horizontal_mirrors_columns() -> None:
@@ -557,6 +590,23 @@ def test_warp_affine_rejects_wrong_matrix_shape() -> None:
         im.warp_affine(image, matrix)
 
 
+def test_warp_affine_rejects_non_float_matrix_dtype() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.int32)
+
+    with pytest.raises(TypeError, match="float32"):
+        im.warp_affine(image, matrix)  # type: ignore[arg-type]
+
+
+def test_warp_affine_rejects_non_finite_matrix() -> None:
+    # Previously silently produced a black image instead of raising.
+    image = _make_image(10, 10, channels=None)
+    matrix = np.array([[1.0, 0.0, np.nan], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.warp_affine(image, matrix)
+
+
 def test_warp_affine_rejects_1d_array() -> None:
     image = np.zeros(10, dtype=np.uint8)
     matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
@@ -613,6 +663,23 @@ def test_warp_perspective_rejects_wrong_matrix_shape() -> None:
     matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
 
     with pytest.raises(ValueError, match=r"\(3, 3\)"):
+        im.warp_perspective(image, matrix)
+
+
+def test_warp_perspective_rejects_non_float_matrix_dtype() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.eye(3, dtype=np.int32)
+
+    with pytest.raises(TypeError, match="float32"):
+        im.warp_perspective(image, matrix)  # type: ignore[arg-type]
+
+
+def test_warp_perspective_rejects_non_finite_matrix() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.eye(3, dtype=np.float32)
+    matrix[0, 2] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
         im.warp_perspective(image, matrix)
 
 

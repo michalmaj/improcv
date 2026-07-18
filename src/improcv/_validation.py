@@ -149,6 +149,25 @@ def require_dtype(image: np.ndarray, dtypes: tuple[type, ...], name: str = "imag
         raise TypeError(f"{name} must have dtype in ({allowed}), got {image.dtype}")
 
 
+def require_transform_matrix(
+    matrix: np.ndarray, shape: tuple[int, int], name: str = "matrix"
+) -> None:
+    """Raise ValueError/TypeError unless `matrix` is a finite float array of `shape`.
+
+    Checks shape, then dtype (``float32``/``float64`` — an ``int32``
+    matrix reaches a raw ``cv2.error``), then finiteness (a ``NaN`` in the
+    matrix does not error at all; it silently produces a black image).
+    Deliberately does not cast a wrong-dtype matrix for the caller — a
+    silent cast could paper over the caller's own mistake (e.g. building
+    the matrix from integer inputs by accident).
+    """
+    if matrix.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}, got {matrix.shape}")
+    require_dtype(matrix, (np.float32, np.float64), name)
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError(f"{name} must contain only finite values")
+
+
 def require_channels(image: np.ndarray, channels: int) -> None:
     """Raise ValueError unless `image` has exactly `channels` channels."""
     if image.ndim != 3 or image.shape[2] != channels:
