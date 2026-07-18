@@ -10,6 +10,7 @@ import numpy as np
 from improcv._validation import (
     require_dtype,
     require_image_ndim,
+    require_non_negative_int,
     require_odd,
     require_one_of,
     require_positive_int,
@@ -70,7 +71,12 @@ def threshold(
     Returns
     -------
     np.ndarray
-        A new single-channel array with values in ``{0, max_value}``.
+        A new single-channel array with values in ``{0, max_value}``. Note
+        this is *not* always improcv's ``uint8`` ``{0, 255}`` mask
+        convention (see `in_range`, `auto_canny`, `harris_corner`):
+        ``"binary"`` mode preserves `image`'s dtype and honors a custom
+        `max_value`, so the result is only a conventional mask when
+        `image` is ``uint8`` and `max_value` is left at its default 255.
 
     Raises
     ------
@@ -113,14 +119,24 @@ def _kernel(size: int) -> np.ndarray:
 
 
 def dilate(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
-    """Grow bright regions using a square structuring element."""
+    """Grow bright regions using a square structuring element.
+
+    `iterations` may be ``0`` (a meaningful no-op, returns `image`
+    unchanged) but not negative.
+    """
     require_image_ndim(image)
+    require_non_negative_int(iterations, "iterations")
     return cv2.dilate(image, _kernel(kernel_size), iterations=iterations)
 
 
 def erode(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
-    """Shrink bright regions using a square structuring element."""
+    """Shrink bright regions using a square structuring element.
+
+    `iterations` may be ``0`` (a meaningful no-op, returns `image`
+    unchanged) but not negative.
+    """
     require_image_ndim(image)
+    require_non_negative_int(iterations, "iterations")
     return cv2.erode(image, _kernel(kernel_size), iterations=iterations)
 
 

@@ -35,6 +35,13 @@ def test_invert_rejects_1d_array() -> None:
         im.invert(image)
 
 
+def test_invert_rejects_non_uint8_dtype() -> None:
+    image = np.zeros((5, 5), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.invert(image)  # type: ignore[arg-type]
+
+
 def test_adjust_brightness_increases_pixel_values() -> None:
     image = np.full((5, 5), 100, dtype=np.uint8)
 
@@ -67,6 +74,22 @@ def test_adjust_brightness_negative_delta_clamps_to_zero_not_abs() -> None:
     assert result[0, 0] == 0
 
 
+def test_adjust_brightness_rejects_non_uint8_dtype() -> None:
+    image = np.array([[0.2, 0.8]], dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.adjust_brightness(image, delta=10)  # type: ignore[arg-type]
+
+
+def test_adjust_brightness_rejects_non_finite_delta() -> None:
+    image = np.full((5, 5), 10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.adjust_brightness(image, delta=float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        im.adjust_brightness(image, delta=float("inf"))
+
+
 def test_adjust_contrast_expands_values_away_from_midpoint() -> None:
     image = np.array([[200, 100]], dtype=np.uint8)
 
@@ -89,6 +112,13 @@ def test_adjust_contrast_rejects_negative_factor() -> None:
 
     with pytest.raises(ValueError, match="non-negative"):
         im.adjust_contrast(image, factor=-1.0)
+
+
+def test_adjust_contrast_rejects_non_uint8_dtype() -> None:
+    image = np.array([[0.2, 0.8]], dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.adjust_contrast(image, factor=2.0)  # type: ignore[arg-type]
 
 
 def test_alpha_blend_averages_two_images() -> None:
@@ -155,7 +185,23 @@ def test_bitwise_and_rejects_mismatched_dtype() -> None:
     image_b = np.zeros((5, 5), dtype=np.float32)
 
     with pytest.raises(TypeError, match="same dtype"):
-        im.bitwise_and(image_a, image_b)
+        im.bitwise_and(image_a, image_b)  # type: ignore[arg-type]
+
+
+def test_bitwise_and_rejects_non_uint8_dtype() -> None:
+    image_a = np.zeros((5, 5), dtype=np.float32)
+    image_b = np.zeros((5, 5), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.bitwise_and(image_a, image_b)  # type: ignore[arg-type]
+
+
+def test_bitwise_or_rejects_non_uint8_dtype() -> None:
+    image_a = np.zeros((5, 5), dtype=np.float32)
+    image_b = np.zeros((5, 5), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.bitwise_or(image_a, image_b)  # type: ignore[arg-type]
 
 
 def test_apply_lut_remaps_pixel_values() -> None:
@@ -182,3 +228,11 @@ def test_apply_lut_rejects_non_uint8_image_dtype() -> None:
 
     with pytest.raises(TypeError, match="uint8"):
         im.apply_lut(image, table)  # type: ignore[arg-type]
+
+
+def test_apply_lut_rejects_non_uint8_table_dtype() -> None:
+    image = np.zeros((5, 5), dtype=np.uint8)
+    table = np.full(256, -1, dtype=np.int64)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.apply_lut(image, table)

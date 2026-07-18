@@ -54,6 +54,31 @@ jobs:
       - name: Test
         run: uv run --no-sync pytest
 
+  lowest-deps:
+    # Everything above always resolves via uv.lock, which picks the
+    # newest version satisfying each constraint — so numpy>=1.24 and
+    # opencv-python>=4.9 in pyproject.toml were never actually tested at
+    # those floors. This job pins the exact declared minimums (on the
+    # oldest supported Python, since numpy 1.24 has no wheels for 3.12+)
+    # to catch a floor that's declared but doesn't actually work.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          python-version: "3.11"
+
+      - name: Create a venv and install the declared minimum versions
+        run: |
+          uv venv --python 3.11
+          uv pip install "numpy==1.24.*" "opencv-python-headless==4.9.*" pytest
+          uv pip install -e . --no-deps
+
+      - name: Test against the lowest declared dependency versions
+        run: uv run --no-sync pytest
+
   build:
     runs-on: ubuntu-latest
     steps:

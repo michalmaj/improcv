@@ -76,6 +76,13 @@ def test_bilateral_filter_rejects_non_positive_diameter(make_image) -> None:
         im.bilateral_filter(image, diameter=0, sigma_color=75.0, sigma_space=75.0)
 
 
+def test_bilateral_filter_rejects_non_int_diameter(make_image) -> None:
+    image = make_image(10, 10, channels=3)
+
+    with pytest.raises(TypeError, match="int"):
+        im.bilateral_filter(image, diameter=5.0, sigma_color=75.0, sigma_space=75.0)  # type: ignore[arg-type]
+
+
 def test_bilateral_filter_rejects_1d_array() -> None:
     image = np.zeros(10, dtype=np.uint8)
 

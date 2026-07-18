@@ -64,11 +64,15 @@ def test_threshold_adaptive_rejects_non_uint8_dtype() -> None:
         im.threshold(image, method="adaptive_mean")
 
 
-def test_threshold_binary_accepts_float32() -> None:
+def test_threshold_binary_does_not_follow_mask_convention() -> None:
+    # threshold is deliberately not one of the uint8-{0,255}-mask functions
+    # (in_range/auto_canny/harris_corner): "binary" mode preserves dtype
+    # and honors a custom max_value, so its output isn't always a mask.
     image = np.array([[0.1, 0.9]], dtype=np.float32)
 
     result = im.threshold(image, value=0.5, max_value=1.0, method="binary")
 
+    assert result.dtype == np.float32
     np.testing.assert_allclose(result, [[0.0, 1.0]])
 
 
@@ -90,6 +94,23 @@ def test_dilate_rejects_1d_array() -> None:
         im.dilate(image)
 
 
+def test_dilate_with_zero_iterations_is_a_no_op() -> None:
+    # iterations=0 is a meaningful "do nothing" value, not an error case.
+    image = np.zeros((11, 11), dtype=np.uint8)
+    image[5, 5] = 255
+
+    result = im.dilate(image, kernel_size=3, iterations=0)
+
+    np.testing.assert_array_equal(result, image)
+
+
+def test_dilate_rejects_negative_iterations() -> None:
+    image = np.zeros((11, 11), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.dilate(image, kernel_size=3, iterations=-1)
+
+
 def test_erode_shrinks_bright_region() -> None:
     image = np.zeros((11, 11), dtype=np.uint8)
     image[3:8, 3:8] = 255
@@ -97,6 +118,13 @@ def test_erode_shrinks_bright_region() -> None:
     result = im.erode(image, kernel_size=3)
 
     assert int(np.count_nonzero(result)) < int(np.count_nonzero(image))
+
+
+def test_erode_rejects_negative_iterations() -> None:
+    image = np.zeros((11, 11), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.erode(image, kernel_size=3, iterations=-1)
 
 
 def test_morph_open_removes_small_noise_speck() -> None:

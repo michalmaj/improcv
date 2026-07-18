@@ -4,14 +4,18 @@ import pytest
 from improcv._validation import (
     require_channels,
     require_dtype,
+    require_finite,
     require_image_ndim,
+    require_int,
     require_non_negative,
+    require_non_negative_int,
     require_odd,
     require_one_of,
     require_positive,
     require_positive_int,
     require_range,
     require_same_shape_and_dtype,
+    require_size_2d,
 )
 
 
@@ -69,6 +73,21 @@ def test_require_non_negative_rejects_nan_and_infinity() -> None:
         require_non_negative(float("nan"), "factor")
     with pytest.raises(ValueError, match="finite"):
         require_non_negative(float("inf"), "factor")
+
+
+def test_require_finite_accepts_finite_value() -> None:
+    require_finite(-30.0, "delta")
+    require_finite(0, "delta")
+    require_finite(30.0, "delta")
+
+
+def test_require_finite_rejects_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(float("nan"), "delta")
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(float("inf"), "delta")
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(float("-inf"), "delta")
 
 
 def test_require_dtype_accepts_allowed_dtype() -> None:
@@ -170,3 +189,54 @@ def test_require_positive_int_rejects_nan_and_infinity() -> None:
         require_positive_int(float("nan"), "kernel_size")
     with pytest.raises(TypeError, match="int"):
         require_positive_int(float("inf"), "kernel_size")
+
+
+def test_require_int_accepts_int() -> None:
+    require_int(3, "x")
+    require_int(-3, "x")
+    require_int(0, "x")
+
+
+def test_require_int_rejects_bool() -> None:
+    with pytest.raises(TypeError, match="int"):
+        require_int(True, "x")
+
+
+def test_require_int_rejects_float() -> None:
+    with pytest.raises(TypeError, match="int"):
+        require_int(1.5, "x")
+
+
+def test_require_non_negative_int_accepts_zero_and_positive() -> None:
+    require_non_negative_int(0, "top")
+    require_non_negative_int(5, "top")
+
+
+def test_require_non_negative_int_rejects_negative() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        require_non_negative_int(-1, "top")
+
+
+def test_require_non_negative_int_rejects_non_int() -> None:
+    with pytest.raises(TypeError, match="int"):
+        require_non_negative_int(1.5, "top")
+    with pytest.raises(TypeError, match="int"):
+        require_non_negative_int(True, "top")
+
+
+def test_require_size_2d_accepts_2_tuple_of_positive_ints() -> None:
+    require_size_2d((5, 10), "output_size")
+
+
+def test_require_size_2d_rejects_wrong_length() -> None:
+    with pytest.raises(ValueError, match="2-tuple"):
+        require_size_2d((5,), "output_size")
+    with pytest.raises(ValueError, match="2-tuple"):
+        require_size_2d((5, 5, 5), "output_size")
+
+
+def test_require_size_2d_rejects_non_positive_element() -> None:
+    with pytest.raises(ValueError, match=r"output_size\[0\]"):
+        require_size_2d((0, 5), "output_size")
+    with pytest.raises(ValueError, match=r"output_size\[1\]"):
+        require_size_2d((5, -5), "output_size")

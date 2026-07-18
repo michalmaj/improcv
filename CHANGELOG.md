@@ -42,8 +42,11 @@ carries a working `0.1.0a1` version number for local development.
   small images despite the "never crop" contract).
 - `warp_affine`/`warp_perspective`: a non-positive `output_size` is now rejected instead of being
   silently ignored (OpenCV itself silently returns the *input* size for an invalid `dsize`).
-- Unified all mask-returning functions (`in_range`, `harris_corner`, `threshold`, `auto_canny`) on
-  a single `uint8` `{0, 255}` convention (previously `in_range`/`harris_corner` returned `bool`).
+- Unified the mask-returning functions (`in_range`, `harris_corner`, `auto_canny`) on a single
+  `uint8` `{0, 255}` convention (previously `in_range`/`harris_corner` returned `bool`). `threshold`
+  is intentionally not one of these — it accepts any `max_value` and tolerates non-`uint8` dtypes
+  in `"binary"` mode (e.g. `float32` in, `float32` out), so it does not always produce a `{0, 255}`
+  `uint8` mask; it stays a flexible `Image -> Image` function instead.
 - Several functions (`auto_canny`, `clahe`, `gamma_correction`, `histogram_equalization`,
   `apply_lut`, `threshold`'s `otsu`/`adaptive_*` methods) now raise a clear `TypeError` for an
   unsupported dtype instead of a raw `cv2.error`.

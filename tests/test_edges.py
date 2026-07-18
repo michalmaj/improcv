@@ -29,6 +29,22 @@ def test_auto_canny_rejects_non_uint8_dtype() -> None:
         im.auto_canny(image)  # type: ignore[arg-type]
 
 
+def test_auto_canny_rejects_sigma_outside_unit_range() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="sigma"):
+        im.auto_canny(image, sigma=-1)
+    with pytest.raises(ValueError, match="sigma"):
+        im.auto_canny(image, sigma=1.5)
+
+
+def test_auto_canny_rejects_non_finite_sigma() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="sigma"):
+        im.auto_canny(image, sigma=float("nan"))
+
+
 def test_sobel_edge_detects_vertical_edge() -> None:
     image = np.zeros((20, 20), dtype=np.uint8)
     image[:, 10:] = 255
@@ -47,6 +63,13 @@ def test_sobel_edge_rejects_multichannel_image(make_image) -> None:
         im.sobel_edge(image)
 
 
+def test_sobel_edge_rejects_even_kernel_size() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="odd"):
+        im.sobel_edge(image, kernel_size=2)
+
+
 def test_laplacian_edge_detects_edge() -> None:
     image = np.zeros((20, 20), dtype=np.uint8)
     image[:, 10:] = 255
@@ -55,6 +78,13 @@ def test_laplacian_edge_detects_edge() -> None:
 
     assert result.shape == image.shape
     assert np.count_nonzero(result) > 0
+
+
+def test_laplacian_edge_rejects_even_kernel_size() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="odd"):
+        im.laplacian_edge(image, kernel_size=2)
 
 
 def test_harris_corner_detects_corner_of_square() -> None:
@@ -74,3 +104,31 @@ def test_harris_corner_rejects_multichannel_image(make_image) -> None:
 
     with pytest.raises(ValueError, match="2 dimensions"):
         im.harris_corner(image)
+
+
+def test_harris_corner_rejects_even_kernel_size() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="odd"):
+        im.harris_corner(image, kernel_size=2)
+
+
+def test_harris_corner_rejects_non_positive_block_size() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="positive"):
+        im.harris_corner(image, block_size=0)
+
+
+def test_harris_corner_rejects_negative_threshold() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.harris_corner(image, threshold=-0.1)
+
+
+def test_harris_corner_rejects_non_positive_k() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="positive"):
+        im.harris_corner(image, k=0)

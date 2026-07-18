@@ -10,10 +10,11 @@ import numpy as np
 
 from improcv._validation import (
     require_image_ndim,
-    require_non_negative,
+    require_int,
+    require_non_negative_int,
     require_one_of,
-    require_positive,
     require_positive_int,
+    require_size_2d,
 )
 from improcv.types import Image, TransformMatrix
 
@@ -126,8 +127,12 @@ def translate(
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions.
+    TypeError
+        If `x` or `y` is not an ``int``.
     """
     require_image_ndim(image)
+    require_int(x, "x")
+    require_int(y, "y")
     height, width = image.shape[:2]
     matrix = np.array([[1.0, 0.0, float(x)], [0.0, 1.0, float(y)]], dtype=np.float32)
     return cv2.warpAffine(
@@ -187,7 +192,10 @@ def rotate(
     require_image_ndim(image)
     height, width = image.shape[:2]
     if center is None:
-        center = (width / 2, height / 2)
+        # Pixel centers sit at integer coordinates 0..N-1, so the center of
+        # the grid is (N-1)/2, not N/2 — the latter is off by half a pixel
+        # and loses a full row/column on 90/180-degree rotations.
+        center = ((width - 1) / 2, (height - 1) / 2)
     matrix = cv2.getRotationMatrix2D(center, angle, scale)
     return cv2.warpAffine(
         image,
@@ -235,7 +243,10 @@ def rotate_bound(
     """
     require_image_ndim(image)
     height, width = image.shape[:2]
-    center = (width / 2, height / 2)
+    # Pixel centers sit at integer coordinates 0..N-1, so the center of the
+    # grid is (N-1)/2, not N/2 — the latter is off by half a pixel and loses
+    # a full row/column on 90/180-degree rotations.
+    center = ((width - 1) / 2, (height - 1) / 2)
     matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
 
     cos = abs(matrix[0, 0])
@@ -249,8 +260,9 @@ def rotate_bound(
     new_width = math.ceil(round(height * sin + width * cos, 6))
     new_height = math.ceil(round(height * cos + width * sin, 6))
 
-    matrix[0, 2] += (new_width / 2) - center[0]
-    matrix[1, 2] += (new_height / 2) - center[1]
+    # Same off-by-half-pixel correction for the new canvas's center.
+    matrix[0, 2] += (new_width - 1) / 2 - center[0]
+    matrix[1, 2] += (new_height - 1) / 2 - center[1]
 
     return cv2.warpAffine(
         image,
@@ -321,12 +333,14 @@ def crop(image: Image, x: int, y: int, width: int, height: int) -> Image:
         If `image` does not have 2 or 3 dimensions, `x`/`y` are negative,
         `width`/`height` are not positive, or the region exceeds the
         image bounds.
+    TypeError
+        If `x`, `y`, `width`, or `height` is not an ``int``.
     """
     require_image_ndim(image)
-    require_non_negative(x, "x")
-    require_non_negative(y, "y")
-    require_positive(width, "width")
-    require_positive(height, "height")
+    require_non_negative_int(x, "x")
+    require_non_negative_int(y, "y")
+    require_positive_int(width, "width")
+    require_positive_int(height, "height")
 
     source_height, source_width = image.shape[:2]
     if x + width > source_width or y + height > source_height:
@@ -358,8 +372,12 @@ def center_crop(image: Image, width: int, height: int) -> Image:
     ValueError
         Same conditions as `crop`; in particular, a `width`/`height` larger
         than `image` raises via a negative computed origin.
+    TypeError
+        If `width` or `height` is not an ``int``.
     """
     require_image_ndim(image)
+    require_positive_int(width, "width")
+    require_positive_int(height, "height")
     source_height, source_width = image.shape[:2]
     x = (source_width - width) // 2
     y = (source_height - height) // 2
@@ -410,12 +428,14 @@ def pad(
     ValueError
         If `image` does not have 2 or 3 dimensions, any border amount is
         negative, or `mode` is not one of the accepted values.
+    TypeError
+        If `top`, `bottom`, `left`, or `right` is not an ``int``.
     """
     require_image_ndim(image)
-    require_non_negative(top, "top")
-    require_non_negative(bottom, "bottom")
-    require_non_negative(left, "left")
-    require_non_negative(right, "right")
+    require_non_negative_int(top, "top")
+    require_non_negative_int(bottom, "bottom")
+    require_non_negative_int(left, "left")
+    require_non_negative_int(right, "right")
     require_one_of(mode, _BORDER_MODES, "mode")
 
     return cv2.copyMakeBorder(
@@ -468,8 +488,7 @@ def warp_affine(
         raise ValueError(f"matrix must have shape (2, 3), got {matrix.shape}")
     height, width = image.shape[:2]
     if output_size is not None:
-        require_positive_int(output_size[0], "output_size[0]")
-        require_positive_int(output_size[1], "output_size[1]")
+        require_size_2d(output_size, "output_size")
     size = output_size if output_size is not None else (width, height)
     return cv2.warpAffine(
         image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value
@@ -521,8 +540,7 @@ def warp_perspective(
         raise ValueError(f"matrix must have shape (3, 3), got {matrix.shape}")
     height, width = image.shape[:2]
     if output_size is not None:
-        require_positive_int(output_size[0], "output_size[0]")
-        require_positive_int(output_size[1], "output_size[1]")
+        require_size_2d(output_size, "output_size")
     size = output_size if output_size is not None else (width, height)
     return cv2.warpPerspective(
         image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value
