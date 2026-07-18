@@ -1,7 +1,14 @@
 """improcv: modern image-processing and computer-vision utilities for NumPy and OpenCV."""
 
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
-from improcv.filters import bilateral_filter, gaussian_blur, median_blur
+from improcv.filters import (
+    bilateral_filter,
+    clahe,
+    gamma_correction,
+    gaussian_blur,
+    histogram_equalization,
+    median_blur,
+)
 from improcv.morphology import (
     blackhat,
     dilate,
@@ -30,12 +37,15 @@ __all__ = [
     "bilateral_filter",
     "blackhat",
     "center_crop",
+    "clahe",
     "crop",
     "dilate",
     "ensure_gray",
     "erode",
     "flip",
+    "gamma_correction",
     "gaussian_blur",
+    "histogram_equalization",
     "median_blur",
     "morph_close",
     "morph_gradient",
