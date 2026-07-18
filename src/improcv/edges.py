@@ -7,7 +7,15 @@ from typing import cast
 import cv2
 import numpy as np
 
-from improcv._validation import require_dtype, require_image_ndim
+from improcv._validation import (
+    require_dtype,
+    require_image_ndim,
+    require_non_negative,
+    require_odd,
+    require_positive,
+    require_positive_int,
+    require_range,
+)
 from improcv.types import Image, ImageU8, Mask
 
 __all__ = ["auto_canny", "sobel_edge", "laplacian_edge", "harris_corner"]
@@ -22,7 +30,7 @@ def auto_canny(image: ImageU8, sigma: float = 0.33) -> Mask:
         Input image with shape ``(H, W)``.
     sigma : float, default 0.33
         Controls how far the lower/upper thresholds spread around the
-        median intensity.
+        median intensity; must be within ``[0, 1]``.
 
     Returns
     -------
@@ -32,12 +40,16 @@ def auto_canny(image: ImageU8, sigma: float = 0.33) -> Mask:
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions.
+        If `image` does not have exactly 2 dimensions, or `sigma` is not
+        finite or is outside ``[0, 1]``.
     TypeError
         If `image` does not have dtype ``uint8``.
     """
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8,))
+    # require_range alone already rejects NaN/infinity here: both fail
+    # every comparison against a bounded [0, 1] range.
+    require_range(sigma, 0.0, 1.0, "sigma")
     median = float(np.median(image))
     lower = int(max(0, (1.0 - sigma) * median))
     upper = int(min(255, (1.0 + sigma) * median))
@@ -59,7 +71,7 @@ def sobel_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     image : np.ndarray
         Input image with shape ``(H, W)``.
     kernel_size : int, default 3
-        Sobel kernel size.
+        Sobel kernel size; must be a positive odd integer.
 
     Returns
     -------
@@ -70,9 +82,12 @@ def sobel_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions.
+        If `image` does not have exactly 2 dimensions, or `kernel_size` is
+        not a positive odd integer.
     """
     require_image_ndim(image, ndims=(2,))
+    require_positive_int(kernel_size, "kernel_size")
+    require_odd(kernel_size, "kernel_size")
     grad_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=kernel_size)
     grad_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=kernel_size)
     magnitude = cv2.magnitude(grad_x, grad_y)
@@ -88,7 +103,7 @@ def laplacian_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     image : np.ndarray
         Input image with shape ``(H, W)``.
     kernel_size : int, default 3
-        Laplacian kernel size.
+        Laplacian kernel size; must be a positive odd integer.
 
     Returns
     -------
@@ -99,9 +114,12 @@ def laplacian_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions.
+        If `image` does not have exactly 2 dimensions, or `kernel_size` is
+        not a positive odd integer.
     """
     require_image_ndim(image, ndims=(2,))
+    require_positive_int(kernel_size, "kernel_size")
+    require_odd(kernel_size, "kernel_size")
     gradient = cv2.Laplacian(image, cv2.CV_64F, ksize=kernel_size)
     # cv2.convertScaleAbs always produces uint8; cv2's stubs don't say so.
     return cast(ImageU8, cv2.convertScaleAbs(gradient))
@@ -121,14 +139,17 @@ def harris_corner(
     image : np.ndarray
         Input image with shape ``(H, W)``.
     block_size : int, default 2
-        Neighborhood size considered for corner detection.
+        Neighborhood size considered for corner detection; must be a
+        positive integer.
     kernel_size : int, default 3
-        Sobel derivative kernel size used internally.
+        Sobel derivative kernel size used internally; must be a positive
+        odd integer.
     k : float, default 0.04
-        Harris detector free parameter.
+        Harris detector free parameter; must be positive (a typical useful
+        range is small, around 0.04-0.06, but no upper bound is enforced).
     threshold : float, default 0.01
         Fraction of the maximum response above which a pixel is marked as
-        a corner.
+        a corner; must be non-negative.
 
     Returns
     -------
@@ -142,8 +163,15 @@ def harris_corner(
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions.
+        If `image` does not have exactly 2 dimensions, `block_size` is not
+        a positive integer, `kernel_size` is not a positive odd integer,
+        `k` is not positive, or `threshold` is negative.
     """
     require_image_ndim(image, ndims=(2,))
+    require_positive_int(block_size, "block_size")
+    require_positive_int(kernel_size, "kernel_size")
+    require_odd(kernel_size, "kernel_size")
+    require_positive(k, "k")
+    require_non_negative(threshold, "threshold")
     response = cv2.cornerHarris(image.astype(np.float32), block_size, kernel_size, k)
     return (response > threshold * response.max()).astype(np.uint8) * 255

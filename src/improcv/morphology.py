@@ -10,6 +10,7 @@ import numpy as np
 from improcv._validation import (
     require_dtype,
     require_image_ndim,
+    require_non_negative_int,
     require_odd,
     require_one_of,
     require_positive_int,
@@ -113,14 +114,24 @@ def _kernel(size: int) -> np.ndarray:
 
 
 def dilate(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
-    """Grow bright regions using a square structuring element."""
+    """Grow bright regions using a square structuring element.
+
+    `iterations` may be ``0`` (a meaningful no-op, returns `image`
+    unchanged) but not negative.
+    """
     require_image_ndim(image)
+    require_non_negative_int(iterations, "iterations")
     return cv2.dilate(image, _kernel(kernel_size), iterations=iterations)
 
 
 def erode(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
-    """Shrink bright regions using a square structuring element."""
+    """Shrink bright regions using a square structuring element.
+
+    `iterations` may be ``0`` (a meaningful no-op, returns `image`
+    unchanged) but not negative.
+    """
     require_image_ndim(image)
+    require_non_negative_int(iterations, "iterations")
     return cv2.erode(image, _kernel(kernel_size), iterations=iterations)
 
 
