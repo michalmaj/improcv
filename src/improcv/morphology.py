@@ -9,6 +9,7 @@ import numpy as np
 
 from improcv._validation import (
     require_dtype,
+    require_finite,
     require_image_ndim,
     require_non_negative_int,
     require_odd,
@@ -82,8 +83,9 @@ def threshold(
     ------
     ValueError
         If `image` does not have exactly 2 dimensions, `method` is not one
-        of the accepted values, or `block_size` is not an odd integer
-        greater than 1 (adaptive methods only).
+        of the accepted values, `value`/`max_value`/`constant` is not
+        finite, or `block_size` is not an odd integer greater than 1
+        (adaptive methods only).
     TypeError
         If `method` is ``"otsu"`` or one of the ``adaptive_*`` methods and
         `image` does not have dtype ``uint8`` (OpenCV requires 8-bit input
@@ -92,6 +94,9 @@ def threshold(
     """
     require_image_ndim(image, ndims=(2,))
     require_one_of(method, _THRESHOLD_METHODS, "method")
+    require_finite(value, "value")
+    require_finite(max_value, "max_value")
+    require_finite(constant, "constant")
     if method == "binary":
         _, result = cv2.threshold(image, value, max_value, cv2.THRESH_BINARY)
         return result

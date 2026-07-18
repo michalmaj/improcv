@@ -37,7 +37,13 @@ def in_range(image: Image, lower: tuple[int, ...], upper: tuple[int, ...]) -> Ma
     image : np.ndarray
         Input image with shape ``(H, W)`` or ``(H, W, C)``.
     lower, upper : tuple of int
-        Inclusive per-channel bounds.
+        Inclusive per-channel bounds; each must have exactly one element
+        per channel of `image` (1 for a grayscale image, `C` for an
+        ``(H, W, C)`` image). A shorter "scalar" bound is deliberately not
+        supported: ``cv2.inRange`` does not broadcast it the way one might
+        expect (verified directly — it does not simply apply the same
+        bound to every channel), so allowing it here would be a silent
+        correctness trap rather than a convenience.
 
     Returns
     -------
@@ -50,9 +56,16 @@ def in_range(image: Image, lower: tuple[int, ...], upper: tuple[int, ...]) -> Ma
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions.
+        If `image` does not have 2 or 3 dimensions, or `lower`/`upper`
+        does not have exactly one element per channel of `image`.
     """
     require_image_ndim(image)
+    channels = 1 if image.ndim == 2 else image.shape[2]
+    if len(lower) != channels or len(upper) != channels:
+        raise ValueError(
+            f"lower and upper must each have {channels} element(s) matching "
+            f"image's channel count, got {len(lower)} and {len(upper)}"
+        )
     # cv2.inRange always produces uint8 {0, 255}; cv2's stubs don't say so.
     return cast(Mask, cv2.inRange(image, np.array(lower), np.array(upper)))
 
@@ -127,8 +140,18 @@ def adjust_contrast(image: ImageU8, factor: float) -> ImageU8:
     return np.clip((image.astype(np.float64) - 128.0) * factor + 128.0, 0, 255).astype(np.uint8)
 
 
+_ALPHA_BLEND_DTYPES = (np.uint8, np.uint16, np.int32, np.float32, np.float64)
+
+
 def alpha_blend(image_a: Image, image_b: Image, alpha: float) -> Image:
     """Blend two same-shaped images: ``alpha * image_a + (1 - alpha) * image_b``.
+
+    Restricted to an explicit set of dtypes verified to round-trip
+    correctly through ``cv2.addWeighted`` (``uint8``, ``uint16``,
+    ``int32``, ``float32``, ``float64``). Notably excludes ``int64``,
+    which ``cv2.addWeighted`` silently downcasts to ``int32`` — verified
+    directly — rather than rejecting or preserving it, and ``bool``,
+    which raises a raw ``cv2.error``.
 
     Raises
     ------
@@ -136,9 +159,11 @@ def alpha_blend(image_a: Image, image_b: Image, alpha: float) -> Image:
         If `image_a` does not have 2 or 3 dimensions, the two images don't
         share a shape, or `alpha` is outside ``[0, 1]``.
     TypeError
-        If `image_a` and `image_b` don't share a dtype.
+        If `image_a` does not have dtype in the supported set, or
+        `image_a` and `image_b` don't share a dtype.
     """
     require_image_ndim(image_a)
+    require_dtype(image_a, _ALPHA_BLEND_DTYPES)
     require_same_shape_and_dtype(image_a, image_b)
     require_range(alpha, 0.0, 1.0, "alpha")
     return cv2.addWeighted(image_a, alpha, image_b, 1.0 - alpha, 0)

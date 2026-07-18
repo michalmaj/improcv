@@ -120,6 +120,22 @@ def test_clahe_rejects_non_positive_tile_grid_size_without_calling_opencv(
         im.clahe(image, tile_grid_size=(0, 8))
 
 
+def test_clahe_rejects_wrong_length_tile_grid_size_without_calling_opencv(
+    make_image, monkeypatch
+) -> None:
+    # Previously unpacked tile_grid_size before validating its length,
+    # raising a raw "not enough values to unpack" instead of a clear error.
+    image = make_image(20, 20, channels=None)
+
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("cv2.createCLAHE must not be called for invalid input")
+
+    monkeypatch.setattr(cv2, "createCLAHE", _fail_if_called)
+
+    with pytest.raises(ValueError, match="2-tuple"):
+        im.clahe(image, tile_grid_size=(8,))  # type: ignore[arg-type]
+
+
 def test_clahe_rejects_non_positive_clip_limit(make_image) -> None:
     image = make_image(20, 20, channels=None)
 
