@@ -7,9 +7,9 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_positive
+from improcv._validation import require_image_ndim, require_non_negative, require_positive
 
-__all__ = ["resize", "translate", "rotate", "rotate_bound", "flip"]
+__all__ = ["resize", "translate", "rotate", "rotate_bound", "flip", "crop", "center_crop"]
 
 
 def resize(
@@ -266,3 +266,72 @@ def flip(image: np.ndarray, direction: FlipDirection) -> np.ndarray:
     if direction not in _FLIP_CODES:
         raise ValueError(f"direction must be one of {tuple(_FLIP_CODES)}, got {direction!r}")
     return cv2.flip(image, _FLIP_CODES[direction])
+
+
+def crop(image: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarray:
+    """Crop a rectangular region from an image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    x, y : int
+        Top-left corner of the region, in pixels.
+    width, height : int
+        Size of the region, in pixels.
+
+    Returns
+    -------
+    np.ndarray
+        A new array holding the cropped region — always a copy, never a
+        view into `image`.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions, `x`/`y` are negative,
+        `width`/`height` are not positive, or the region exceeds the
+        image bounds.
+    """
+    require_image_ndim(image)
+    require_non_negative(x, "x")
+    require_non_negative(y, "y")
+    require_positive(width, "width")
+    require_positive(height, "height")
+
+    source_height, source_width = image.shape[:2]
+    if x + width > source_width or y + height > source_height:
+        raise ValueError(
+            f"crop region ({x}, {y}, {width}, {height}) exceeds image bounds "
+            f"({source_width}, {source_height})"
+        )
+
+    return image[y : y + height, x : x + width].copy()
+
+
+def center_crop(image: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Crop a `width` x `height` region centered on `image`.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    width, height : int
+        Size of the centered region, in pixels.
+
+    Returns
+    -------
+    np.ndarray
+        A new array holding the cropped region — always a copy.
+
+    Raises
+    ------
+    ValueError
+        Same conditions as `crop`; in particular, a `width`/`height` larger
+        than `image` raises via a negative computed origin.
+    """
+    require_image_ndim(image)
+    source_height, source_width = image.shape[:2]
+    x = (source_width - width) // 2
+    y = (source_height - height) // 2
+    return crop(image, x, y, width, height)

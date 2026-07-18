@@ -282,3 +282,75 @@ def test_flip_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.flip(image, direction="horizontal")
+
+
+def test_crop_extracts_expected_region() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    result = im.crop(image, x=2, y=3, width=4, height=2)
+
+    np.testing.assert_array_equal(result, image[3:5, 2:6])
+
+
+def test_crop_returns_copy_not_view() -> None:
+    image = _make_image(10, 10, channels=None)
+    original = image.copy()
+
+    result = im.crop(image, x=0, y=0, width=4, height=4)
+    result[0, 0] = 255
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_crop_rejects_region_exceeding_bounds() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="exceeds image bounds"):
+        im.crop(image, x=8, y=8, width=4, height=4)
+
+
+def test_crop_rejects_negative_origin() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.crop(image, x=-1, y=0, width=4, height=4)
+
+
+@pytest.mark.parametrize("width, height", [(0, 4), (4, 0), (-1, 4)])
+def test_crop_rejects_non_positive_size(width: int, height: int) -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="positive"):
+        im.crop(image, x=0, y=0, width=width, height=height)
+
+
+def test_crop_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.crop(image, x=0, y=0, width=2, height=2)
+
+
+def test_center_crop_extracts_centered_region() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    result = im.center_crop(image, width=4, height=4)
+
+    np.testing.assert_array_equal(result, image[3:7, 3:7])
+
+
+def test_center_crop_returns_copy() -> None:
+    image = _make_image(10, 10, channels=None)
+    original = image.copy()
+
+    result = im.center_crop(image, width=4, height=4)
+    result[0, 0] = 255
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_center_crop_rejects_size_larger_than_image() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError):
+        im.center_crop(image, width=20, height=20)
