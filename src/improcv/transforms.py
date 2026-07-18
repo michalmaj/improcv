@@ -7,7 +7,7 @@ import numpy as np
 
 from improcv._validation import require_image_ndim, require_positive
 
-__all__ = ["resize", "translate", "rotate"]
+__all__ = ["resize", "translate", "rotate", "rotate_bound"]
 
 
 def resize(
@@ -167,6 +167,63 @@ def rotate(
         image,
         matrix,
         (width, height),
+        flags=interpolation,
+        borderMode=border_mode,
+        borderValue=border_value,
+    )
+
+
+def rotate_bound(
+    image: np.ndarray,
+    angle: float,
+    *,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+) -> np.ndarray:
+    """Rotate an image by `angle` degrees, expanding the canvas so no content is cropped.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    angle : float
+        Rotation angle in degrees, counter-clockwise.
+    interpolation : int, default ``cv2.INTER_LINEAR``
+        Interpolation flag passed through to ``cv2.warpAffine``.
+    border_mode : int, default ``cv2.BORDER_CONSTANT``
+        Border mode for the newly exposed canvas corners.
+    border_value : float or tuple of float, default 0
+        Fill value used when `border_mode` is ``cv2.BORDER_CONSTANT``.
+
+    Returns
+    -------
+    np.ndarray
+        A new array holding the fully rotated image; its shape generally
+        differs from `image`'s.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions.
+    """
+    require_image_ndim(image)
+    height, width = image.shape[:2]
+    center = (width / 2, height / 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+
+    cos = abs(matrix[0, 0])
+    sin = abs(matrix[0, 1])
+    new_width = int(height * sin + width * cos)
+    new_height = int(height * cos + width * sin)
+
+    matrix[0, 2] += (new_width / 2) - center[0]
+    matrix[1, 2] += (new_height / 2) - center[1]
+
+    return cv2.warpAffine(
+        image,
+        matrix,
+        (new_width, new_height),
         flags=interpolation,
         borderMode=border_mode,
         borderValue=border_value,

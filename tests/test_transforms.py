@@ -178,3 +178,44 @@ def test_rotate_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.rotate(image, angle=10)
+
+
+def test_rotate_bound_by_zero_degrees_preserves_size_and_content() -> None:
+    image = _make_image(20, 20)
+
+    result = im.rotate_bound(image, angle=0)
+
+    np.testing.assert_array_equal(result, image)
+
+
+def test_rotate_bound_swaps_dimensions_at_90_degrees() -> None:
+    image = _make_image(20, 40)  # height=20, width=40
+
+    result = im.rotate_bound(image, angle=90)
+
+    assert result.shape[:2] == (40, 20)
+
+
+def test_rotate_bound_expands_canvas_for_non_axis_aligned_angle() -> None:
+    image = _make_image(20, 20)
+
+    result = im.rotate_bound(image, angle=45)
+
+    assert result.shape[0] > image.shape[0]
+    assert result.shape[1] > image.shape[1]
+
+
+def test_rotate_bound_does_not_mutate_input() -> None:
+    image = _make_image(20, 20)
+    original = image.copy()
+
+    im.rotate_bound(image, angle=45)
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_rotate_bound_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.rotate_bound(image, angle=10)
