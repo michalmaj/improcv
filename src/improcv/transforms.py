@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 import cv2
@@ -238,8 +239,14 @@ def rotate_bound(
 
     cos = abs(matrix[0, 0])
     sin = abs(matrix[0, 1])
-    new_width = int(height * sin + width * cos)
-    new_height = int(height * cos + width * sin)
+    # ceil, not int(): truncating down can undercount the required canvas
+    # by up to 1px (e.g. a 2x2 image at 45deg needs 3px, int() gives 2 —
+    # no expansion at all — and rotate_bound's contract is "never crop").
+    # round() first absorbs floating-point noise from cos/sin at exact
+    # multiples of 90deg (e.g. 20.000000000000004), which would otherwise
+    # make ceil() over-expand the canvas by a spurious extra pixel.
+    new_width = math.ceil(round(height * sin + width * cos, 6))
+    new_height = math.ceil(round(height * cos + width * sin, 6))
 
     matrix[0, 2] += (new_width / 2) - center[0]
     matrix[1, 2] += (new_height / 2) - center[1]

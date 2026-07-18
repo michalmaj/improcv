@@ -227,6 +227,26 @@ def test_rotate_bound_expands_canvas_for_non_axis_aligned_angle() -> None:
     assert result.shape[1] > image.shape[1]
 
 
+def test_rotate_bound_does_not_truncate_canvas_on_small_image() -> None:
+    # height*sin+width*cos = 2*sin(45)+2*cos(45) = 2.828..., which int()
+    # truncates down to 2 (no expansion at all) instead of rounding up to 3.
+    image = _make_image(2, 2)
+
+    result = im.rotate_bound(image, angle=45)
+
+    assert result.shape[:2] == (3, 3)
+
+
+def test_rotate_bound_does_not_over_expand_at_exact_90_degrees() -> None:
+    # cos(90deg) is ~6.12e-17, not exactly 0, so a naive ceil() (without
+    # rounding away floating-point noise first) would inflate 20.0 to 21.
+    image = _make_image(20, 40)  # height=20, width=40
+
+    result = im.rotate_bound(image, angle=90)
+
+    assert result.shape[:2] == (40, 20)
+
+
 def test_rotate_bound_does_not_mutate_input() -> None:
     image = _make_image(20, 20)
     original = image.copy()
