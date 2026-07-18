@@ -116,6 +116,14 @@ def test_alpha_blend_rejects_alpha_outside_unit_range() -> None:
         im.alpha_blend(image_a, image_b, alpha=1.5)
 
 
+def test_alpha_blend_rejects_mismatched_dtype() -> None:
+    image_a = np.zeros((5, 5), dtype=np.uint8)
+    image_b = np.zeros((5, 5), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="same dtype"):
+        im.alpha_blend(image_a, image_b, alpha=0.5)
+
+
 def test_bitwise_and_combines_masks() -> None:
     image_a = np.array([[255, 255, 0]], dtype=np.uint8)
     image_b = np.array([[255, 0, 255]], dtype=np.uint8)
@@ -139,6 +147,14 @@ def test_bitwise_and_rejects_mismatched_shapes() -> None:
     image_b = np.zeros((5, 6), dtype=np.uint8)
 
     with pytest.raises(ValueError, match="same shape"):
+        im.bitwise_and(image_a, image_b)
+
+
+def test_bitwise_and_rejects_mismatched_dtype() -> None:
+    image_a = np.zeros((5, 5), dtype=np.uint8)
+    image_b = np.zeros((5, 5), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="same dtype"):
         im.bitwise_and(image_a, image_b)
 
 

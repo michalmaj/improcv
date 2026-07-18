@@ -7,7 +7,13 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from improcv._validation import require_dtype, require_image_ndim, require_one_of, require_positive
+from improcv._validation import (
+    require_dtype,
+    require_image_ndim,
+    require_odd,
+    require_one_of,
+    require_positive_int,
+)
 
 __all__ = [
     "threshold",
@@ -85,8 +91,10 @@ def threshold(
         return result
 
     require_dtype(image, (np.uint8,))
-    if block_size % 2 == 0 or block_size <= 1:
-        raise ValueError(f"block_size must be an odd integer > 1, got {block_size}")
+    require_positive_int(block_size, "block_size")
+    require_odd(block_size, "block_size")
+    if block_size == 1:
+        raise ValueError(f"block_size must be greater than 1, got {block_size}")
     adaptive_method = (
         cv2.ADAPTIVE_THRESH_MEAN_C if method == "adaptive_mean" else cv2.ADAPTIVE_THRESH_GAUSSIAN_C
     )
@@ -96,7 +104,7 @@ def threshold(
 
 
 def _kernel(size: int) -> np.ndarray:
-    require_positive(size, "kernel_size")
+    require_positive_int(size, "kernel_size")
     return np.ones((size, size), dtype=np.uint8)
 
 

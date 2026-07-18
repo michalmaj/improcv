@@ -6,9 +6,12 @@ from improcv._validation import (
     require_dtype,
     require_image_ndim,
     require_non_negative,
+    require_odd,
     require_one_of,
     require_positive,
     require_positive_int,
+    require_range,
+    require_same_shape_and_dtype,
 )
 
 
@@ -90,6 +93,46 @@ def test_require_channels_rejects_wrong_channel_count() -> None:
         require_channels(np.zeros((4, 4)), 3)
     with pytest.raises(ValueError, match="3 channels"):
         require_channels(np.zeros((4, 4, 1)), 3)
+
+
+def test_require_odd_accepts_odd_value() -> None:
+    require_odd(3, "kernel_size")
+
+
+def test_require_odd_rejects_even_value() -> None:
+    with pytest.raises(ValueError, match="odd"):
+        require_odd(4, "kernel_size")
+
+
+def test_require_range_accepts_value_within_bounds() -> None:
+    require_range(0.5, 0.0, 1.0, "alpha")
+    require_range(0.0, 0.0, 1.0, "alpha")
+    require_range(1.0, 0.0, 1.0, "alpha")
+
+
+def test_require_range_rejects_value_outside_bounds() -> None:
+    with pytest.raises(ValueError, match="alpha"):
+        require_range(1.5, 0.0, 1.0, "alpha")
+    with pytest.raises(ValueError, match="alpha"):
+        require_range(-0.5, 0.0, 1.0, "alpha")
+
+
+def test_require_same_shape_and_dtype_accepts_matching_images() -> None:
+    require_same_shape_and_dtype(np.zeros((4, 4), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
+
+
+def test_require_same_shape_and_dtype_rejects_mismatched_shape() -> None:
+    with pytest.raises(ValueError, match="same shape"):
+        require_same_shape_and_dtype(
+            np.zeros((4, 4), dtype=np.uint8), np.zeros((4, 5), dtype=np.uint8)
+        )
+
+
+def test_require_same_shape_and_dtype_rejects_mismatched_dtype() -> None:
+    with pytest.raises(TypeError, match="same dtype"):
+        require_same_shape_and_dtype(
+            np.zeros((4, 4), dtype=np.uint8), np.zeros((4, 4), dtype=np.float32)
+        )
 
 
 def test_require_one_of_accepts_allowed_value() -> None:

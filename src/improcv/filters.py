@@ -8,6 +8,7 @@ import numpy as np
 from improcv._validation import (
     require_dtype,
     require_image_ndim,
+    require_odd,
     require_positive,
     require_positive_int,
 )
@@ -46,9 +47,8 @@ def gaussian_blur(image: np.ndarray, kernel_size: int, sigma: float = 0.0) -> np
         a positive odd integer.
     """
     require_image_ndim(image)
-    require_positive(kernel_size, "kernel_size")
-    if kernel_size % 2 == 0:
-        raise ValueError(f"kernel_size must be odd, got {kernel_size}")
+    require_positive_int(kernel_size, "kernel_size")
+    require_odd(kernel_size, "kernel_size")
     return cv2.GaussianBlur(image, (kernel_size, kernel_size), sigma)
 
 
@@ -74,9 +74,8 @@ def median_blur(image: np.ndarray, kernel_size: int) -> np.ndarray:
         a positive odd integer.
     """
     require_image_ndim(image)
-    require_positive(kernel_size, "kernel_size")
-    if kernel_size % 2 == 0:
-        raise ValueError(f"kernel_size must be odd, got {kernel_size}")
+    require_positive_int(kernel_size, "kernel_size")
+    require_odd(kernel_size, "kernel_size")
     return cv2.medianBlur(image, kernel_size)
 
 

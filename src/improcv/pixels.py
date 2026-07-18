@@ -5,7 +5,13 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from improcv._validation import require_dtype, require_image_ndim, require_non_negative
+from improcv._validation import (
+    require_dtype,
+    require_image_ndim,
+    require_non_negative,
+    require_range,
+    require_same_shape_and_dtype,
+)
 
 __all__ = [
     "in_range",
@@ -103,14 +109,12 @@ def alpha_blend(image_a: np.ndarray, image_b: np.ndarray, alpha: float) -> np.nd
     ValueError
         If `image_a` does not have 2 or 3 dimensions, the two images don't
         share a shape, or `alpha` is outside ``[0, 1]``.
+    TypeError
+        If `image_a` and `image_b` don't share a dtype.
     """
     require_image_ndim(image_a)
-    if image_a.shape != image_b.shape:
-        raise ValueError(
-            f"images must have the same shape, got {image_a.shape} and {image_b.shape}"
-        )
-    if not 0.0 <= alpha <= 1.0:
-        raise ValueError(f"alpha must be between 0 and 1, got {alpha}")
+    require_same_shape_and_dtype(image_a, image_b)
+    require_range(alpha, 0.0, 1.0, "alpha")
     return cv2.addWeighted(image_a, alpha, image_b, 1.0 - alpha, 0)
 
 
@@ -121,12 +125,11 @@ def bitwise_and(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
     ------
     ValueError
         If `image_a` does not have 2 or 3 dimensions, or shapes differ.
+    TypeError
+        If `image_a` and `image_b` don't share a dtype.
     """
     require_image_ndim(image_a)
-    if image_a.shape != image_b.shape:
-        raise ValueError(
-            f"images must have the same shape, got {image_a.shape} and {image_b.shape}"
-        )
+    require_same_shape_and_dtype(image_a, image_b)
     return cv2.bitwise_and(image_a, image_b)
 
 
@@ -137,12 +140,11 @@ def bitwise_or(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
     ------
     ValueError
         If `image_a` does not have 2 or 3 dimensions, or shapes differ.
+    TypeError
+        If `image_a` and `image_b` don't share a dtype.
     """
     require_image_ndim(image_a)
-    if image_a.shape != image_b.shape:
-        raise ValueError(
-            f"images must have the same shape, got {image_a.shape} and {image_b.shape}"
-        )
+    require_same_shape_and_dtype(image_a, image_b)
     return cv2.bitwise_or(image_a, image_b)
 
 

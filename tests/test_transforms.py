@@ -479,6 +479,19 @@ def test_warp_affine_rejects_1d_array() -> None:
         im.warp_affine(image, matrix)
 
 
+def test_warp_affine_rejects_non_positive_output_size() -> None:
+    # cv2.warpAffine silently ignores an invalid dsize and returns the
+    # *input* size instead of erroring — verified directly against cv2
+    # before writing this test. Silent wrong output is worse than a crash.
+    image = _make_image(10, 10, channels=None)
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="positive"):
+        im.warp_affine(image, matrix, output_size=(0, 5))
+    with pytest.raises(ValueError, match="positive"):
+        im.warp_affine(image, matrix, output_size=(-5, 5))
+
+
 def test_warp_perspective_applies_identity_matrix_unchanged() -> None:
     image = _make_image(10, 10, channels=None)
     matrix = np.eye(3, dtype=np.float32)
@@ -511,3 +524,13 @@ def test_warp_perspective_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.warp_perspective(image, matrix)
+
+
+def test_warp_perspective_rejects_non_positive_output_size() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.eye(3, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="positive"):
+        im.warp_perspective(image, matrix, output_size=(0, 5))
+    with pytest.raises(ValueError, match="positive"):
+        im.warp_perspective(image, matrix, output_size=(-5, 5))

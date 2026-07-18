@@ -456,13 +456,19 @@ def warp_affine(
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `matrix` is not
-        shaped ``(2, 3)``.
+        If `image` does not have 2 or 3 dimensions, `matrix` is not shaped
+        ``(2, 3)``, or `output_size` is given but not a pair of positive
+        ints. OpenCV silently ignores an invalid `dsize` and returns an
+        array sized like the *input* instead of raising, so this must be
+        checked here rather than left to ``cv2.warpAffine``.
     """
     require_image_ndim(image)
     if matrix.shape != (2, 3):
         raise ValueError(f"matrix must have shape (2, 3), got {matrix.shape}")
     height, width = image.shape[:2]
+    if output_size is not None:
+        require_positive_int(output_size[0], "output_size[0]")
+        require_positive_int(output_size[1], "output_size[1]")
     size = output_size if output_size is not None else (width, height)
     return cv2.warpAffine(
         image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value
@@ -503,13 +509,19 @@ def warp_perspective(
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `matrix` is not
-        shaped ``(3, 3)``.
+        If `image` does not have 2 or 3 dimensions, `matrix` is not shaped
+        ``(3, 3)``, or `output_size` is given but not a pair of positive
+        ints. OpenCV silently ignores an invalid `dsize` and returns an
+        array sized like the *input* instead of raising, so this must be
+        checked here rather than left to ``cv2.warpPerspective``.
     """
     require_image_ndim(image)
     if matrix.shape != (3, 3):
         raise ValueError(f"matrix must have shape (3, 3), got {matrix.shape}")
     height, width = image.shape[:2]
+    if output_size is not None:
+        require_positive_int(output_size[0], "output_size[0]")
+        require_positive_int(output_size[1], "output_size[1]")
     size = output_size if output_size is not None else (width, height)
     return cv2.warpPerspective(
         image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value

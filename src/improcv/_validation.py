@@ -90,3 +90,36 @@ def require_channels(image: np.ndarray, channels: int) -> None:
             f"image must have {channels} channels with shape (H, W, {channels}), "
             f"got shape {image.shape}"
         )
+
+
+def require_odd(value: int, name: str) -> None:
+    """Raise ValueError unless `value` is odd."""
+    if value % 2 == 0:
+        raise ValueError(f"{name} must be odd, got {value}")
+
+
+def require_range(value: float, low: float, high: float, name: str) -> None:
+    """Raise ValueError unless `low <= value <= high`."""
+    if not low <= value <= high:
+        raise ValueError(f"{name} must be between {low} and {high}, got {value}")
+
+
+def require_same_shape_and_dtype(
+    image_a: np.ndarray, image_b: np.ndarray, name_a: str = "image_a", name_b: str = "image_b"
+) -> None:
+    """Raise ValueError/TypeError unless `image_a` and `image_b` share shape and dtype.
+
+    Mismatched dtype passed uncaught into OpenCV's element-wise ops (e.g.
+    ``cv2.bitwise_and``, ``cv2.addWeighted``) surfaces as a raw, unfriendly
+    ``cv2.error`` rather than a clear library error.
+    """
+    if image_a.shape != image_b.shape:
+        raise ValueError(
+            f"{name_a} and {name_b} must have the same shape, got "
+            f"{image_a.shape} and {image_b.shape}"
+        )
+    if image_a.dtype != image_b.dtype:
+        raise TypeError(
+            f"{name_a} and {name_b} must have the same dtype, got "
+            f"{image_a.dtype} and {image_b.dtype}"
+        )
