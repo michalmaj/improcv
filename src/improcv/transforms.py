@@ -9,12 +9,15 @@ import cv2
 import numpy as np
 
 from improcv._validation import (
+    require_finite,
     require_image_ndim,
     require_int,
     require_non_negative_int,
     require_one_of,
+    require_positive,
     require_positive_int,
     require_size_2d,
+    require_transform_matrix,
 )
 from improcv.types import Image, TransformMatrix
 
@@ -169,9 +172,10 @@ def rotate(
         Rotation angle in degrees, counter-clockwise.
     center : tuple of float, optional
         Rotation center in ``(x, y)`` pixel coordinates. Defaults to the
-        image center.
+        image center. Both elements must be finite.
     scale : float, default 1.0
-        Isotropic scale factor applied together with the rotation.
+        Isotropic scale factor applied together with the rotation; must be
+        finite and positive.
     interpolation : int, default ``cv2.INTER_LINEAR``
         Interpolation flag passed through to ``cv2.warpAffine``.
     border_mode : int, default ``cv2.BORDER_CONSTANT``
@@ -187,15 +191,22 @@ def rotate(
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions.
+        If `image` does not have 2 or 3 dimensions, `angle` is not finite,
+        `scale` is not finite or not positive, or `center` is given but
+        either element is not finite.
     """
     require_image_ndim(image)
+    require_finite(angle, "angle")
+    require_positive(scale, "scale")
     height, width = image.shape[:2]
     if center is None:
         # Pixel centers sit at integer coordinates 0..N-1, so the center of
         # the grid is (N-1)/2, not N/2 — the latter is off by half a pixel
         # and loses a full row/column on 90/180-degree rotations.
         center = ((width - 1) / 2, (height - 1) / 2)
+    else:
+        require_finite(center[0], "center[0]")
+        require_finite(center[1], "center[1]")
     matrix = cv2.getRotationMatrix2D(center, angle, scale)
     return cv2.warpAffine(
         image,
@@ -239,9 +250,10 @@ def rotate_bound(
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions.
+        If `image` does not have 2 or 3 dimensions, or `angle` is not finite.
     """
     require_image_ndim(image)
+    require_finite(angle, "angle")
     height, width = image.shape[:2]
     # Pixel centers sit at integer coordinates 0..N-1, so the center of the
     # grid is (N-1)/2, not N/2 — the latter is off by half a pixel and loses
@@ -478,14 +490,16 @@ def warp_affine(
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, `matrix` is not shaped
-        ``(2, 3)``, or `output_size` is given but not a pair of positive
-        ints. OpenCV silently ignores an invalid `dsize` and returns an
-        array sized like the *input* instead of raising, so this must be
-        checked here rather than left to ``cv2.warpAffine``.
+        ``(2, 3)`` or contains a non-finite value, or `output_size` is
+        given but not a pair of positive ints. OpenCV silently ignores an
+        invalid `dsize` and returns an array sized like the *input*
+        instead of raising, so this must be checked here rather than left
+        to ``cv2.warpAffine``.
+    TypeError
+        If `matrix` does not have dtype ``float32`` or ``float64``.
     """
     require_image_ndim(image)
-    if matrix.shape != (2, 3):
-        raise ValueError(f"matrix must have shape (2, 3), got {matrix.shape}")
+    require_transform_matrix(matrix, (2, 3), "matrix")
     height, width = image.shape[:2]
     if output_size is not None:
         require_size_2d(output_size, "output_size")
@@ -530,14 +544,16 @@ def warp_perspective(
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, `matrix` is not shaped
-        ``(3, 3)``, or `output_size` is given but not a pair of positive
-        ints. OpenCV silently ignores an invalid `dsize` and returns an
-        array sized like the *input* instead of raising, so this must be
-        checked here rather than left to ``cv2.warpPerspective``.
+        ``(3, 3)`` or contains a non-finite value, or `output_size` is
+        given but not a pair of positive ints. OpenCV silently ignores an
+        invalid `dsize` and returns an array sized like the *input*
+        instead of raising, so this must be checked here rather than left
+        to ``cv2.warpPerspective``.
+    TypeError
+        If `matrix` does not have dtype ``float32`` or ``float64``.
     """
     require_image_ndim(image)
-    if matrix.shape != (3, 3):
-        raise ValueError(f"matrix must have shape (3, 3), got {matrix.shape}")
+    require_transform_matrix(matrix, (3, 3), "matrix")
     height, width = image.shape[:2]
     if output_size is not None:
         require_size_2d(output_size, "output_size")

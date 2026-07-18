@@ -13,6 +13,7 @@ from improcv._validation import (
     require_odd,
     require_positive,
     require_positive_int,
+    require_size_2d,
 )
 from improcv.types import Image, ImageU8
 
@@ -134,10 +135,10 @@ def clahe(image: Image, clip_limit: float = 2.0, tile_grid_size: tuple[int, int]
     ------
     ValueError
         If `image` does not have exactly 2 dimensions, `clip_limit` is not
-        positive, or either element of `tile_grid_size` is not a positive
-        int. OpenCV's own CLAHE implementation does not validate these
-        (a zero tile dimension causes a low-level crash on some builds),
-        so this must be checked before calling into it.
+        positive, or `tile_grid_size` is not a 2-tuple of positive ints.
+        OpenCV's own CLAHE implementation does not validate these (a zero
+        tile dimension causes a low-level crash on some builds), so this
+        must be checked before calling into it.
     TypeError
         If `image` does not have dtype ``uint8`` or ``uint16`` (both are
         natively supported by OpenCV's CLAHE).
@@ -145,9 +146,7 @@ def clahe(image: Image, clip_limit: float = 2.0, tile_grid_size: tuple[int, int]
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8, np.uint16))
     require_positive(clip_limit, "clip_limit")
-    tiles_x, tiles_y = tile_grid_size
-    require_positive_int(tiles_x, "tile_grid_size[0]")
-    require_positive_int(tiles_y, "tile_grid_size[1]")
+    require_size_2d(tile_grid_size, "tile_grid_size")
     clahe_op = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
     return clahe_op.apply(image)
 

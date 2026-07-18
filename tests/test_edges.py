@@ -70,6 +70,13 @@ def test_sobel_edge_rejects_even_kernel_size() -> None:
         im.sobel_edge(image, kernel_size=2)
 
 
+def test_sobel_edge_rejects_kernel_size_above_31() -> None:
+    image = np.zeros((40, 40), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="kernel_size"):
+        im.sobel_edge(image, kernel_size=33)
+
+
 def test_laplacian_edge_detects_edge() -> None:
     image = np.zeros((20, 20), dtype=np.uint8)
     image[:, 10:] = 255
@@ -85,6 +92,13 @@ def test_laplacian_edge_rejects_even_kernel_size() -> None:
 
     with pytest.raises(ValueError, match="odd"):
         im.laplacian_edge(image, kernel_size=2)
+
+
+def test_laplacian_edge_rejects_kernel_size_above_31() -> None:
+    image = np.zeros((40, 40), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="kernel_size"):
+        im.laplacian_edge(image, kernel_size=33)
 
 
 def test_harris_corner_detects_corner_of_square() -> None:
@@ -111,6 +125,13 @@ def test_harris_corner_rejects_even_kernel_size() -> None:
 
     with pytest.raises(ValueError, match="odd"):
         im.harris_corner(image, kernel_size=2)
+
+
+def test_harris_corner_rejects_kernel_size_above_31() -> None:
+    image = np.zeros((40, 40), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="kernel_size"):
+        im.harris_corner(image, kernel_size=33)
 
 
 def test_harris_corner_rejects_non_positive_block_size() -> None:

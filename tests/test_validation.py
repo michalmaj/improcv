@@ -14,8 +14,10 @@ from improcv._validation import (
     require_positive,
     require_positive_int,
     require_range,
+    require_real_number,
     require_same_shape_and_dtype,
     require_size_2d,
+    require_transform_matrix,
 )
 
 
@@ -41,6 +43,24 @@ def test_require_image_ndim_rejects_empty_image() -> None:
         require_image_ndim(np.zeros((10, 0)))
 
 
+def test_require_real_number_accepts_python_and_numpy_numbers() -> None:
+    require_real_number(1, "x")
+    require_real_number(1.5, "x")
+    require_real_number(np.float32(1.5), "x")
+    require_real_number(np.float64(1.5), "x")
+    require_real_number(np.int32(1), "x")
+
+
+def test_require_real_number_rejects_bool() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_real_number(True, "x")
+
+
+def test_require_real_number_rejects_string() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_real_number("1.5", "x")
+
+
 def test_require_positive_accepts_positive_value() -> None:
     require_positive(1, "width")
 
@@ -59,6 +79,22 @@ def test_require_positive_rejects_nan_and_infinity() -> None:
         require_positive(float("inf"), "gamma")
 
 
+def test_require_positive_rejects_numpy_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        require_positive(np.float32(np.nan), "gamma")
+    with pytest.raises(ValueError, match="finite"):
+        require_positive(np.float32(np.inf), "gamma")
+    with pytest.raises(ValueError, match="finite"):
+        require_positive(np.float64(np.nan), "gamma")
+
+
+def test_require_positive_rejects_non_numeric() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_positive("1.5", "gamma")
+    with pytest.raises(TypeError, match="real number"):
+        require_positive(True, "gamma")
+
+
 def test_require_non_negative_accepts_zero() -> None:
     require_non_negative(0, "top")
 
@@ -75,6 +111,13 @@ def test_require_non_negative_rejects_nan_and_infinity() -> None:
         require_non_negative(float("inf"), "factor")
 
 
+def test_require_non_negative_rejects_numpy_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        require_non_negative(np.float32(np.nan), "factor")
+    with pytest.raises(ValueError, match="finite"):
+        require_non_negative(np.float64(np.inf), "factor")
+
+
 def test_require_finite_accepts_finite_value() -> None:
     require_finite(-30.0, "delta")
     require_finite(0, "delta")
@@ -88,6 +131,18 @@ def test_require_finite_rejects_nan_and_infinity() -> None:
         require_finite(float("inf"), "delta")
     with pytest.raises(ValueError, match="finite"):
         require_finite(float("-inf"), "delta")
+
+
+def test_require_finite_rejects_numpy_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(np.float32(np.nan), "delta")
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(np.float64(np.inf), "delta")
+
+
+def test_require_finite_rejects_non_numeric() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_finite("nan", "delta")
 
 
 def test_require_dtype_accepts_allowed_dtype() -> None:
@@ -114,6 +169,13 @@ def test_require_channels_rejects_wrong_channel_count() -> None:
         require_channels(np.zeros((4, 4, 1)), 3)
 
 
+def test_require_channels_rejects_empty_image() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        require_channels(np.zeros((0, 10, 3)), 3)
+    with pytest.raises(ValueError, match="empty"):
+        require_channels(np.zeros((10, 0, 3)), 3)
+
+
 def test_require_odd_accepts_odd_value() -> None:
     require_odd(3, "kernel_size")
 
@@ -134,6 +196,18 @@ def test_require_range_rejects_value_outside_bounds() -> None:
         require_range(1.5, 0.0, 1.0, "alpha")
     with pytest.raises(ValueError, match="alpha"):
         require_range(-0.5, 0.0, 1.0, "alpha")
+
+
+def test_require_range_rejects_numpy_nan_and_infinity() -> None:
+    with pytest.raises(ValueError, match="alpha"):
+        require_range(np.float32(np.nan), 0.0, 1.0, "alpha")
+    with pytest.raises(ValueError, match="alpha"):
+        require_range(np.float64(np.inf), 0.0, 1.0, "alpha")
+
+
+def test_require_range_rejects_non_numeric() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_range("0.5", 0.0, 1.0, "alpha")
 
 
 def test_require_same_shape_and_dtype_accepts_matching_images() -> None:
@@ -240,3 +314,26 @@ def test_require_size_2d_rejects_non_positive_element() -> None:
         require_size_2d((0, 5), "output_size")
     with pytest.raises(ValueError, match=r"output_size\[1\]"):
         require_size_2d((5, -5), "output_size")
+
+
+def test_require_transform_matrix_accepts_valid_matrix() -> None:
+    require_transform_matrix(np.eye(2, 3, dtype=np.float32), (2, 3), "matrix")
+    require_transform_matrix(np.eye(3, dtype=np.float64), (3, 3), "matrix")
+
+
+def test_require_transform_matrix_rejects_wrong_shape() -> None:
+    with pytest.raises(ValueError, match=r"\(2, 3\)"):
+        require_transform_matrix(np.eye(3, dtype=np.float32), (2, 3), "matrix")
+
+
+def test_require_transform_matrix_rejects_non_float_dtype() -> None:
+    with pytest.raises(TypeError, match="float32"):
+        require_transform_matrix(np.eye(2, 3, dtype=np.int32), (2, 3), "matrix")
+
+
+def test_require_transform_matrix_rejects_non_finite_values() -> None:
+    matrix = np.eye(2, 3, dtype=np.float32)
+    matrix[0, 2] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        require_transform_matrix(matrix, (2, 3), "matrix")

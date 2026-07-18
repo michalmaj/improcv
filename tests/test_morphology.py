@@ -50,6 +50,27 @@ def test_threshold_rejects_unknown_method() -> None:
         im.threshold(image, method="cokolwiek")  # type: ignore[arg-type]
 
 
+def test_threshold_rejects_non_finite_value() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.threshold(image, value=float("nan"))
+
+
+def test_threshold_rejects_non_finite_max_value() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.threshold(image, max_value=float("inf"))
+
+
+def test_threshold_rejects_non_finite_constant() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.threshold(image, method="adaptive_mean", constant=float("nan"))
+
+
 def test_threshold_otsu_rejects_non_uint8_dtype() -> None:
     image = np.zeros((10, 10), dtype=np.float32)
 

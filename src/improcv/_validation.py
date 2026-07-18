@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import numbers
 from collections.abc import Collection
 
 import numpy as np
@@ -24,33 +25,59 @@ def require_image_ndim(image: np.ndarray, ndims: tuple[int, ...] = (2, 3)) -> No
         raise ValueError(f"image must not be empty, got shape {image.shape}")
 
 
-def _is_nan_or_inf(value: float) -> bool:
-    return isinstance(value, float) and (math.isnan(value) or math.isinf(value))
+def require_real_number(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is a real number.
+
+    Accepts plain Python `int`/`float` as well as NumPy scalar types
+    (`np.float32`, `np.float64`, `np.int32`, ...) — anything registered as
+    `numbers.Real` — but rejects `bool` (a `bool` is technically an `int`
+    subclass, but accepting `True`/`False` here would silently
+    misinterpret a boolean argument as ``1``/``0``) and non-numeric types
+    such as `str`.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise TypeError(f"{name} must be a real number, got {type(value).__name__}")
 
 
-def require_positive(value: float, name: str) -> None:
-    """Raise ValueError unless `value` is a finite, positive number."""
+def _is_nan_or_inf(value: numbers.Real) -> bool:
+    # float(value) normalizes any numbers.Real (including NumPy scalar
+    # types like np.float32, which math.isnan/math.isinf don't accept
+    # directly on some platforms) before checking finiteness.
+    return not math.isfinite(float(value))
+
+
+def require_positive(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is a real number, then ValueError unless
+    it's finite and positive."""
+    require_real_number(value, name)
+    assert isinstance(value, numbers.Real)  # narrows for the type checker
     if _is_nan_or_inf(value):
         raise ValueError(f"{name} must be finite, got {value}")
     if value <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
 
 
-def require_non_negative(value: float, name: str) -> None:
-    """Raise ValueError unless `value` is a finite, non-negative number."""
+def require_non_negative(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is a real number, then ValueError unless
+    it's finite and non-negative."""
+    require_real_number(value, name)
+    assert isinstance(value, numbers.Real)  # narrows for the type checker
     if _is_nan_or_inf(value):
         raise ValueError(f"{name} must be finite, got {value}")
     if value < 0:
         raise ValueError(f"{name} must be non-negative, got {value}")
 
 
-def require_finite(value: float, name: str) -> None:
-    """Raise ValueError unless `value` is finite (not NaN or infinite).
+def require_finite(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is a real number, then ValueError unless
+    it's finite (not NaN or infinite).
 
     Unlike `require_positive`/`require_non_negative`, this carries no sign
     constraint — for parameters where negative values are meaningful (e.g.
     a brightness delta) but NaN/infinity are not.
     """
+    require_real_number(value, name)
+    assert isinstance(value, numbers.Real)  # narrows for the type checker
     if _is_nan_or_inf(value):
         raise ValueError(f"{name} must be finite, got {value}")
 
@@ -122,13 +149,39 @@ def require_dtype(image: np.ndarray, dtypes: tuple[type, ...], name: str = "imag
         raise TypeError(f"{name} must have dtype in ({allowed}), got {image.dtype}")
 
 
+def require_transform_matrix(
+    matrix: np.ndarray, shape: tuple[int, int], name: str = "matrix"
+) -> None:
+    """Raise ValueError/TypeError unless `matrix` is a finite float array of `shape`.
+
+    Checks shape, then dtype (``float32``/``float64`` — an ``int32``
+    matrix reaches a raw ``cv2.error``), then finiteness (a ``NaN`` in the
+    matrix does not error at all; it silently produces a black image).
+    Deliberately does not cast a wrong-dtype matrix for the caller — a
+    silent cast could paper over the caller's own mistake (e.g. building
+    the matrix from integer inputs by accident).
+    """
+    if matrix.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}, got {matrix.shape}")
+    require_dtype(matrix, (np.float32, np.float64), name)
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError(f"{name} must contain only finite values")
+
+
 def require_channels(image: np.ndarray, channels: int) -> None:
-    """Raise ValueError unless `image` has exactly `channels` channels."""
+    """Raise ValueError unless `image` has exactly `channels` channels and is non-empty.
+
+    The emptiness check matters on its own: a 3-channel *empty* image
+    (e.g. shape ``(0, 10, 3)``) previously passed this check and reached
+    a raw ``cv2.error`` at the actual OpenCV call site.
+    """
     if image.ndim != 3 or image.shape[2] != channels:
         raise ValueError(
             f"image must have {channels} channels with shape (H, W, {channels}), "
             f"got shape {image.shape}"
         )
+    if image.shape[0] == 0 or image.shape[1] == 0:
+        raise ValueError(f"image must not be empty, got shape {image.shape}")
 
 
 def require_odd(value: int, name: str) -> None:
@@ -137,9 +190,12 @@ def require_odd(value: int, name: str) -> None:
         raise ValueError(f"{name} must be odd, got {value}")
 
 
-def require_range(value: float, low: float, high: float, name: str) -> None:
-    """Raise ValueError unless `low <= value <= high`."""
-    if not low <= value <= high:
+def require_range(value: object, low: float, high: float, name: str) -> None:
+    """Raise TypeError unless `value` is a real number, then ValueError unless
+    `low <= value <= high`."""
+    require_real_number(value, name)
+    assert isinstance(value, numbers.Real)  # narrows for the type checker
+    if not low <= float(value) <= high:
         raise ValueError(f"{name} must be between {low} and {high}, got {value}")
 
 

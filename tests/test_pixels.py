@@ -20,6 +20,25 @@ def test_in_range_rejects_1d_array() -> None:
         im.in_range(image, lower=(0,), upper=(10,))
 
 
+def test_in_range_rejects_lower_upper_length_mismatched_with_channels() -> None:
+    # cv2.inRange does not broadcast a shorter "scalar" bound across
+    # channels the way one might expect — verified directly against cv2
+    # before deciding to reject a mismatched length rather than support it.
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="3 element"):
+        im.in_range(image, lower=(0, 0), upper=(255, 255, 255))
+    with pytest.raises(ValueError, match="3 element"):
+        im.in_range(image, lower=(0, 0, 0), upper=(255, 255))
+
+
+def test_in_range_rejects_wrong_length_for_grayscale_image() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="1 element"):
+        im.in_range(image, lower=(0, 0), upper=(255, 255))
+
+
 def test_invert_flips_pixel_values() -> None:
     image = np.array([[0, 100, 255]], dtype=np.uint8)
 
@@ -90,6 +109,15 @@ def test_adjust_brightness_rejects_non_finite_delta() -> None:
         im.adjust_brightness(image, delta=float("inf"))
 
 
+def test_adjust_brightness_rejects_numpy_nan_delta() -> None:
+    # _is_nan_or_inf previously only recognized builtin float, so a NumPy
+    # scalar NaN/inf silently passed through and produced a garbage result.
+    image = np.full((5, 5), 10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.adjust_brightness(image, delta=np.float32(np.nan))  # type: ignore[arg-type]
+
+
 def test_adjust_contrast_expands_values_away_from_midpoint() -> None:
     image = np.array([[200, 100]], dtype=np.uint8)
 
@@ -112,6 +140,13 @@ def test_adjust_contrast_rejects_negative_factor() -> None:
 
     with pytest.raises(ValueError, match="non-negative"):
         im.adjust_contrast(image, factor=-1.0)
+
+
+def test_adjust_contrast_rejects_numpy_infinite_factor() -> None:
+    image = np.full((5, 5), 100, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.adjust_contrast(image, factor=np.float32(np.inf))  # type: ignore[arg-type]
 
 
 def test_adjust_contrast_rejects_non_uint8_dtype() -> None:
@@ -152,6 +187,24 @@ def test_alpha_blend_rejects_mismatched_dtype() -> None:
 
     with pytest.raises(TypeError, match="same dtype"):
         im.alpha_blend(image_a, image_b, alpha=0.5)
+
+
+def test_alpha_blend_rejects_int64_dtype() -> None:
+    # cv2.addWeighted silently downcasts int64 to int32 instead of
+    # rejecting or preserving it — verified directly against cv2.
+    image_a = np.zeros((5, 5), dtype=np.int64)
+    image_b = np.zeros((5, 5), dtype=np.int64)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.alpha_blend(image_a, image_b, alpha=0.5)  # type: ignore[arg-type]
+
+
+def test_alpha_blend_rejects_bool_dtype() -> None:
+    image_a = np.zeros((5, 5), dtype=bool)
+    image_b = np.zeros((5, 5), dtype=bool)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.alpha_blend(image_a, image_b, alpha=0.5)  # type: ignore[arg-type]
 
 
 def test_bitwise_and_combines_masks() -> None:

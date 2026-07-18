@@ -71,7 +71,8 @@ def sobel_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     image : np.ndarray
         Input image with shape ``(H, W)``.
     kernel_size : int, default 3
-        Sobel kernel size; must be a positive odd integer.
+        Sobel kernel size; must be a positive odd integer in ``[1, 31]``
+        (OpenCV's own supported range).
 
     Returns
     -------
@@ -88,6 +89,7 @@ def sobel_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     require_image_ndim(image, ndims=(2,))
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
+    require_range(kernel_size, 1, 31, "kernel_size")
     grad_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=kernel_size)
     grad_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=kernel_size)
     magnitude = cv2.magnitude(grad_x, grad_y)
@@ -103,7 +105,8 @@ def laplacian_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     image : np.ndarray
         Input image with shape ``(H, W)``.
     kernel_size : int, default 3
-        Laplacian kernel size; must be a positive odd integer.
+        Laplacian kernel size; must be a positive odd integer in
+        ``[1, 31]`` (OpenCV's own supported range).
 
     Returns
     -------
@@ -120,6 +123,7 @@ def laplacian_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     require_image_ndim(image, ndims=(2,))
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
+    require_range(kernel_size, 1, 31, "kernel_size")
     gradient = cv2.Laplacian(image, cv2.CV_64F, ksize=kernel_size)
     # cv2.convertScaleAbs always produces uint8; cv2's stubs don't say so.
     return cast(ImageU8, cv2.convertScaleAbs(gradient))
@@ -143,7 +147,7 @@ def harris_corner(
         positive integer.
     kernel_size : int, default 3
         Sobel derivative kernel size used internally; must be a positive
-        odd integer.
+        odd integer in ``[1, 31]`` (OpenCV's own supported range).
     k : float, default 0.04
         Harris detector free parameter; must be positive (a typical useful
         range is small, around 0.04-0.06, but no upper bound is enforced).
@@ -171,6 +175,7 @@ def harris_corner(
     require_positive_int(block_size, "block_size")
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
+    require_range(kernel_size, 1, 31, "kernel_size")
     require_positive(k, "k")
     require_non_negative(threshold, "threshold")
     response = cv2.cornerHarris(image.astype(np.float32), block_size, kernel_size, k)
