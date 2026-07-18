@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_non_negative, require_positive
+from improcv._validation import (
+    require_image_ndim,
+    require_non_negative,
+    require_one_of,
+    require_positive,
+    require_positive_int,
+)
+from improcv.types import Image, TransformMatrix
 
 __all__ = [
     "resize",
@@ -24,11 +32,11 @@ __all__ = [
 
 
 def resize(
-    image: np.ndarray,
+    image: Image,
     width: int | None = None,
     height: int | None = None,
     interpolation: int = cv2.INTER_AREA,
-) -> np.ndarray:
+) -> Image:
     """Resize an image, optionally preserving its aspect ratio.
 
     Parameters
@@ -54,38 +62,43 @@ def resize(
     ------
     ValueError
         If both `width` and `height` are ``None``, if either is not a
-        positive integer, or if `image` does not have 2 or 3 dimensions.
+        positive integer, or if `image` is empty or does not have 2 or 3
+        dimensions.
+    TypeError
+        If `width` or `height` is given but is not an ``int``.
     """
     require_image_ndim(image)
     if width is None and height is None:
         raise ValueError("at least one of width or height must be given")
     if width is not None:
-        require_positive(width, "width")
+        require_positive_int(width, "width")
     if height is not None:
-        require_positive(height, "height")
+        require_positive_int(height, "height")
 
     source_height, source_width = image.shape[:2]
 
     if width is not None and height is not None:
         target_size = (width, height)
     elif width is not None:
-        target_size = (width, round(width * source_height / source_width))
+        computed_height = max(1, round(width * source_height / source_width))
+        target_size = (width, computed_height)
     else:
         assert height is not None
-        target_size = (round(height * source_width / source_height), height)
+        computed_width = max(1, round(height * source_width / source_height))
+        target_size = (computed_width, height)
 
     return cv2.resize(image, target_size, interpolation=interpolation)
 
 
 def translate(
-    image: np.ndarray,
+    image: Image,
     x: int,
     y: int,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Shift an image by `(x, y)` pixels.
 
     Parameters
@@ -128,7 +141,7 @@ def translate(
 
 
 def rotate(
-    image: np.ndarray,
+    image: Image,
     angle: float,
     center: tuple[float, float] | None = None,
     scale: float = 1.0,
@@ -136,7 +149,7 @@ def rotate(
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Rotate an image by `angle` degrees counter-clockwise around `center`.
 
     The output has the same size as `image`; content rotated outside the
@@ -187,13 +200,13 @@ def rotate(
 
 
 def rotate_bound(
-    image: np.ndarray,
+    image: Image,
     angle: float,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Rotate an image by `angle` degrees, expanding the canvas so no content is cropped.
 
     Parameters
@@ -227,8 +240,14 @@ def rotate_bound(
 
     cos = abs(matrix[0, 0])
     sin = abs(matrix[0, 1])
-    new_width = int(height * sin + width * cos)
-    new_height = int(height * cos + width * sin)
+    # ceil, not int(): truncating down can undercount the required canvas
+    # by up to 1px (e.g. a 2x2 image at 45deg needs 3px, int() gives 2 —
+    # no expansion at all — and rotate_bound's contract is "never crop").
+    # round() first absorbs floating-point noise from cos/sin at exact
+    # multiples of 90deg (e.g. 20.000000000000004), which would otherwise
+    # make ceil() over-expand the canvas by a spurious extra pixel.
+    new_width = math.ceil(round(height * sin + width * cos, 6))
+    new_height = math.ceil(round(height * cos + width * sin, 6))
 
     matrix[0, 2] += (new_width / 2) - center[0]
     matrix[1, 2] += (new_height / 2) - center[1]
@@ -252,7 +271,7 @@ _FLIP_CODES: dict[FlipDirection, int] = {
 }
 
 
-def flip(image: np.ndarray, direction: FlipDirection) -> np.ndarray:
+def flip(image: Image, direction: FlipDirection) -> Image:
     """Flip an image horizontally, vertically, or both.
 
     Parameters
@@ -274,12 +293,11 @@ def flip(image: np.ndarray, direction: FlipDirection) -> np.ndarray:
         one of the accepted values.
     """
     require_image_ndim(image)
-    if direction not in _FLIP_CODES:
-        raise ValueError(f"direction must be one of {tuple(_FLIP_CODES)}, got {direction!r}")
+    require_one_of(direction, _FLIP_CODES, "direction")
     return cv2.flip(image, _FLIP_CODES[direction])
 
 
-def crop(image: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarray:
+def crop(image: Image, x: int, y: int, width: int, height: int) -> Image:
     """Crop a rectangular region from an image.
 
     Parameters
@@ -320,7 +338,7 @@ def crop(image: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarr
     return image[y : y + height, x : x + width].copy()
 
 
-def center_crop(image: np.ndarray, width: int, height: int) -> np.ndarray:
+def center_crop(image: Image, width: int, height: int) -> Image:
     """Crop a `width` x `height` region centered on `image`.
 
     Parameters
@@ -359,7 +377,7 @@ _BORDER_MODES: dict[PadMode, int] = {
 
 
 def pad(
-    image: np.ndarray,
+    image: Image,
     top: int,
     bottom: int,
     left: int,
@@ -367,7 +385,7 @@ def pad(
     *,
     mode: PadMode = "constant",
     value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Add a border around an image.
 
     Parameters
@@ -398,8 +416,7 @@ def pad(
     require_non_negative(bottom, "bottom")
     require_non_negative(left, "left")
     require_non_negative(right, "right")
-    if mode not in _BORDER_MODES:
-        raise ValueError(f"mode must be one of {tuple(_BORDER_MODES)}, got {mode!r}")
+    require_one_of(mode, _BORDER_MODES, "mode")
 
     return cv2.copyMakeBorder(
         image, top, bottom, left, right, borderType=_BORDER_MODES[mode], value=value
@@ -407,14 +424,14 @@ def pad(
 
 
 def warp_affine(
-    image: np.ndarray,
-    matrix: np.ndarray,
+    image: Image,
+    matrix: TransformMatrix,
     output_size: tuple[int, int] | None = None,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Apply an affine transformation to an image.
 
     Parameters
@@ -440,13 +457,19 @@ def warp_affine(
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `matrix` is not
-        shaped ``(2, 3)``.
+        If `image` does not have 2 or 3 dimensions, `matrix` is not shaped
+        ``(2, 3)``, or `output_size` is given but not a pair of positive
+        ints. OpenCV silently ignores an invalid `dsize` and returns an
+        array sized like the *input* instead of raising, so this must be
+        checked here rather than left to ``cv2.warpAffine``.
     """
     require_image_ndim(image)
     if matrix.shape != (2, 3):
         raise ValueError(f"matrix must have shape (2, 3), got {matrix.shape}")
     height, width = image.shape[:2]
+    if output_size is not None:
+        require_positive_int(output_size[0], "output_size[0]")
+        require_positive_int(output_size[1], "output_size[1]")
     size = output_size if output_size is not None else (width, height)
     return cv2.warpAffine(
         image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value
@@ -454,14 +477,14 @@ def warp_affine(
 
 
 def warp_perspective(
-    image: np.ndarray,
-    matrix: np.ndarray,
+    image: Image,
+    matrix: TransformMatrix,
     output_size: tuple[int, int] | None = None,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Apply a perspective transformation to an image.
 
     Parameters
@@ -487,13 +510,19 @@ def warp_perspective(
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `matrix` is not
-        shaped ``(3, 3)``.
+        If `image` does not have 2 or 3 dimensions, `matrix` is not shaped
+        ``(3, 3)``, or `output_size` is given but not a pair of positive
+        ints. OpenCV silently ignores an invalid `dsize` and returns an
+        array sized like the *input* instead of raising, so this must be
+        checked here rather than left to ``cv2.warpPerspective``.
     """
     require_image_ndim(image)
     if matrix.shape != (3, 3):
         raise ValueError(f"matrix must have shape (3, 3), got {matrix.shape}")
     height, width = image.shape[:2]
+    if output_size is not None:
+        require_positive_int(output_size[0], "output_size[0]")
+        require_positive_int(output_size[1], "output_size[1]")
     size = output_size if output_size is not None else (width, height)
     return cv2.warpPerspective(
         image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value

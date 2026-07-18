@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_positive
+from improcv._validation import (
+    require_dtype,
+    require_image_ndim,
+    require_odd,
+    require_positive,
+    require_positive_int,
+)
+from improcv.types import Image, ImageU8
 
 __all__ = [
     "gaussian_blur",
@@ -17,7 +26,7 @@ __all__ = [
 ]
 
 
-def gaussian_blur(image: np.ndarray, kernel_size: int, sigma: float = 0.0) -> np.ndarray:
+def gaussian_blur(image: Image, kernel_size: int, sigma: float = 0.0) -> Image:
     """Smooth an image with a Gaussian kernel.
 
     Parameters
@@ -41,13 +50,12 @@ def gaussian_blur(image: np.ndarray, kernel_size: int, sigma: float = 0.0) -> np
         a positive odd integer.
     """
     require_image_ndim(image)
-    require_positive(kernel_size, "kernel_size")
-    if kernel_size % 2 == 0:
-        raise ValueError(f"kernel_size must be odd, got {kernel_size}")
+    require_positive_int(kernel_size, "kernel_size")
+    require_odd(kernel_size, "kernel_size")
     return cv2.GaussianBlur(image, (kernel_size, kernel_size), sigma)
 
 
-def median_blur(image: np.ndarray, kernel_size: int) -> np.ndarray:
+def median_blur(image: Image, kernel_size: int) -> Image:
     """Smooth an image with a median filter — effective against salt-and-pepper noise.
 
     Parameters
@@ -69,15 +77,12 @@ def median_blur(image: np.ndarray, kernel_size: int) -> np.ndarray:
         a positive odd integer.
     """
     require_image_ndim(image)
-    require_positive(kernel_size, "kernel_size")
-    if kernel_size % 2 == 0:
-        raise ValueError(f"kernel_size must be odd, got {kernel_size}")
+    require_positive_int(kernel_size, "kernel_size")
+    require_odd(kernel_size, "kernel_size")
     return cv2.medianBlur(image, kernel_size)
 
 
-def bilateral_filter(
-    image: np.ndarray, diameter: int, sigma_color: float, sigma_space: float
-) -> np.ndarray:
+def bilateral_filter(image: Image, diameter: int, sigma_color: float, sigma_space: float) -> Image:
     """Smooth an image while preserving edges.
 
     Parameters
@@ -106,9 +111,7 @@ def bilateral_filter(
     return cv2.bilateralFilter(image, diameter, sigma_color, sigma_space)
 
 
-def clahe(
-    image: np.ndarray, clip_limit: float = 2.0, tile_grid_size: tuple[int, int] = (8, 8)
-) -> np.ndarray:
+def clahe(image: Image, clip_limit: float = 2.0, tile_grid_size: tuple[int, int] = (8, 8)) -> Image:
     """Apply Contrast Limited Adaptive Histogram Equalization.
 
     Parameters
@@ -128,14 +131,26 @@ def clahe(
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions.
+        If `image` does not have exactly 2 dimensions, `clip_limit` is not
+        positive, or either element of `tile_grid_size` is not a positive
+        int. OpenCV's own CLAHE implementation does not validate these
+        (a zero tile dimension causes a low-level crash on some builds),
+        so this must be checked before calling into it.
+    TypeError
+        If `image` does not have dtype ``uint8`` or ``uint16`` (both are
+        natively supported by OpenCV's CLAHE).
     """
     require_image_ndim(image, ndims=(2,))
+    require_dtype(image, (np.uint8, np.uint16))
+    require_positive(clip_limit, "clip_limit")
+    tiles_x, tiles_y = tile_grid_size
+    require_positive_int(tiles_x, "tile_grid_size[0]")
+    require_positive_int(tiles_y, "tile_grid_size[1]")
     clahe_op = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
     return clahe_op.apply(image)
 
 
-def gamma_correction(image: np.ndarray, gamma: float) -> np.ndarray:
+def gamma_correction(image: ImageU8, gamma: float) -> ImageU8:
     """Apply gamma correction to an 8-bit image via a precomputed lookup table.
 
     Parameters
@@ -155,15 +170,21 @@ def gamma_correction(image: np.ndarray, gamma: float) -> np.ndarray:
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, or `gamma` is not positive.
+    TypeError
+        If `image` does not have dtype ``uint8`` (required by the
+        underlying ``cv2.LUT`` call).
     """
     require_image_ndim(image)
+    require_dtype(image, (np.uint8,))
     require_positive(gamma, "gamma")
     normalized = np.arange(256, dtype=np.float64) / 255.0
     table = np.clip((normalized ** (1.0 / gamma)) * 255.0 + 0.5, 0, 255).astype(np.uint8)
-    return cv2.LUT(image, table)
+    # cv2.LUT always produces uint8 here (both image and table are uint8);
+    # cv2's stubs type the return as the loose `MatLike`.
+    return cast(ImageU8, cv2.LUT(image, table))
 
 
-def histogram_equalization(image: np.ndarray) -> np.ndarray:
+def histogram_equalization(image: ImageU8) -> ImageU8:
     """Equalize the histogram of a single-channel image to spread out its intensity range.
 
     Parameters
@@ -180,6 +201,10 @@ def histogram_equalization(image: np.ndarray) -> np.ndarray:
     ------
     ValueError
         If `image` does not have exactly 2 dimensions.
+    TypeError
+        If `image` does not have dtype ``uint8``.
     """
     require_image_ndim(image, ndims=(2,))
-    return cv2.equalizeHist(image)
+    require_dtype(image, (np.uint8,))
+    # cv2.equalizeHist always produces uint8; cv2's stubs don't say so.
+    return cast(ImageU8, cv2.equalizeHist(image))

@@ -8,8 +8,9 @@ build/
 *.egg-info/
 
 # Private planning/working docs — internal agreements and process notes,
-# not meant to be visible in the public repo.
+# not meant to be visible in the public repo. Public docs (once we have
+# them) live elsewhere under docs/, so only this subfolder is ignored.
 CLAUDE.md
 IMPROCV_PROJECT_BRIEF.md
 .claude/
-docs/
+docs/superpowers/

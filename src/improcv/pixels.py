@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim
+from improcv._validation import (
+    require_dtype,
+    require_image_ndim,
+    require_non_negative,
+    require_range,
+    require_same_shape_and_dtype,
+)
+from improcv.types import Image, ImageU8, Mask
 
 __all__ = [
     "in_range",
@@ -19,8 +28,8 @@ __all__ = [
 ]
 
 
-def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) -> np.ndarray:
-    """Return a boolean mask of pixels within `[lower, upper]` (inclusive, per channel).
+def in_range(image: Image, lower: tuple[int, ...], upper: tuple[int, ...]) -> Mask:
+    """Return a mask of pixels within `[lower, upper]` (inclusive, per channel).
 
     Parameters
     ----------
@@ -32,7 +41,10 @@ def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) 
     Returns
     -------
     np.ndarray
-        A new boolean array shaped like `image`'s spatial dimensions.
+        A new ``uint8`` array shaped like `image`'s spatial dimensions,
+        with values ``0`` or ``255`` — improcv's mask convention (matches
+        OpenCV's own native mask representation; see `harris_corner`,
+        `threshold`, `auto_canny`).
 
     Raises
     ------
@@ -40,11 +52,11 @@ def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) 
         If `image` does not have 2 or 3 dimensions.
     """
     require_image_ndim(image)
-    mask = cv2.inRange(image, np.array(lower), np.array(upper))
-    return mask.astype(np.bool_)
+    # cv2.inRange always produces uint8 {0, 255}; cv2's stubs don't say so.
+    return cast(Mask, cv2.inRange(image, np.array(lower), np.array(upper)))
 
 
-def invert(image: np.ndarray) -> np.ndarray:
+def invert(image: Image) -> Image:
     """Invert pixel values (``255 - value`` for 8-bit images).
 
     Raises
@@ -56,20 +68,14 @@ def invert(image: np.ndarray) -> np.ndarray:
     return cv2.bitwise_not(image)
 
 
-def adjust_brightness(image: np.ndarray, delta: float) -> np.ndarray:
+def adjust_brightness(image: Image, delta: float) -> ImageU8:
     """Add `delta` to every pixel value, clamped to the valid 8-bit range.
 
-    Raises
-    ------
-    ValueError
-        If `image` does not have 2 or 3 dimensions.
-    """
-    require_image_ndim(image)
-    return cv2.convertScaleAbs(image, alpha=1.0, beta=delta)
-
-
-def adjust_contrast(image: np.ndarray, factor: float) -> np.ndarray:
-    """Scale pixel values by `factor`, clamped to the valid 8-bit range.
+    Uses saturating (clamping) arithmetic in both directions: a negative
+    `delta` that would push a pixel below 0 clamps to 0, it does not wrap
+    or reflect back to a positive value (unlike a naive
+    ``cv2.convertScaleAbs`` call, whose ``beta`` argument takes the
+    absolute value of the result rather than clamping it).
 
     Raises
     ------
@@ -77,10 +83,29 @@ def adjust_contrast(image: np.ndarray, factor: float) -> np.ndarray:
         If `image` does not have 2 or 3 dimensions.
     """
     require_image_ndim(image)
-    return cv2.convertScaleAbs(image, alpha=factor, beta=0)
+    return np.clip(image.astype(np.int32) + delta, 0, 255).astype(np.uint8)
 
 
-def alpha_blend(image_a: np.ndarray, image_b: np.ndarray, alpha: float) -> np.ndarray:
+def adjust_contrast(image: Image, factor: float) -> ImageU8:
+    """Scale pixel values by `factor` around the mid-gray point (128).
+
+    Scaling around the midpoint (rather than around 0) keeps average
+    brightness roughly stable: values above 128 move further up, values
+    below 128 move further down, matching how "contrast" is defined in
+    standard image editors. Scaling around 0 would conflate contrast with
+    brightness (every pixel would move in the same direction).
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions, or `factor` is negative.
+    """
+    require_image_ndim(image)
+    require_non_negative(factor, "factor")
+    return np.clip((image.astype(np.float64) - 128.0) * factor + 128.0, 0, 255).astype(np.uint8)
+
+
+def alpha_blend(image_a: Image, image_b: Image, alpha: float) -> Image:
     """Blend two same-shaped images: ``alpha * image_a + (1 - alpha) * image_b``.
 
     Raises
@@ -88,50 +113,46 @@ def alpha_blend(image_a: np.ndarray, image_b: np.ndarray, alpha: float) -> np.nd
     ValueError
         If `image_a` does not have 2 or 3 dimensions, the two images don't
         share a shape, or `alpha` is outside ``[0, 1]``.
+    TypeError
+        If `image_a` and `image_b` don't share a dtype.
     """
     require_image_ndim(image_a)
-    if image_a.shape != image_b.shape:
-        raise ValueError(
-            f"images must have the same shape, got {image_a.shape} and {image_b.shape}"
-        )
-    if not 0.0 <= alpha <= 1.0:
-        raise ValueError(f"alpha must be between 0 and 1, got {alpha}")
+    require_same_shape_and_dtype(image_a, image_b)
+    require_range(alpha, 0.0, 1.0, "alpha")
     return cv2.addWeighted(image_a, alpha, image_b, 1.0 - alpha, 0)
 
 
-def bitwise_and(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
+def bitwise_and(image_a: Image, image_b: Image) -> Image:
     """Element-wise bitwise AND of two same-shaped images.
 
     Raises
     ------
     ValueError
         If `image_a` does not have 2 or 3 dimensions, or shapes differ.
+    TypeError
+        If `image_a` and `image_b` don't share a dtype.
     """
     require_image_ndim(image_a)
-    if image_a.shape != image_b.shape:
-        raise ValueError(
-            f"images must have the same shape, got {image_a.shape} and {image_b.shape}"
-        )
+    require_same_shape_and_dtype(image_a, image_b)
     return cv2.bitwise_and(image_a, image_b)
 
 
-def bitwise_or(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
+def bitwise_or(image_a: Image, image_b: Image) -> Image:
     """Element-wise bitwise OR of two same-shaped images.
 
     Raises
     ------
     ValueError
         If `image_a` does not have 2 or 3 dimensions, or shapes differ.
+    TypeError
+        If `image_a` and `image_b` don't share a dtype.
     """
     require_image_ndim(image_a)
-    if image_a.shape != image_b.shape:
-        raise ValueError(
-            f"images must have the same shape, got {image_a.shape} and {image_b.shape}"
-        )
+    require_same_shape_and_dtype(image_a, image_b)
     return cv2.bitwise_or(image_a, image_b)
 
 
-def apply_lut(image: np.ndarray, table: np.ndarray) -> np.ndarray:
+def apply_lut(image: ImageU8, table: np.ndarray) -> ImageU8:
     """Map each 8-bit pixel value through a 256-entry lookup table.
 
     Raises
@@ -139,8 +160,13 @@ def apply_lut(image: np.ndarray, table: np.ndarray) -> np.ndarray:
     ValueError
         If `image` does not have 2 or 3 dimensions, or `table` is not
         shaped ``(256,)``.
+    TypeError
+        If `image` does not have dtype ``uint8`` (required by the
+        underlying ``cv2.LUT`` call).
     """
     require_image_ndim(image)
+    require_dtype(image, (np.uint8,))
     if table.shape != (256,):
         raise ValueError(f"table must have shape (256,), got {table.shape}")
-    return cv2.LUT(image, table.astype(np.uint8))
+    # cv2.LUT always produces uint8 here; cv2's stubs don't say so.
+    return cast(ImageU8, cv2.LUT(image, table.astype(np.uint8)))

@@ -1,0 +1,28 @@
+"""Shared type aliases for improcv's public API.
+
+These are intentionally coarse (no pixel-level shape typing) — the goal
+right now is just to make dtype expectations visible in signatures
+(e.g. a mask-producing function returns `Mask`, not a bare `np.ndarray`)
+without blocking a later move to a stricter Pyright mode.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import numpy.typing as npt
+
+__all__ = ["Image", "ImageU8", "Mask", "TransformMatrix"]
+
+Image = npt.NDArray[Any]
+"""A generic image array of any dtype, shape ``(H, W)`` or ``(H, W, C)``."""
+
+ImageU8 = npt.NDArray[np.uint8]
+"""An 8-bit image array, shape ``(H, W)`` or ``(H, W, C)``."""
+
+Mask = npt.NDArray[np.uint8]
+"""A mask array with values ``0``/``255``, shape ``(H, W)`` (improcv's mask convention)."""
+
+TransformMatrix = npt.NDArray[np.floating[Any]]
+"""A ``(2, 3)`` affine or ``(3, 3)`` perspective transformation matrix."""

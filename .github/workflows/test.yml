@@ -12,7 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
+        opencv: ["4", "5"]
+        include:
+          - opencv: "4"
+            opencv-spec: "opencv-python-headless>=4.9,<5"
+          - opencv: "5"
+            opencv-spec: "opencv-python-headless>=5,<6"
     env:
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -28,14 +34,53 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups
 
+      - name: Install pinned OpenCV major version (${{ matrix.opencv }}.x)
+        run: uv pip install "${{ matrix.opencv-spec }}"
+
+      # --no-sync everywhere below: plain `uv run` re-syncs the environment
+      # against pyproject/uv.lock first, which would silently reinstall the
+      # locked (latest, 5.x) opencv-python-headless and undo the pinned
+      # override above — verified this actually happens before adding
+      # --no-sync, it's not a hypothetical concern.
       - name: Lint
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check .
 
       - name: Check formatting
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
 
       - name: Type check
-        run: uv run pyright
+        run: uv run --no-sync pyright
 
       - name: Test
-        run: uv run pytest
+        run: uv run --no-sync pytest
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Install the built wheel into a clean environment
+        run: |
+          python -m venv /tmp/smoke-env
+          /tmp/smoke-env/bin/pip install dist/*.whl opencv-python-headless
+
+      - name: Smoke-test the installed wheel (not the source tree)
+        run: |
+          cd /tmp
+          /tmp/smoke-env/bin/python -c "
+          import numpy as np
+          import improcv as im
+
+          image = np.zeros((20, 20, 3), dtype=np.uint8)
+          result = im.resize(image, width=10)
+          assert result.shape == (10, 10, 3), result.shape
+          print('smoke test OK:', im.__name__, result.shape)
+          "
