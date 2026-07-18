@@ -20,6 +20,16 @@ from improcv.morphology import (
     threshold,
     tophat,
 )
+from improcv.pixels import (
+    adjust_brightness,
+    adjust_contrast,
+    alpha_blend,
+    apply_lut,
+    bitwise_and,
+    bitwise_or,
+    in_range,
+    invert,
+)
 from improcv.transforms import (
     center_crop,
     crop,
@@ -34,9 +44,15 @@ from improcv.transforms import (
 )
 
 __all__ = [
+    "adjust_brightness",
+    "adjust_contrast",
+    "alpha_blend",
+    "apply_lut",
     "auto_canny",
     "bgr_to_rgb",
     "bilateral_filter",
+    "bitwise_and",
+    "bitwise_or",
     "blackhat",
     "center_crop",
     "clahe",
@@ -49,6 +65,8 @@ __all__ = [
     "gaussian_blur",
     "harris_corner",
     "histogram_equalization",
+    "in_range",
+    "invert",
     "laplacian_edge",
     "median_blur",
     "morph_close",
