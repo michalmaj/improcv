@@ -22,6 +22,13 @@ def test_auto_canny_rejects_multichannel_image(make_image) -> None:
         im.auto_canny(image)
 
 
+def test_auto_canny_rejects_non_uint8_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.auto_canny(image)
+
+
 def test_sobel_edge_detects_vertical_edge() -> None:
     image = np.zeros((20, 20), dtype=np.uint8)
     image[:, 10:] = 255

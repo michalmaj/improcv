@@ -120,6 +120,21 @@ def test_clahe_rejects_non_positive_clip_limit(make_image) -> None:
         im.clahe(image, clip_limit=0)
 
 
+def test_clahe_accepts_uint16(make_image) -> None:
+    image = make_image(20, 20, channels=None).astype(np.uint16)
+
+    result = im.clahe(image)
+
+    assert result.dtype == np.uint16
+
+
+def test_clahe_rejects_unsupported_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.clahe(image)
+
+
 def test_gamma_correction_below_one_darkens_image() -> None:
     image = np.full((10, 10), 200, dtype=np.uint8)
 
@@ -143,6 +158,13 @@ def test_gamma_correction_rejects_non_positive_gamma(make_image) -> None:
         im.gamma_correction(image, gamma=0)
 
 
+def test_gamma_correction_rejects_non_uint8_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.gamma_correction(image, gamma=2.0)
+
+
 def test_histogram_equalization_spreads_intensity_range() -> None:
     image = np.zeros((20, 20), dtype=np.uint8)
     image[:, 10:] = 50
@@ -156,4 +178,11 @@ def test_histogram_equalization_rejects_multichannel_image(make_image) -> None:
     image = make_image(20, 20, channels=3)
 
     with pytest.raises(ValueError, match="2 dimensions"):
+        im.histogram_equalization(image)
+
+
+def test_histogram_equalization_rejects_non_uint8_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
         im.histogram_equalization(image)

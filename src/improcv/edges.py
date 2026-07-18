@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim
+from improcv._validation import require_dtype, require_image_ndim
 
 __all__ = ["auto_canny", "sobel_edge", "laplacian_edge", "harris_corner"]
 
@@ -30,8 +30,11 @@ def auto_canny(image: np.ndarray, sigma: float = 0.33) -> np.ndarray:
     ------
     ValueError
         If `image` does not have exactly 2 dimensions.
+    TypeError
+        If `image` does not have dtype ``uint8``.
     """
     require_image_ndim(image, ndims=(2,))
+    require_dtype(image, (np.uint8,))
     median = float(np.median(image))
     lower = int(max(0, (1.0 - sigma) * median))
     upper = int(min(255, (1.0 + sigma) * median))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_non_negative
+from improcv._validation import require_dtype, require_image_ndim, require_non_negative
 
 __all__ = [
     "in_range",
@@ -154,8 +154,12 @@ def apply_lut(image: np.ndarray, table: np.ndarray) -> np.ndarray:
     ValueError
         If `image` does not have 2 or 3 dimensions, or `table` is not
         shaped ``(256,)``.
+    TypeError
+        If `image` does not have dtype ``uint8`` (required by the
+        underlying ``cv2.LUT`` call).
     """
     require_image_ndim(image)
+    require_dtype(image, (np.uint8,))
     if table.shape != (256,):
         raise ValueError(f"table must have shape (256,), got {table.shape}")
     return cv2.LUT(image, table.astype(np.uint8))

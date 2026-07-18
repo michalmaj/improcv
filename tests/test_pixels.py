@@ -158,3 +158,11 @@ def test_apply_lut_rejects_wrong_table_shape() -> None:
 
     with pytest.raises(ValueError, match=r"\(256,\)"):
         im.apply_lut(image, table)
+
+
+def test_apply_lut_rejects_non_uint8_image_dtype() -> None:
+    image = np.zeros((5, 5), dtype=np.float32)
+    table = np.arange(256, dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.apply_lut(image, table)

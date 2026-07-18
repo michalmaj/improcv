@@ -50,6 +50,28 @@ def test_threshold_rejects_unknown_method() -> None:
         im.threshold(image, method="cokolwiek")  # type: ignore[arg-type]
 
 
+def test_threshold_otsu_rejects_non_uint8_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.threshold(image, method="otsu")
+
+
+def test_threshold_adaptive_rejects_non_uint8_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.threshold(image, method="adaptive_mean")
+
+
+def test_threshold_binary_accepts_float32() -> None:
+    image = np.array([[0.1, 0.9]], dtype=np.float32)
+
+    result = im.threshold(image, value=0.5, max_value=1.0, method="binary")
+
+    np.testing.assert_allclose(result, [[0.0, 1.0]])
+
+
 def test_dilate_grows_bright_region() -> None:
     image = np.zeros((11, 11), dtype=np.uint8)
     image[5, 5] = 255

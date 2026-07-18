@@ -7,7 +7,7 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_one_of, require_positive
+from improcv._validation import require_dtype, require_image_ndim, require_one_of, require_positive
 
 __all__ = [
     "threshold",
@@ -68,6 +68,11 @@ def threshold(
         If `image` does not have exactly 2 dimensions, `method` is not one
         of the accepted values, or `block_size` is not an odd integer
         greater than 1 (adaptive methods only).
+    TypeError
+        If `method` is ``"otsu"`` or one of the ``adaptive_*`` methods and
+        `image` does not have dtype ``uint8`` (OpenCV requires 8-bit input
+        for those; plain ``"binary"`` thresholding has no such
+        restriction and accepts other dtypes, e.g. ``float32``).
     """
     require_image_ndim(image, ndims=(2,))
     require_one_of(method, _THRESHOLD_METHODS, "method")
@@ -75,9 +80,11 @@ def threshold(
         _, result = cv2.threshold(image, value, max_value, cv2.THRESH_BINARY)
         return result
     if method == "otsu":
+        require_dtype(image, (np.uint8,))
         _, result = cv2.threshold(image, 0, max_value, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return result
 
+    require_dtype(image, (np.uint8,))
     if block_size % 2 == 0 or block_size <= 1:
         raise ValueError(f"block_size must be an odd integer > 1, got {block_size}")
     adaptive_method = (

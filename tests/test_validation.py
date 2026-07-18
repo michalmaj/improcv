@@ -3,6 +3,7 @@ import pytest
 
 from improcv._validation import (
     require_channels,
+    require_dtype,
     require_image_ndim,
     require_non_negative,
     require_one_of,
@@ -65,6 +66,19 @@ def test_require_non_negative_rejects_nan_and_infinity() -> None:
         require_non_negative(float("nan"), "factor")
     with pytest.raises(ValueError, match="finite"):
         require_non_negative(float("inf"), "factor")
+
+
+def test_require_dtype_accepts_allowed_dtype() -> None:
+    require_dtype(np.zeros((4, 4), dtype=np.uint8), (np.uint8,))
+
+
+def test_require_dtype_accepts_any_of_multiple_allowed_dtypes() -> None:
+    require_dtype(np.zeros((4, 4), dtype=np.uint16), (np.uint8, np.uint16))
+
+
+def test_require_dtype_rejects_disallowed_dtype() -> None:
+    with pytest.raises(TypeError, match="uint8"):
+        require_dtype(np.zeros((4, 4), dtype=np.float32), (np.uint8,))
 
 
 def test_require_channels_accepts_matching_channel_count() -> None:

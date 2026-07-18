@@ -5,7 +5,12 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_positive, require_positive_int
+from improcv._validation import (
+    require_dtype,
+    require_image_ndim,
+    require_positive,
+    require_positive_int,
+)
 
 __all__ = [
     "gaussian_blur",
@@ -133,8 +138,12 @@ def clahe(
         int. OpenCV's own CLAHE implementation does not validate these
         (a zero tile dimension causes a low-level crash on some builds),
         so this must be checked before calling into it.
+    TypeError
+        If `image` does not have dtype ``uint8`` or ``uint16`` (both are
+        natively supported by OpenCV's CLAHE).
     """
     require_image_ndim(image, ndims=(2,))
+    require_dtype(image, (np.uint8, np.uint16))
     require_positive(clip_limit, "clip_limit")
     tiles_x, tiles_y = tile_grid_size
     require_positive_int(tiles_x, "tile_grid_size[0]")
@@ -163,8 +172,12 @@ def gamma_correction(image: np.ndarray, gamma: float) -> np.ndarray:
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, or `gamma` is not positive.
+    TypeError
+        If `image` does not have dtype ``uint8`` (required by the
+        underlying ``cv2.LUT`` call).
     """
     require_image_ndim(image)
+    require_dtype(image, (np.uint8,))
     require_positive(gamma, "gamma")
     normalized = np.arange(256, dtype=np.float64) / 255.0
     table = np.clip((normalized ** (1.0 / gamma)) * 255.0 + 0.5, 0, 255).astype(np.uint8)
@@ -188,6 +201,9 @@ def histogram_equalization(image: np.ndarray) -> np.ndarray:
     ------
     ValueError
         If `image` does not have exactly 2 dimensions.
+    TypeError
+        If `image` does not have dtype ``uint8``.
     """
     require_image_ndim(image, ndims=(2,))
+    require_dtype(image, (np.uint8,))
     return cv2.equalizeHist(image)

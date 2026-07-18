@@ -71,6 +71,18 @@ def require_one_of(value: object, allowed: Collection[object], name: str) -> Non
         raise ValueError(f"{name} must be one of {tuple(allowed)}, got {value!r}")
 
 
+def require_dtype(image: np.ndarray, dtypes: tuple[type, ...], name: str = "image") -> None:
+    """Raise TypeError unless `image.dtype` is one of `dtypes`.
+
+    For functions backed by an OpenCV call that only supports specific
+    dtypes (e.g. ``cv2.equalizeHist`` requires 8-bit input) and would
+    otherwise raise a raw, unfriendly ``cv2.error``.
+    """
+    if not any(image.dtype == dtype for dtype in dtypes):
+        allowed = ", ".join(np.dtype(dtype).name for dtype in dtypes)
+        raise TypeError(f"{name} must have dtype in ({allowed}), got {image.dtype}")
+
+
 def require_channels(image: np.ndarray, channels: int) -> None:
     """Raise ValueError unless `image` has exactly `channels` channels."""
     if image.ndim != 3 or image.shape[2] != channels:
