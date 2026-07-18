@@ -123,8 +123,11 @@ def harris_corner(
     Returns
     -------
     np.ndarray
-        A new boolean array, shaped like `image`, ``True`` where the
-        Harris response exceeds ``threshold * response.max()``.
+        A new ``uint8`` array, shaped like `image`, with value ``255``
+        where the Harris response exceeds ``threshold * response.max()``
+        and ``0`` elsewhere — improcv's mask convention (matches OpenCV's
+        own native mask representation; see `in_range`, `threshold`,
+        `auto_canny`).
 
     Raises
     ------
@@ -133,4 +136,4 @@ def harris_corner(
     """
     require_image_ndim(image, ndims=(2,))
     response = cv2.cornerHarris(image.astype(np.float32), block_size, kernel_size, k)
-    return response > threshold * response.max()
+    return (response > threshold * response.max()).astype(np.uint8) * 255

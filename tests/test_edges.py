@@ -56,9 +56,10 @@ def test_harris_corner_detects_corner_of_square() -> None:
 
     result = im.harris_corner(image)
 
-    assert result.dtype == np.bool_
+    assert result.dtype == np.uint8
     assert result.shape == image.shape
-    assert result.any()
+    assert set(np.unique(result).tolist()) <= {0, 255}
+    assert np.count_nonzero(result) > 0
 
 
 def test_harris_corner_rejects_multichannel_image(make_image) -> None:

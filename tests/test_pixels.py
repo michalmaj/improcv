@@ -9,7 +9,8 @@ def test_in_range_marks_pixels_within_bounds() -> None:
 
     result = im.in_range(image, lower=(50, 50, 50), upper=(150, 150, 150))
 
-    assert result.tolist() == [[False, True, False]]
+    assert result.dtype == np.uint8
+    assert result.tolist() == [[0, 255, 0]]
 
 
 def test_in_range_rejects_1d_array() -> None:

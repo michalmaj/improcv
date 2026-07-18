@@ -20,7 +20,7 @@ __all__ = [
 
 
 def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) -> np.ndarray:
-    """Return a boolean mask of pixels within `[lower, upper]` (inclusive, per channel).
+    """Return a mask of pixels within `[lower, upper]` (inclusive, per channel).
 
     Parameters
     ----------
@@ -32,7 +32,10 @@ def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) 
     Returns
     -------
     np.ndarray
-        A new boolean array shaped like `image`'s spatial dimensions.
+        A new ``uint8`` array shaped like `image`'s spatial dimensions,
+        with values ``0`` or ``255`` — improcv's mask convention (matches
+        OpenCV's own native mask representation; see `harris_corner`,
+        `threshold`, `auto_canny`).
 
     Raises
     ------
@@ -40,8 +43,7 @@ def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) 
         If `image` does not have 2 or 3 dimensions.
     """
     require_image_ndim(image)
-    mask = cv2.inRange(image, np.array(lower), np.array(upper))
-    return mask.astype(np.bool_)
+    return cv2.inRange(image, np.array(lower), np.array(upper))
 
 
 def invert(image: np.ndarray) -> np.ndarray:
