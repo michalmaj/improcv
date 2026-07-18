@@ -14,6 +14,7 @@ from improcv._validation import (
     require_one_of,
     require_positive_int,
 )
+from improcv.types import Image
 
 __all__ = [
     "threshold",
@@ -36,20 +37,23 @@ _THRESHOLD_METHODS: tuple[ThresholdMethod, ...] = (
 
 
 def threshold(
-    image: np.ndarray,
+    image: Image,
     value: float = 127,
     max_value: float = 255,
     method: ThresholdMethod = "binary",
     *,
     block_size: int = 11,
     constant: float = 2,
-) -> np.ndarray:
+) -> Image:
     """Binarize a single-channel image.
 
     Parameters
     ----------
     image : np.ndarray
-        Input image with shape ``(H, W)``.
+        Input image with shape ``(H, W)``. Dtype-preserving for
+        ``"binary"`` (e.g. a ``float32`` input stays ``float32``);
+        ``"otsu"`` and the ``adaptive_*`` methods require and return
+        ``uint8``.
     value : float, default 127
         Threshold value; ignored when `method` is ``"otsu"`` or adaptive.
     max_value : float, default 255
@@ -108,43 +112,43 @@ def _kernel(size: int) -> np.ndarray:
     return np.ones((size, size), dtype=np.uint8)
 
 
-def dilate(image: np.ndarray, kernel_size: int = 3, iterations: int = 1) -> np.ndarray:
+def dilate(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
     """Grow bright regions using a square structuring element."""
     require_image_ndim(image)
     return cv2.dilate(image, _kernel(kernel_size), iterations=iterations)
 
 
-def erode(image: np.ndarray, kernel_size: int = 3, iterations: int = 1) -> np.ndarray:
+def erode(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
     """Shrink bright regions using a square structuring element."""
     require_image_ndim(image)
     return cv2.erode(image, _kernel(kernel_size), iterations=iterations)
 
 
-def morph_open(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
+def morph_open(image: Image, kernel_size: int = 3) -> Image:
     """Erosion followed by dilation — removes small bright noise."""
     require_image_ndim(image)
     return cv2.morphologyEx(image, cv2.MORPH_OPEN, _kernel(kernel_size))
 
 
-def morph_close(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
+def morph_close(image: Image, kernel_size: int = 3) -> Image:
     """Dilation followed by erosion — closes small dark holes."""
     require_image_ndim(image)
     return cv2.morphologyEx(image, cv2.MORPH_CLOSE, _kernel(kernel_size))
 
 
-def morph_gradient(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
+def morph_gradient(image: Image, kernel_size: int = 3) -> Image:
     """Difference between dilation and erosion — outlines regions."""
     require_image_ndim(image)
     return cv2.morphologyEx(image, cv2.MORPH_GRADIENT, _kernel(kernel_size))
 
 
-def tophat(image: np.ndarray, kernel_size: int = 9) -> np.ndarray:
+def tophat(image: Image, kernel_size: int = 9) -> Image:
     """Difference between the image and its opening — highlights small bright details."""
     require_image_ndim(image)
     return cv2.morphologyEx(image, cv2.MORPH_TOPHAT, _kernel(kernel_size))
 
 
-def blackhat(image: np.ndarray, kernel_size: int = 9) -> np.ndarray:
+def blackhat(image: Image, kernel_size: int = 9) -> Image:
     """Difference between the image's closing and itself — highlights small dark details."""
     require_image_ndim(image)
     return cv2.morphologyEx(image, cv2.MORPH_BLACKHAT, _kernel(kernel_size))

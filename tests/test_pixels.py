@@ -181,4 +181,4 @@ def test_apply_lut_rejects_non_uint8_image_dtype() -> None:
     table = np.arange(256, dtype=np.uint8)
 
     with pytest.raises(TypeError, match="uint8"):
-        im.apply_lut(image, table)
+        im.apply_lut(image, table)  # type: ignore[arg-type]

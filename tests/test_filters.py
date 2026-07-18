@@ -162,7 +162,7 @@ def test_gamma_correction_rejects_non_uint8_dtype() -> None:
     image = np.zeros((10, 10), dtype=np.float32)
 
     with pytest.raises(TypeError, match="uint8"):
-        im.gamma_correction(image, gamma=2.0)
+        im.gamma_correction(image, gamma=2.0)  # type: ignore[arg-type]
 
 
 def test_histogram_equalization_spreads_intensity_range() -> None:
@@ -185,4 +185,4 @@ def test_histogram_equalization_rejects_non_uint8_dtype() -> None:
     image = np.zeros((10, 10), dtype=np.float32)
 
     with pytest.raises(TypeError, match="uint8"):
-        im.histogram_equalization(image)
+        im.histogram_equalization(image)  # type: ignore[arg-type]

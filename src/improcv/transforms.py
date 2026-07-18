@@ -15,6 +15,7 @@ from improcv._validation import (
     require_positive,
     require_positive_int,
 )
+from improcv.types import Image, TransformMatrix
 
 __all__ = [
     "resize",
@@ -31,11 +32,11 @@ __all__ = [
 
 
 def resize(
-    image: np.ndarray,
+    image: Image,
     width: int | None = None,
     height: int | None = None,
     interpolation: int = cv2.INTER_AREA,
-) -> np.ndarray:
+) -> Image:
     """Resize an image, optionally preserving its aspect ratio.
 
     Parameters
@@ -90,14 +91,14 @@ def resize(
 
 
 def translate(
-    image: np.ndarray,
+    image: Image,
     x: int,
     y: int,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Shift an image by `(x, y)` pixels.
 
     Parameters
@@ -140,7 +141,7 @@ def translate(
 
 
 def rotate(
-    image: np.ndarray,
+    image: Image,
     angle: float,
     center: tuple[float, float] | None = None,
     scale: float = 1.0,
@@ -148,7 +149,7 @@ def rotate(
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Rotate an image by `angle` degrees counter-clockwise around `center`.
 
     The output has the same size as `image`; content rotated outside the
@@ -199,13 +200,13 @@ def rotate(
 
 
 def rotate_bound(
-    image: np.ndarray,
+    image: Image,
     angle: float,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Rotate an image by `angle` degrees, expanding the canvas so no content is cropped.
 
     Parameters
@@ -270,7 +271,7 @@ _FLIP_CODES: dict[FlipDirection, int] = {
 }
 
 
-def flip(image: np.ndarray, direction: FlipDirection) -> np.ndarray:
+def flip(image: Image, direction: FlipDirection) -> Image:
     """Flip an image horizontally, vertically, or both.
 
     Parameters
@@ -296,7 +297,7 @@ def flip(image: np.ndarray, direction: FlipDirection) -> np.ndarray:
     return cv2.flip(image, _FLIP_CODES[direction])
 
 
-def crop(image: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarray:
+def crop(image: Image, x: int, y: int, width: int, height: int) -> Image:
     """Crop a rectangular region from an image.
 
     Parameters
@@ -337,7 +338,7 @@ def crop(image: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarr
     return image[y : y + height, x : x + width].copy()
 
 
-def center_crop(image: np.ndarray, width: int, height: int) -> np.ndarray:
+def center_crop(image: Image, width: int, height: int) -> Image:
     """Crop a `width` x `height` region centered on `image`.
 
     Parameters
@@ -376,7 +377,7 @@ _BORDER_MODES: dict[PadMode, int] = {
 
 
 def pad(
-    image: np.ndarray,
+    image: Image,
     top: int,
     bottom: int,
     left: int,
@@ -384,7 +385,7 @@ def pad(
     *,
     mode: PadMode = "constant",
     value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Add a border around an image.
 
     Parameters
@@ -423,14 +424,14 @@ def pad(
 
 
 def warp_affine(
-    image: np.ndarray,
-    matrix: np.ndarray,
+    image: Image,
+    matrix: TransformMatrix,
     output_size: tuple[int, int] | None = None,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Apply an affine transformation to an image.
 
     Parameters
@@ -476,14 +477,14 @@ def warp_affine(
 
 
 def warp_perspective(
-    image: np.ndarray,
-    matrix: np.ndarray,
+    image: Image,
+    matrix: TransformMatrix,
     output_size: tuple[int, int] | None = None,
     *,
     interpolation: int = cv2.INTER_LINEAR,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value: float | tuple[float, ...] = 0,
-) -> np.ndarray:
+) -> Image:
     """Apply a perspective transformation to an image.
 
     Parameters

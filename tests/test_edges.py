@@ -26,7 +26,7 @@ def test_auto_canny_rejects_non_uint8_dtype() -> None:
     image = np.zeros((10, 10), dtype=np.float32)
 
     with pytest.raises(TypeError, match="uint8"):
-        im.auto_canny(image)
+        im.auto_canny(image)  # type: ignore[arg-type]
 
 
 def test_sobel_edge_detects_vertical_edge() -> None:

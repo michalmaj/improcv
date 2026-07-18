@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import cv2
 import numpy as np
 
@@ -12,6 +14,7 @@ from improcv._validation import (
     require_positive,
     require_positive_int,
 )
+from improcv.types import Image, ImageU8
 
 __all__ = [
     "gaussian_blur",
@@ -23,7 +26,7 @@ __all__ = [
 ]
 
 
-def gaussian_blur(image: np.ndarray, kernel_size: int, sigma: float = 0.0) -> np.ndarray:
+def gaussian_blur(image: Image, kernel_size: int, sigma: float = 0.0) -> Image:
     """Smooth an image with a Gaussian kernel.
 
     Parameters
@@ -52,7 +55,7 @@ def gaussian_blur(image: np.ndarray, kernel_size: int, sigma: float = 0.0) -> np
     return cv2.GaussianBlur(image, (kernel_size, kernel_size), sigma)
 
 
-def median_blur(image: np.ndarray, kernel_size: int) -> np.ndarray:
+def median_blur(image: Image, kernel_size: int) -> Image:
     """Smooth an image with a median filter — effective against salt-and-pepper noise.
 
     Parameters
@@ -79,9 +82,7 @@ def median_blur(image: np.ndarray, kernel_size: int) -> np.ndarray:
     return cv2.medianBlur(image, kernel_size)
 
 
-def bilateral_filter(
-    image: np.ndarray, diameter: int, sigma_color: float, sigma_space: float
-) -> np.ndarray:
+def bilateral_filter(image: Image, diameter: int, sigma_color: float, sigma_space: float) -> Image:
     """Smooth an image while preserving edges.
 
     Parameters
@@ -110,9 +111,7 @@ def bilateral_filter(
     return cv2.bilateralFilter(image, diameter, sigma_color, sigma_space)
 
 
-def clahe(
-    image: np.ndarray, clip_limit: float = 2.0, tile_grid_size: tuple[int, int] = (8, 8)
-) -> np.ndarray:
+def clahe(image: Image, clip_limit: float = 2.0, tile_grid_size: tuple[int, int] = (8, 8)) -> Image:
     """Apply Contrast Limited Adaptive Histogram Equalization.
 
     Parameters
@@ -151,7 +150,7 @@ def clahe(
     return clahe_op.apply(image)
 
 
-def gamma_correction(image: np.ndarray, gamma: float) -> np.ndarray:
+def gamma_correction(image: ImageU8, gamma: float) -> ImageU8:
     """Apply gamma correction to an 8-bit image via a precomputed lookup table.
 
     Parameters
@@ -180,10 +179,12 @@ def gamma_correction(image: np.ndarray, gamma: float) -> np.ndarray:
     require_positive(gamma, "gamma")
     normalized = np.arange(256, dtype=np.float64) / 255.0
     table = np.clip((normalized ** (1.0 / gamma)) * 255.0 + 0.5, 0, 255).astype(np.uint8)
-    return cv2.LUT(image, table)
+    # cv2.LUT always produces uint8 here (both image and table are uint8);
+    # cv2's stubs type the return as the loose `MatLike`.
+    return cast(ImageU8, cv2.LUT(image, table))
 
 
-def histogram_equalization(image: np.ndarray) -> np.ndarray:
+def histogram_equalization(image: ImageU8) -> ImageU8:
     """Equalize the histogram of a single-channel image to spread out its intensity range.
 
     Parameters
@@ -205,4 +206,5 @@ def histogram_equalization(image: np.ndarray) -> np.ndarray:
     """
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8,))
-    return cv2.equalizeHist(image)
+    # cv2.equalizeHist always produces uint8; cv2's stubs don't say so.
+    return cast(ImageU8, cv2.equalizeHist(image))

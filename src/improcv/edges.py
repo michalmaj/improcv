@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import cv2
 import numpy as np
 
 from improcv._validation import require_dtype, require_image_ndim
+from improcv.types import Image, ImageU8, Mask
 
 __all__ = ["auto_canny", "sobel_edge", "laplacian_edge", "harris_corner"]
 
 
-def auto_canny(image: np.ndarray, sigma: float = 0.33) -> np.ndarray:
+def auto_canny(image: ImageU8, sigma: float = 0.33) -> Mask:
     """Detect edges with Canny, picking thresholds automatically from the image's median intensity.
 
     Parameters
@@ -38,10 +41,12 @@ def auto_canny(image: np.ndarray, sigma: float = 0.33) -> np.ndarray:
     median = float(np.median(image))
     lower = int(max(0, (1.0 - sigma) * median))
     upper = int(min(255, (1.0 + sigma) * median))
-    return cv2.Canny(image, lower, upper)
+    # cv2's stubs type this as the loose `MatLike`; cv2.Canny always
+    # produces a uint8 {0, 255} array in practice.
+    return cast(Mask, cv2.Canny(image, lower, upper))
 
 
-def sobel_edge(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
+def sobel_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     """Detect edges with the Sobel operator.
 
     Computes the x and y gradients separately and combines them into a
@@ -71,10 +76,11 @@ def sobel_edge(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
     grad_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=kernel_size)
     grad_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=kernel_size)
     magnitude = cv2.magnitude(grad_x, grad_y)
-    return cv2.convertScaleAbs(magnitude)
+    # cv2.convertScaleAbs always produces uint8; cv2's stubs don't say so.
+    return cast(ImageU8, cv2.convertScaleAbs(magnitude))
 
 
-def laplacian_edge(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
+def laplacian_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     """Detect edges with the Laplacian operator.
 
     Parameters
@@ -97,16 +103,17 @@ def laplacian_edge(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
     """
     require_image_ndim(image, ndims=(2,))
     gradient = cv2.Laplacian(image, cv2.CV_64F, ksize=kernel_size)
-    return cv2.convertScaleAbs(gradient)
+    # cv2.convertScaleAbs always produces uint8; cv2's stubs don't say so.
+    return cast(ImageU8, cv2.convertScaleAbs(gradient))
 
 
 def harris_corner(
-    image: np.ndarray,
+    image: Image,
     block_size: int = 2,
     kernel_size: int = 3,
     k: float = 0.04,
     threshold: float = 0.01,
-) -> np.ndarray:
+) -> Mask:
     """Detect corners with the Harris operator.
 
     Parameters

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import cv2
 import numpy as np
 
@@ -12,6 +14,7 @@ from improcv._validation import (
     require_range,
     require_same_shape_and_dtype,
 )
+from improcv.types import Image, ImageU8, Mask
 
 __all__ = [
     "in_range",
@@ -25,7 +28,7 @@ __all__ = [
 ]
 
 
-def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) -> np.ndarray:
+def in_range(image: Image, lower: tuple[int, ...], upper: tuple[int, ...]) -> Mask:
     """Return a mask of pixels within `[lower, upper]` (inclusive, per channel).
 
     Parameters
@@ -49,10 +52,11 @@ def in_range(image: np.ndarray, lower: tuple[int, ...], upper: tuple[int, ...]) 
         If `image` does not have 2 or 3 dimensions.
     """
     require_image_ndim(image)
-    return cv2.inRange(image, np.array(lower), np.array(upper))
+    # cv2.inRange always produces uint8 {0, 255}; cv2's stubs don't say so.
+    return cast(Mask, cv2.inRange(image, np.array(lower), np.array(upper)))
 
 
-def invert(image: np.ndarray) -> np.ndarray:
+def invert(image: Image) -> Image:
     """Invert pixel values (``255 - value`` for 8-bit images).
 
     Raises
@@ -64,7 +68,7 @@ def invert(image: np.ndarray) -> np.ndarray:
     return cv2.bitwise_not(image)
 
 
-def adjust_brightness(image: np.ndarray, delta: float) -> np.ndarray:
+def adjust_brightness(image: Image, delta: float) -> ImageU8:
     """Add `delta` to every pixel value, clamped to the valid 8-bit range.
 
     Uses saturating (clamping) arithmetic in both directions: a negative
@@ -82,7 +86,7 @@ def adjust_brightness(image: np.ndarray, delta: float) -> np.ndarray:
     return np.clip(image.astype(np.int32) + delta, 0, 255).astype(np.uint8)
 
 
-def adjust_contrast(image: np.ndarray, factor: float) -> np.ndarray:
+def adjust_contrast(image: Image, factor: float) -> ImageU8:
     """Scale pixel values by `factor` around the mid-gray point (128).
 
     Scaling around the midpoint (rather than around 0) keeps average
@@ -101,7 +105,7 @@ def adjust_contrast(image: np.ndarray, factor: float) -> np.ndarray:
     return np.clip((image.astype(np.float64) - 128.0) * factor + 128.0, 0, 255).astype(np.uint8)
 
 
-def alpha_blend(image_a: np.ndarray, image_b: np.ndarray, alpha: float) -> np.ndarray:
+def alpha_blend(image_a: Image, image_b: Image, alpha: float) -> Image:
     """Blend two same-shaped images: ``alpha * image_a + (1 - alpha) * image_b``.
 
     Raises
@@ -118,7 +122,7 @@ def alpha_blend(image_a: np.ndarray, image_b: np.ndarray, alpha: float) -> np.nd
     return cv2.addWeighted(image_a, alpha, image_b, 1.0 - alpha, 0)
 
 
-def bitwise_and(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
+def bitwise_and(image_a: Image, image_b: Image) -> Image:
     """Element-wise bitwise AND of two same-shaped images.
 
     Raises
@@ -133,7 +137,7 @@ def bitwise_and(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
     return cv2.bitwise_and(image_a, image_b)
 
 
-def bitwise_or(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
+def bitwise_or(image_a: Image, image_b: Image) -> Image:
     """Element-wise bitwise OR of two same-shaped images.
 
     Raises
@@ -148,7 +152,7 @@ def bitwise_or(image_a: np.ndarray, image_b: np.ndarray) -> np.ndarray:
     return cv2.bitwise_or(image_a, image_b)
 
 
-def apply_lut(image: np.ndarray, table: np.ndarray) -> np.ndarray:
+def apply_lut(image: ImageU8, table: np.ndarray) -> ImageU8:
     """Map each 8-bit pixel value through a 256-entry lookup table.
 
     Raises
@@ -164,4 +168,5 @@ def apply_lut(image: np.ndarray, table: np.ndarray) -> np.ndarray:
     require_dtype(image, (np.uint8,))
     if table.shape != (256,):
         raise ValueError(f"table must have shape (256,), got {table.shape}")
-    return cv2.LUT(image, table.astype(np.uint8))
+    # cv2.LUT always produces uint8 here; cv2's stubs don't say so.
+    return cast(ImageU8, cv2.LUT(image, table.astype(np.uint8)))

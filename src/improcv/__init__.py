@@ -42,8 +42,13 @@ from improcv.transforms import (
     warp_affine,
     warp_perspective,
 )
+from improcv.types import Image, ImageU8, Mask, TransformMatrix
 
 __all__ = [
+    "Image",
+    "ImageU8",
+    "Mask",
+    "TransformMatrix",
     "adjust_brightness",
     "adjust_contrast",
     "alpha_blend",
