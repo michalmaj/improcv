@@ -7,6 +7,7 @@ from improcv._validation import (
     require_non_negative,
     require_one_of,
     require_positive,
+    require_positive_int,
 )
 
 
@@ -77,3 +78,31 @@ def test_require_one_of_accepts_allowed_value() -> None:
 def test_require_one_of_rejects_disallowed_value() -> None:
     with pytest.raises(ValueError, match="direction"):
         require_one_of("diagonal", ("horizontal", "vertical"), "direction")
+
+
+def test_require_positive_int_accepts_positive_int() -> None:
+    require_positive_int(3, "kernel_size")
+
+
+def test_require_positive_int_rejects_zero_and_negative() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        require_positive_int(0, "kernel_size")
+    with pytest.raises(ValueError, match="positive"):
+        require_positive_int(-3, "kernel_size")
+
+
+def test_require_positive_int_rejects_bool() -> None:
+    with pytest.raises(TypeError, match="int"):
+        require_positive_int(True, "kernel_size")
+
+
+def test_require_positive_int_rejects_float() -> None:
+    with pytest.raises(TypeError, match="int"):
+        require_positive_int(3.0, "kernel_size")
+
+
+def test_require_positive_int_rejects_nan_and_infinity() -> None:
+    with pytest.raises(TypeError, match="int"):
+        require_positive_int(float("nan"), "kernel_size")
+    with pytest.raises(TypeError, match="int"):
+        require_positive_int(float("inf"), "kernel_size")

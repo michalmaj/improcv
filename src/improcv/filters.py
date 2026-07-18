@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from improcv._validation import require_image_ndim, require_positive
+from improcv._validation import require_image_ndim, require_positive, require_positive_int
 
 __all__ = [
     "gaussian_blur",
@@ -128,9 +128,17 @@ def clahe(
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions.
+        If `image` does not have exactly 2 dimensions, `clip_limit` is not
+        positive, or either element of `tile_grid_size` is not a positive
+        int. OpenCV's own CLAHE implementation does not validate these
+        (a zero tile dimension causes a low-level crash on some builds),
+        so this must be checked before calling into it.
     """
     require_image_ndim(image, ndims=(2,))
+    require_positive(clip_limit, "clip_limit")
+    tiles_x, tiles_y = tile_grid_size
+    require_positive_int(tiles_x, "tile_grid_size[0]")
+    require_positive_int(tiles_y, "tile_grid_size[1]")
     clahe_op = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
     return clahe_op.apply(image)
 

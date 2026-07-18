@@ -37,6 +37,21 @@ def require_non_negative(value: float, name: str) -> None:
         raise ValueError(f"{name} must be non-negative, got {value}")
 
 
+def require_positive_int(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is an int, then ValueError unless it's positive.
+
+    Rejects `bool` (a `bool` is technically an `int` subclass in Python,
+    but accepting `True`/`False` here would silently misinterpret a
+    boolean argument as ``1``/``0``) and any non-int type, including
+    floats — so this also rejects NaN and infinity, which are float-only
+    concepts.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an int, got {type(value).__name__}")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+
+
 def require_one_of(value: object, allowed: Collection[object], name: str) -> None:
     """Raise ValueError unless `value` is one of `allowed`.
 
