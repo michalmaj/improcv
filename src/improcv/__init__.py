@@ -2,6 +2,16 @@
 
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
 from improcv.filters import bilateral_filter, gaussian_blur, median_blur
+from improcv.morphology import (
+    blackhat,
+    dilate,
+    erode,
+    morph_close,
+    morph_gradient,
+    morph_open,
+    threshold,
+    tophat,
+)
 from improcv.transforms import (
     center_crop,
     crop,
@@ -18,20 +28,28 @@ from improcv.transforms import (
 __all__ = [
     "bgr_to_rgb",
     "bilateral_filter",
+    "blackhat",
     "center_crop",
     "crop",
+    "dilate",
     "ensure_gray",
+    "erode",
     "flip",
     "gaussian_blur",
     "median_blur",
+    "morph_close",
+    "morph_gradient",
+    "morph_open",
     "pad",
     "resize",
     "rgb_to_bgr",
     "rotate",
     "rotate_bound",
+    "threshold",
     "to_hsv",
     "to_lab",
     "to_ycrcb",
+    "tophat",
     "translate",
     "warp_affine",
     "warp_perspective",
