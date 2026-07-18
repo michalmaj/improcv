@@ -71,7 +71,12 @@ def threshold(
     Returns
     -------
     np.ndarray
-        A new single-channel array with values in ``{0, max_value}``.
+        A new single-channel array with values in ``{0, max_value}``. Note
+        this is *not* always improcv's ``uint8`` ``{0, 255}`` mask
+        convention (see `in_range`, `auto_canny`, `harris_corner`):
+        ``"binary"`` mode preserves `image`'s dtype and honors a custom
+        `max_value`, so the result is only a conventional mask when
+        `image` is ``uint8`` and `max_value` is left at its default 255.
 
     Raises
     ------
