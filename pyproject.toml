@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "improcv"
+version = "0.1.0a1"
+description = "Modern image-processing and computer-vision utilities for Python, NumPy and OpenCV."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Michał Maj" }]
+keywords = ["opencv", "image-processing", "computer-vision", "numpy"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Typing :: Typed",
+]
+dependencies = ["numpy>=1.24"]
+
+# improcv does not pin a specific OpenCV distribution (opencv-python,
+# opencv-python-headless, opencv-contrib-python, ...) as a hard runtime
+# dependency, to avoid installing a conflicting variant a user already has.
+# Install one of them yourself; see README.md.
+
+[project.urls]
+Homepage = "https://github.com/michalmaj/improcv"
+Repository = "https://github.com/michalmaj/improcv"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.15",
+    "pyright>=1.1",
+    "opencv-python-headless>=4.9",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/improcv"]

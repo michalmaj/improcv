@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Private planning/working docs — internal agreements and process notes,
+# not meant to be visible in the public repo.
+CLAUDE.md
+IMPROCV_PROJECT_BRIEF.md
+.claude/
+docs/
