@@ -7,7 +7,7 @@ import numpy as np
 
 from improcv._validation import require_image_ndim, require_positive
 
-__all__ = ["resize", "translate"]
+__all__ = ["resize", "translate", "rotate"]
 
 
 def resize(
@@ -104,6 +104,65 @@ def translate(
     require_image_ndim(image)
     height, width = image.shape[:2]
     matrix = np.array([[1.0, 0.0, float(x)], [0.0, 1.0, float(y)]], dtype=np.float32)
+    return cv2.warpAffine(
+        image,
+        matrix,
+        (width, height),
+        flags=interpolation,
+        borderMode=border_mode,
+        borderValue=border_value,
+    )
+
+
+def rotate(
+    image: np.ndarray,
+    angle: float,
+    center: tuple[float, float] | None = None,
+    scale: float = 1.0,
+    *,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+) -> np.ndarray:
+    """Rotate an image by `angle` degrees counter-clockwise around `center`.
+
+    The output has the same size as `image`; content rotated outside the
+    original canvas is cropped. Use `rotate_bound` to keep the full rotated
+    content by expanding the canvas instead.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    angle : float
+        Rotation angle in degrees, counter-clockwise.
+    center : tuple of float, optional
+        Rotation center in ``(x, y)`` pixel coordinates. Defaults to the
+        image center.
+    scale : float, default 1.0
+        Isotropic scale factor applied together with the rotation.
+    interpolation : int, default ``cv2.INTER_LINEAR``
+        Interpolation flag passed through to ``cv2.warpAffine``.
+    border_mode : int, default ``cv2.BORDER_CONSTANT``
+        Border mode for pixels exposed by the rotation.
+    border_value : float or tuple of float, default 0
+        Fill value used when `border_mode` is ``cv2.BORDER_CONSTANT``.
+
+    Returns
+    -------
+    np.ndarray
+        A new array with the same shape and dtype as `image`.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions.
+    """
+    require_image_ndim(image)
+    height, width = image.shape[:2]
+    if center is None:
+        center = (width / 2, height / 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, scale)
     return cv2.warpAffine(
         image,
         matrix,

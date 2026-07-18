@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import pytest
 
@@ -134,3 +135,46 @@ def test_translate_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.translate(image, x=1, y=1)
+
+
+def test_rotate_by_zero_degrees_preserves_content() -> None:
+    image = _make_image(20, 20)
+
+    result = im.rotate(image, angle=0)
+
+    np.testing.assert_array_equal(result, image)
+
+
+def test_rotate_by_180_degrees_flips_content_around_center() -> None:
+    image = np.zeros((21, 21), dtype=np.uint8)
+    image[5, 5] = 255
+
+    result = im.rotate(image, angle=180, interpolation=cv2.INTER_NEAREST)
+
+    assert result[16, 16] == 255
+
+
+def test_rotate_preserves_shape_and_dtype() -> None:
+    image = _make_image(20, 20)
+
+    result = im.rotate(image, angle=37)
+
+    assert result.shape == image.shape
+    assert result.dtype == image.dtype
+
+
+def test_rotate_does_not_mutate_input() -> None:
+    image = np.zeros((21, 21), dtype=np.uint8)
+    image[5, 5] = 255
+    original = image.copy()
+
+    im.rotate(image, angle=45)
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_rotate_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.rotate(image, angle=10)
