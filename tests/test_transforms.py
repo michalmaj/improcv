@@ -159,6 +159,15 @@ def test_translate_rejects_1d_array() -> None:
         im.translate(image, x=1, y=1)
 
 
+def test_translate_rejects_non_int_x_or_y() -> None:
+    image = _make_image(10, 10)
+
+    with pytest.raises(TypeError, match="int"):
+        im.translate(image, x=1.5, y=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="int"):
+        im.translate(image, x=1, y=True)  # type: ignore[arg-type]
+
+
 def test_rotate_by_zero_degrees_preserves_content() -> None:
     image = _make_image(20, 20)
 
@@ -420,6 +429,29 @@ def test_crop_rejects_1d_array() -> None:
         im.crop(image, x=0, y=0, width=2, height=2)
 
 
+def test_crop_rejects_non_int_x() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(TypeError, match="int"):
+        im.crop(image, x=1.5, y=0, width=2, height=2)  # type: ignore[arg-type]
+
+
+def test_crop_rejects_bool_x() -> None:
+    # bool is technically an int subclass in Python; True must not be
+    # silently accepted as x=1.
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(TypeError, match="int"):
+        im.crop(image, x=True, y=0, width=2, height=2)  # type: ignore[arg-type]
+
+
+def test_crop_rejects_non_int_width_or_height() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(TypeError, match="int"):
+        im.crop(image, x=0, y=0, width=2.5, height=2)  # type: ignore[arg-type]
+
+
 def test_center_crop_extracts_centered_region() -> None:
     image = _make_image(10, 10, channels=None)
 
@@ -476,6 +508,13 @@ def test_pad_rejects_negative_amount(top: int, bottom: int, left: int, right: in
 
     with pytest.raises(ValueError, match="non-negative"):
         im.pad(image, top=top, bottom=bottom, left=left, right=right)
+
+
+def test_pad_rejects_non_int_amount() -> None:
+    image = _make_image(10, 10, channels=None)
+
+    with pytest.raises(TypeError, match="int"):
+        im.pad(image, top=1.5, bottom=0, left=0, right=0)  # type: ignore[arg-type]
 
 
 def test_pad_rejects_invalid_mode() -> None:
@@ -539,6 +578,18 @@ def test_warp_affine_rejects_non_positive_output_size() -> None:
         im.warp_affine(image, matrix, output_size=(-5, 5))
 
 
+def test_warp_affine_rejects_wrong_length_output_size() -> None:
+    # A wrong-length output_size previously reached an IndexError (too
+    # short) or a raw cv2.error (too long) instead of a clear error.
+    image = _make_image(10, 10, channels=None)
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="2-tuple"):
+        im.warp_affine(image, matrix, output_size=(5,))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="2-tuple"):
+        im.warp_affine(image, matrix, output_size=(5, 5, 5))  # type: ignore[arg-type]
+
+
 def test_warp_perspective_applies_identity_matrix_unchanged() -> None:
     image = _make_image(10, 10, channels=None)
     matrix = np.eye(3, dtype=np.float32)
@@ -581,3 +632,13 @@ def test_warp_perspective_rejects_non_positive_output_size() -> None:
         im.warp_perspective(image, matrix, output_size=(0, 5))
     with pytest.raises(ValueError, match="positive"):
         im.warp_perspective(image, matrix, output_size=(-5, 5))
+
+
+def test_warp_perspective_rejects_wrong_length_output_size() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.eye(3, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="2-tuple"):
+        im.warp_perspective(image, matrix, output_size=(5,))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="2-tuple"):
+        im.warp_perspective(image, matrix, output_size=(5, 5, 5))  # type: ignore[arg-type]

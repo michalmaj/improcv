@@ -105,9 +105,11 @@ def bilateral_filter(image: Image, diameter: int, sigma_color: float, sigma_spac
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, or `diameter` is not positive.
+    TypeError
+        If `diameter` is not an ``int``.
     """
     require_image_ndim(image)
-    require_positive(diameter, "diameter")
+    require_positive_int(diameter, "diameter")
     return cv2.bilateralFilter(image, diameter, sigma_color, sigma_space)
 
 

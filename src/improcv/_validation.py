@@ -55,8 +55,8 @@ def require_finite(value: float, name: str) -> None:
         raise ValueError(f"{name} must be finite, got {value}")
 
 
-def require_positive_int(value: object, name: str) -> None:
-    """Raise TypeError unless `value` is an int, then ValueError unless it's positive.
+def require_int(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is an int.
 
     Rejects `bool` (a `bool` is technically an `int` subclass in Python,
     but accepting `True`/`False` here would silently misinterpret a
@@ -66,8 +66,36 @@ def require_positive_int(value: object, name: str) -> None:
     """
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an int, got {type(value).__name__}")
+
+
+def require_positive_int(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is an int, then ValueError unless it's positive."""
+    require_int(value, name)
+    assert isinstance(value, int)  # narrows for the type checker; require_int already enforced this
     if value <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
+
+
+def require_non_negative_int(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is an int, then ValueError unless it's non-negative."""
+    require_int(value, name)
+    assert isinstance(value, int)  # narrows for the type checker; require_int already enforced this
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+
+
+def require_size_2d(value: object, name: str) -> None:
+    """Raise ValueError/TypeError unless `value` is a 2-tuple of positive ints.
+
+    For ``(width, height)``-style parameters (e.g. `output_size`), where
+    a wrong-length tuple would otherwise reach an `IndexError` or a raw
+    `cv2.error` deep inside OpenCV instead of a clear library error.
+    """
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise ValueError(f"{name} must be a 2-tuple, got {value!r}")
+    width, height = value
+    require_positive_int(width, f"{name}[0]")
+    require_positive_int(height, f"{name}[1]")
 
 
 def require_one_of(value: object, allowed: Collection[object], name: str) -> None:
