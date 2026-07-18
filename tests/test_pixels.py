@@ -90,6 +90,15 @@ def test_adjust_brightness_rejects_non_finite_delta() -> None:
         im.adjust_brightness(image, delta=float("inf"))
 
 
+def test_adjust_brightness_rejects_numpy_nan_delta() -> None:
+    # _is_nan_or_inf previously only recognized builtin float, so a NumPy
+    # scalar NaN/inf silently passed through and produced a garbage result.
+    image = np.full((5, 5), 10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.adjust_brightness(image, delta=np.float32(np.nan))  # type: ignore[arg-type]
+
+
 def test_adjust_contrast_expands_values_away_from_midpoint() -> None:
     image = np.array([[200, 100]], dtype=np.uint8)
 
@@ -112,6 +121,13 @@ def test_adjust_contrast_rejects_negative_factor() -> None:
 
     with pytest.raises(ValueError, match="non-negative"):
         im.adjust_contrast(image, factor=-1.0)
+
+
+def test_adjust_contrast_rejects_numpy_infinite_factor() -> None:
+    image = np.full((5, 5), 100, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.adjust_contrast(image, factor=np.float32(np.inf))  # type: ignore[arg-type]
 
 
 def test_adjust_contrast_rejects_non_uint8_dtype() -> None:

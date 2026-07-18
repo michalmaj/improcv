@@ -165,6 +165,13 @@ def test_gamma_correction_rejects_non_positive_gamma(make_image) -> None:
         im.gamma_correction(image, gamma=0)
 
 
+def test_gamma_correction_rejects_numpy_nan_gamma(make_image) -> None:
+    image = make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.gamma_correction(image, gamma=np.float32(np.nan))  # type: ignore[arg-type]
+
+
 def test_gamma_correction_rejects_non_uint8_dtype() -> None:
     image = np.zeros((10, 10), dtype=np.float32)
 
