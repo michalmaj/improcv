@@ -90,3 +90,47 @@ def test_resize_returns_new_array_when_size_unchanged() -> None:
     result[0, 0, 0] = 255
 
     np.testing.assert_array_equal(image, original)
+
+
+def test_translate_shifts_content_by_given_offset() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+    image[5, 5] = 255
+
+    result = im.translate(image, x=3, y=2)
+
+    assert result[7, 8] == 255
+    assert result[5, 5] == 0
+
+
+def test_translate_preserves_shape_and_dtype() -> None:
+    image = _make_image(20, 20)
+
+    result = im.translate(image, x=2, y=-3)
+
+    assert result.shape == image.shape
+    assert result.dtype == image.dtype
+
+
+def test_translate_by_zero_preserves_content() -> None:
+    image = _make_image(20, 20)
+
+    result = im.translate(image, x=0, y=0)
+
+    np.testing.assert_array_equal(result, image)
+
+
+def test_translate_does_not_mutate_input() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+    image[5, 5] = 255
+    original = image.copy()
+
+    im.translate(image, x=3, y=2)
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_translate_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.translate(image, x=1, y=1)

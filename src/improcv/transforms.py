@@ -7,7 +7,7 @@ import numpy as np
 
 from improcv._validation import require_image_ndim, require_positive
 
-__all__ = ["resize"]
+__all__ = ["resize", "translate"]
 
 
 def resize(
@@ -62,3 +62,53 @@ def resize(
         target_size = (round(height * source_width / source_height), height)
 
     return cv2.resize(image, target_size, interpolation=interpolation)
+
+
+def translate(
+    image: np.ndarray,
+    x: int,
+    y: int,
+    *,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+) -> np.ndarray:
+    """Shift an image by `(x, y)` pixels.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    x : int
+        Horizontal shift in pixels; positive moves content right.
+    y : int
+        Vertical shift in pixels; positive moves content down.
+    interpolation : int, default ``cv2.INTER_LINEAR``
+        Interpolation flag passed through to ``cv2.warpAffine``.
+    border_mode : int, default ``cv2.BORDER_CONSTANT``
+        Border mode for pixels exposed by the shift.
+    border_value : float or tuple of float, default 0
+        Fill value used when `border_mode` is ``cv2.BORDER_CONSTANT``.
+
+    Returns
+    -------
+    np.ndarray
+        A new array with the same shape and dtype as `image`. `image` is
+        never modified.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions.
+    """
+    require_image_ndim(image)
+    height, width = image.shape[:2]
+    matrix = np.array([[1.0, 0.0, float(x)], [0.0, 1.0, float(y)]], dtype=np.float32)
+    return cv2.warpAffine(
+        image,
+        matrix,
+        (width, height),
+        flags=interpolation,
+        borderMode=border_mode,
+        borderValue=border_value,
+    )
