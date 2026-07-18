@@ -219,3 +219,66 @@ def test_rotate_bound_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.rotate_bound(image, angle=10)
+
+
+def test_flip_horizontal_mirrors_columns() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2, 3] = 255
+
+    result = im.flip(image, direction="horizontal")
+
+    assert result[2, 6] == 255
+    assert result[2, 3] == 0
+
+
+def test_flip_vertical_mirrors_rows() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2, 3] = 255
+
+    result = im.flip(image, direction="vertical")
+
+    assert result[7, 3] == 255
+    assert result[2, 3] == 0
+
+
+def test_flip_both_mirrors_rows_and_columns() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2, 3] = 255
+
+    result = im.flip(image, direction="both")
+
+    assert result[7, 6] == 255
+    assert result[2, 3] == 0
+
+
+def test_flip_rejects_invalid_direction() -> None:
+    image = _make_image(10, 10)
+
+    with pytest.raises(ValueError, match="direction"):
+        im.flip(image, direction="diagonal")  # type: ignore[arg-type]
+
+
+def test_flip_preserves_shape_and_dtype() -> None:
+    image = _make_image(10, 10)
+
+    result = im.flip(image, direction="horizontal")
+
+    assert result.shape == image.shape
+    assert result.dtype == image.dtype
+
+
+def test_flip_does_not_mutate_input() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2, 3] = 255
+    original = image.copy()
+
+    im.flip(image, direction="horizontal")
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_flip_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.flip(image, direction="horizontal")

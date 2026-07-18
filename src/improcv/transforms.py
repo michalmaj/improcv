@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import cv2
 import numpy as np
 
 from improcv._validation import require_image_ndim, require_positive
 
-__all__ = ["resize", "translate", "rotate", "rotate_bound"]
+__all__ = ["resize", "translate", "rotate", "rotate_bound", "flip"]
 
 
 def resize(
@@ -228,3 +230,39 @@ def rotate_bound(
         borderMode=border_mode,
         borderValue=border_value,
     )
+
+
+FlipDirection = Literal["horizontal", "vertical", "both"]
+
+_FLIP_CODES: dict[FlipDirection, int] = {
+    "horizontal": 1,
+    "vertical": 0,
+    "both": -1,
+}
+
+
+def flip(image: np.ndarray, direction: FlipDirection) -> np.ndarray:
+    """Flip an image horizontally, vertically, or both.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    direction : {"horizontal", "vertical", "both"}
+        Flip axis.
+
+    Returns
+    -------
+    np.ndarray
+        A new array with the same shape and dtype as `image`.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions, or `direction` is not
+        one of the accepted values.
+    """
+    require_image_ndim(image)
+    if direction not in _FLIP_CODES:
+        raise ValueError(f"direction must be one of {tuple(_FLIP_CODES)}, got {direction!r}")
+    return cv2.flip(image, _FLIP_CODES[direction])
