@@ -1,6 +1,7 @@
 """improcv: modern image-processing and computer-vision utilities for NumPy and OpenCV."""
 
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
+from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.filters import (
     bilateral_filter,
     clahe,
@@ -33,6 +34,7 @@ from improcv.transforms import (
 )
 
 __all__ = [
+    "auto_canny",
     "bgr_to_rgb",
     "bilateral_filter",
     "blackhat",
@@ -45,7 +47,9 @@ __all__ = [
     "flip",
     "gamma_correction",
     "gaussian_blur",
+    "harris_corner",
     "histogram_equalization",
+    "laplacian_edge",
     "median_blur",
     "morph_close",
     "morph_gradient",
@@ -55,6 +59,7 @@ __all__ = [
     "rgb_to_bgr",
     "rotate",
     "rotate_bound",
+    "sobel_edge",
     "threshold",
     "to_hsv",
     "to_lab",
