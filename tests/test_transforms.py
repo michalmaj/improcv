@@ -401,3 +401,71 @@ def test_pad_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.pad(image, top=1, bottom=1, left=1, right=1)
+
+
+def test_warp_affine_applies_identity_matrix_unchanged() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    result = im.warp_affine(image, matrix)
+
+    np.testing.assert_array_equal(result, image)
+
+
+def test_warp_affine_respects_output_size() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    result = im.warp_affine(image, matrix, output_size=(20, 5))
+
+    assert result.shape == (5, 20)
+
+
+def test_warp_affine_rejects_wrong_matrix_shape() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.eye(3, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"\(2, 3\)"):
+        im.warp_affine(image, matrix)
+
+
+def test_warp_affine_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.warp_affine(image, matrix)
+
+
+def test_warp_perspective_applies_identity_matrix_unchanged() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.eye(3, dtype=np.float32)
+
+    result = im.warp_perspective(image, matrix)
+
+    np.testing.assert_array_equal(result, image)
+
+
+def test_warp_perspective_respects_output_size() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.eye(3, dtype=np.float32)
+
+    result = im.warp_perspective(image, matrix, output_size=(20, 5))
+
+    assert result.shape == (5, 20)
+
+
+def test_warp_perspective_rejects_wrong_matrix_shape() -> None:
+    image = _make_image(10, 10, channels=None)
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"\(3, 3\)"):
+        im.warp_perspective(image, matrix)
+
+
+def test_warp_perspective_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+    matrix = np.eye(3, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.warp_perspective(image, matrix)

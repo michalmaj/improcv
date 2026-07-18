@@ -9,6 +9,8 @@ from improcv.transforms import (
     rotate,
     rotate_bound,
     translate,
+    warp_affine,
+    warp_perspective,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "rotate",
     "rotate_bound",
     "translate",
+    "warp_affine",
+    "warp_perspective",
 ]

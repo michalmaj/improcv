@@ -9,7 +9,18 @@ import numpy as np
 
 from improcv._validation import require_image_ndim, require_non_negative, require_positive
 
-__all__ = ["resize", "translate", "rotate", "rotate_bound", "flip", "crop", "center_crop", "pad"]
+__all__ = [
+    "resize",
+    "translate",
+    "rotate",
+    "rotate_bound",
+    "flip",
+    "crop",
+    "center_crop",
+    "pad",
+    "warp_affine",
+    "warp_perspective",
+]
 
 
 def resize(
@@ -392,4 +403,98 @@ def pad(
 
     return cv2.copyMakeBorder(
         image, top, bottom, left, right, borderType=_BORDER_MODES[mode], value=value
+    )
+
+
+def warp_affine(
+    image: np.ndarray,
+    matrix: np.ndarray,
+    output_size: tuple[int, int] | None = None,
+    *,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+) -> np.ndarray:
+    """Apply an affine transformation to an image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    matrix : np.ndarray
+        A ``(2, 3)`` affine transformation matrix.
+    output_size : tuple of int, optional
+        ``(width, height)`` of the output. Defaults to `image`'s size.
+    interpolation : int, default ``cv2.INTER_LINEAR``
+        Interpolation flag passed through to ``cv2.warpAffine``.
+    border_mode : int, default ``cv2.BORDER_CONSTANT``
+        Border mode for pixels exposed by the transform.
+    border_value : float or tuple of float, default 0
+        Fill value used when `border_mode` is ``cv2.BORDER_CONSTANT``.
+
+    Returns
+    -------
+    np.ndarray
+        A new array holding the warped image.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions, or `matrix` is not
+        shaped ``(2, 3)``.
+    """
+    require_image_ndim(image)
+    if matrix.shape != (2, 3):
+        raise ValueError(f"matrix must have shape (2, 3), got {matrix.shape}")
+    height, width = image.shape[:2]
+    size = output_size if output_size is not None else (width, height)
+    return cv2.warpAffine(
+        image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value
+    )
+
+
+def warp_perspective(
+    image: np.ndarray,
+    matrix: np.ndarray,
+    output_size: tuple[int, int] | None = None,
+    *,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+) -> np.ndarray:
+    """Apply a perspective transformation to an image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``.
+    matrix : np.ndarray
+        A ``(3, 3)`` perspective transformation matrix.
+    output_size : tuple of int, optional
+        ``(width, height)`` of the output. Defaults to `image`'s size.
+    interpolation : int, default ``cv2.INTER_LINEAR``
+        Interpolation flag passed through to ``cv2.warpPerspective``.
+    border_mode : int, default ``cv2.BORDER_CONSTANT``
+        Border mode for pixels exposed by the transform.
+    border_value : float or tuple of float, default 0
+        Fill value used when `border_mode` is ``cv2.BORDER_CONSTANT``.
+
+    Returns
+    -------
+    np.ndarray
+        A new array holding the warped image.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions, or `matrix` is not
+        shaped ``(3, 3)``.
+    """
+    require_image_ndim(image)
+    if matrix.shape != (3, 3):
+        raise ValueError(f"matrix must have shape (3, 3), got {matrix.shape}")
+    height, width = image.shape[:2]
+    size = output_size if output_size is not None else (width, height)
+    return cv2.warpPerspective(
+        image, matrix, size, flags=interpolation, borderMode=border_mode, borderValue=border_value
     )
