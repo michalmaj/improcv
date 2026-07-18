@@ -58,6 +58,28 @@ def test_resize_rejects_1d_array() -> None:
         im.resize(image, width=5)
 
 
+def test_resize_computed_dimension_clamps_to_minimum_one_pixel() -> None:
+    image = _make_image(1, 1000, channels=None)
+
+    result = im.resize(image, width=1)
+
+    assert result.shape == (1, 1)
+
+
+def test_resize_rejects_empty_image() -> None:
+    image = np.zeros((0, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="empty"):
+        im.resize(image, width=5)
+
+
+def test_resize_rejects_non_integer_width() -> None:
+    image = _make_image(10, 10)
+
+    with pytest.raises(TypeError, match="int"):
+        im.resize(image, width=10.5)  # type: ignore[arg-type]
+
+
 def test_resize_preserves_grayscale_shape() -> None:
     image = _make_image(100, 200, channels=None)
 

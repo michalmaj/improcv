@@ -11,10 +11,17 @@ __all__: list[str] = []
 
 
 def require_image_ndim(image: np.ndarray, ndims: tuple[int, ...] = (2, 3)) -> None:
-    """Raise ValueError unless `image.ndim` is one of `ndims`."""
+    """Raise ValueError unless `image.ndim` is one of `ndims` and `image` is non-empty.
+
+    Every public function calls this (directly or via a narrower `ndims`),
+    so the empty-image check here is the single, global place that rejects
+    a zero-height or zero-width image for the whole library.
+    """
     if image.ndim not in ndims:
         allowed = " or ".join(str(n) for n in ndims)
         raise ValueError(f"image must have {allowed} dimensions, got {image.ndim}")
+    if image.shape[0] == 0 or image.shape[1] == 0:
+        raise ValueError(f"image must not be empty, got shape {image.shape}")
 
 
 def _is_nan_or_inf(value: float) -> bool:

@@ -26,6 +26,13 @@ def test_require_image_ndim_single_allowed_value_message() -> None:
         require_image_ndim(np.zeros((4, 4, 3)), ndims=(2,))
 
 
+def test_require_image_ndim_rejects_empty_image() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        require_image_ndim(np.zeros((0, 10)))
+    with pytest.raises(ValueError, match="empty"):
+        require_image_ndim(np.zeros((10, 0)))
+
+
 def test_require_positive_accepts_positive_value() -> None:
     require_positive(1, "width")
 

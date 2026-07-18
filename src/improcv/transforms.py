@@ -12,6 +12,7 @@ from improcv._validation import (
     require_non_negative,
     require_one_of,
     require_positive,
+    require_positive_int,
 )
 
 __all__ = [
@@ -59,25 +60,30 @@ def resize(
     ------
     ValueError
         If both `width` and `height` are ``None``, if either is not a
-        positive integer, or if `image` does not have 2 or 3 dimensions.
+        positive integer, or if `image` is empty or does not have 2 or 3
+        dimensions.
+    TypeError
+        If `width` or `height` is given but is not an ``int``.
     """
     require_image_ndim(image)
     if width is None and height is None:
         raise ValueError("at least one of width or height must be given")
     if width is not None:
-        require_positive(width, "width")
+        require_positive_int(width, "width")
     if height is not None:
-        require_positive(height, "height")
+        require_positive_int(height, "height")
 
     source_height, source_width = image.shape[:2]
 
     if width is not None and height is not None:
         target_size = (width, height)
     elif width is not None:
-        target_size = (width, round(width * source_height / source_width))
+        computed_height = max(1, round(width * source_height / source_width))
+        target_size = (width, computed_height)
     else:
         assert height is not None
-        target_size = (round(height * source_width / source_height), height)
+        computed_width = max(1, round(height * source_width / source_height))
+        target_size = (computed_width, height)
 
     return cv2.resize(image, target_size, interpolation=interpolation)
 
