@@ -11,10 +11,10 @@ both OpenCV 4.x and OpenCV 5.x.
 clear error telling you to install one. Pick exactly one variant:
 
 ```bash
-pip install improcv[cv]                  # opencv-python
-pip install improcv[cv-headless]         # opencv-python-headless
-pip install improcv[cv-contrib]          # opencv-contrib-python
-pip install improcv[cv-contrib-headless] # opencv-contrib-python-headless
+pip install "improcv[cv]"                  # opencv-python
+pip install "improcv[cv-headless]"         # opencv-python-headless
+pip install "improcv[cv-contrib]"          # opencv-contrib-python
+pip install "improcv[cv-contrib-headless]" # opencv-contrib-python-headless
 ```
 
 Already have one of these installed under a different name, or building OpenCV yourself? Just

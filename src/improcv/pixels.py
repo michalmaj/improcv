@@ -28,6 +28,17 @@ __all__ = [
     "apply_lut",
 ]
 
+# Verified directly against cv2.inRange on OpenCV 4.13 and 5.0. bool and
+# float16 are excluded even though each only crashes on *one* of the two
+# lines (bool segfaults the interpreter on 5.0 but raises a normal
+# cv2.error on 4.13; float16 segfaults on 4.13 but works on 5.0) — since
+# improcv must support both lines, either dtype is unsafe everywhere.
+# int32/int64 are excluded too: cv2.inRange silently produces wrong
+# results for large-magnitude values (verified with +/-5_000_000_000 on
+# an int64 image), not merely an unsupported-dtype error, so there is no
+# safe subrange to carve out.
+_IN_RANGE_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
+
 
 def in_range(image: Image, lower: tuple[float, ...], upper: tuple[float, ...]) -> Mask:
     """Return a mask of pixels within `[lower, upper]` (inclusive, per channel).
@@ -65,9 +76,16 @@ def in_range(image: Image, lower: tuple[float, ...], upper: tuple[float, ...]) -
         If any element of `lower`/`upper` is not a real number (rejects
         ``bool`` and ``str`` — both otherwise reach ``cv2.inRange``
         directly: a ``bool`` element is silently reinterpreted as ``1``/
-        ``0`` and a ``str`` element reaches a raw ``cv2.error``).
+        ``0`` and a ``str`` element reaches a raw ``cv2.error``); or if
+        `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.inRange`` on
+        both OpenCV 4 and 5 — ``bool`` and ``float16`` each crash the
+        interpreter outright, with no exception to catch, on one of the
+        two supported OpenCV lines; ``int32``/``int64`` silently produce
+        wrong results for large-magnitude values rather than erroring).
     """
     require_image_ndim(image)
+    require_dtype(image, _IN_RANGE_DTYPES)
     channels = 1 if image.ndim == 2 else image.shape[2]
     if len(lower) != channels or len(upper) != channels:
         raise ValueError(
@@ -78,8 +96,16 @@ def in_range(image: Image, lower: tuple[float, ...], upper: tuple[float, ...]) -
         require_finite(bound, f"lower[{i}]")
     for i, bound in enumerate(upper):
         require_finite(bound, f"upper[{i}]")
+    # Bounds are always built as float64, regardless of image dtype or the
+    # Python/NumPy types in lower/upper: cv2.inRange gives silently wrong
+    # results (an all-zero mask) when a float32 image is paired with
+    # float32-dtype bounds specifically — verified directly. float64
+    # bounds work correctly against every dtype in _IN_RANGE_DTYPES, so
+    # this sidesteps that landmine entirely rather than special-casing it.
+    lower_array = np.array(lower, dtype=np.float64)
+    upper_array = np.array(upper, dtype=np.float64)
     # cv2.inRange always produces uint8 {0, 255}; cv2's stubs don't say so.
-    return cast(Mask, cv2.inRange(image, np.array(lower), np.array(upper)))
+    return cast(Mask, cv2.inRange(image, lower_array, upper_array))
 
 
 def invert(image: ImageU8) -> ImageU8:

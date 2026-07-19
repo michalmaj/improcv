@@ -28,6 +28,19 @@ def test_threshold_otsu_produces_binary_output() -> None:
     assert set(np.unique(result).tolist()) <= {0, 255}
 
 
+def test_threshold_otsu_accepts_uint16() -> None:
+    # cv2.threshold with THRESH_OTSU supports uint16 fine — verified
+    # directly (identical on OpenCV 4.13 and 5.0), unlike the adaptive_*
+    # methods, which require uint8 specifically.
+    image = np.zeros((10, 10), dtype=np.uint16)
+    image[:, 5:] = 60000
+
+    result = im.threshold(image, max_value=65535, method="otsu")
+
+    assert result.dtype == np.uint16
+    assert set(np.unique(result).tolist()) <= {0, 65535}
+
+
 def test_threshold_adaptive_mean_produces_binary_output(make_image) -> None:
     image = make_image(20, 20, channels=None)
 
@@ -71,7 +84,7 @@ def test_threshold_rejects_non_finite_constant() -> None:
         im.threshold(image, method="adaptive_mean", constant=float("nan"))
 
 
-def test_threshold_otsu_rejects_non_uint8_dtype() -> None:
+def test_threshold_otsu_rejects_float32_dtype() -> None:
     image = np.zeros((10, 10), dtype=np.float32)
 
     with pytest.raises(TypeError, match="uint8"):

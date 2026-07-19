@@ -68,6 +68,57 @@ def test_in_range_rejects_bool_bound() -> None:
         im.in_range(image, lower=(True,), upper=(255,))  # type: ignore[arg-type]
 
 
+def test_in_range_rejects_bool_dtype() -> None:
+    # cv2.inRange segfaults the interpreter outright for a bool image on
+    # OpenCV 5.0 (no exception to catch) — verified directly. Raises a
+    # normal cv2.error on 4.13, but since improcv supports both lines,
+    # bool must be rejected unconditionally.
+    image = np.zeros((4, 4), dtype=bool)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.in_range(image, lower=(0,), upper=(1,))  # type: ignore[arg-type]
+
+
+def test_in_range_rejects_float16_dtype() -> None:
+    # cv2.inRange segfaults the interpreter outright for a float16 image
+    # on OpenCV 4.13 (no exception to catch) — verified directly. Works
+    # on 5.0, but since improcv supports both lines, float16 must be
+    # rejected unconditionally.
+    image = np.zeros((4, 4), dtype=np.float16)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.in_range(image, lower=(0,), upper=(1,))  # type: ignore[arg-type]
+
+
+def test_in_range_rejects_int64_dtype() -> None:
+    # cv2.inRange silently produces a wrong mask for a large-magnitude
+    # int64 image (verified directly: [-5_000_000_000, 0, 5_000_000_000]
+    # bounded by [-1_000_000_000, 1_000_000_000] should mask out both
+    # extremes but marks all three pixels as in-range) rather than
+    # raising, so there is no safe subrange to carve out.
+    image = np.zeros((4, 4), dtype=np.int64)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.in_range(image, lower=(0,), upper=(1,))  # type: ignore[arg-type]
+
+
+def test_in_range_produces_correct_mask_when_bounds_match_image_float_dtype() -> None:
+    # cv2.inRange silently returns an all-zero mask when a float32 image
+    # is paired with float32-dtype bounds specifically (works fine when
+    # the bounds happen to be float64, e.g. plain Python floats via
+    # np.array()) — verified directly. in_range must not be sensitive to
+    # the exact NumPy dtype of the values inside the lower/upper tuples.
+    image = np.array([[10.0, 50.0, 90.0]], dtype=np.float32)
+
+    result = im.in_range(
+        image,
+        lower=(np.float32(20.0),),  # type: ignore[arg-type]
+        upper=(np.float32(80.0),),  # type: ignore[arg-type]
+    )
+
+    np.testing.assert_array_equal(result, np.array([[0, 255, 0]], dtype=np.uint8))
+
+
 def test_in_range_accepts_fractional_bounds_for_float32_image() -> None:
     image = np.array([[0.5, 1.5, 2.5]], dtype=np.float32)
 

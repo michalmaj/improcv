@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from improcv._validation import (
+    require_dtype,
     require_finite,
     require_image_ndim,
     require_int,
@@ -34,6 +35,19 @@ __all__ = [
     "warp_affine",
     "warp_perspective",
 ]
+
+# Shared by every geometric operation in this module (all are backed by
+# cv2.resize, cv2.warpAffine, cv2.warpPerspective, cv2.flip, or
+# cv2.copyMakeBorder). Verified directly, identical on OpenCV 4.13 and
+# 5.0: int8/int32/float16/bool reach a raw cv2.error on resize/warpAffine/
+# warpPerspective. flip/copyMakeBorder don't raise for those, or for
+# int64, but int64 is excluded anyway -- both silently downcast it to
+# int32 internally (verified: a 5_000_000_000-valued pixel comes back as
+# -705_032_704), the same silent-corruption pattern already excluded from
+# `alpha_blend` and `in_range`. One shared, conservative set is used for
+# every function here rather than a wider one for flip/pad specifically,
+# so the dtype contract stays uniform across the whole module.
+_GEOMETRIC_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
 
 
 def resize(
@@ -70,9 +84,15 @@ def resize(
         positive integer, or if `image` is empty or does not have 2 or 3
         dimensions.
     TypeError
-        If `width` or `height` is given but is not an ``int``.
+        If `width` or `height` is given but is not an ``int``, or if
+        `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.resize`` on
+        both OpenCV 4 and 5; ``int8``/``int32``/``int64``/``float16``/
+        ``bool`` are not supported and otherwise reach a raw
+        ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     if width is None and height is None:
         raise ValueError("at least one of width or height must be given")
     if width is not None:
@@ -132,9 +152,14 @@ def translate(
     ValueError
         If `image` does not have 2 or 3 dimensions.
     TypeError
-        If `x` or `y` is not an ``int``.
+        If `x` or `y` is not an ``int``, or if `image` does not have dtype
+        ``uint8``, ``uint16``, ``int16``, ``float32``, or ``float64``
+        (verified against ``cv2.warpAffine`` on both OpenCV 4 and 5;
+        ``int8``/``int32``/``int64``/``float16``/``bool`` are not
+        supported and otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     require_int(x, "x")
     require_int(y, "y")
     height, width = image.shape[:2]
@@ -195,8 +220,15 @@ def rotate(
         If `image` does not have 2 or 3 dimensions, `angle` is not finite,
         `scale` is not finite or not positive, or `center` is given but is
         not a 2-tuple of finite real numbers.
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.warpAffine``
+        on both OpenCV 4 and 5; ``int8``/``int32``/``int64``/``float16``/
+        ``bool`` are not supported and otherwise reach a raw
+        ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     require_finite(angle, "angle")
     require_positive(scale, "scale")
     height, width = image.shape[:2]
@@ -251,8 +283,15 @@ def rotate_bound(
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, or `angle` is not finite.
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.warpAffine``
+        on both OpenCV 4 and 5; ``int8``/``int32``/``int64``/``float16``/
+        ``bool`` are not supported and otherwise reach a raw
+        ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     require_finite(angle, "angle")
     height, width = image.shape[:2]
     # Pixel centers sit at integer coordinates 0..N-1, so the center of the
@@ -315,8 +354,17 @@ def flip(image: Image, direction: FlipDirection) -> Image:
     ValueError
         If `image` does not have 2 or 3 dimensions, or `direction` is not
         one of the accepted values.
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64``. Unlike the other functions in this
+        module, ``cv2.flip`` does not actually raise for most other
+        dtypes (verified directly) — but it silently downcasts ``int64``
+        to ``int32`` (corrupting large values) and raises inconsistently
+        for ``bool`` between OpenCV 4 and 5, so the same shared, verified
+        dtype set is enforced here too for a uniform contract.
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     require_one_of(direction, _FLIP_CODES, "direction")
     return cv2.flip(image, _FLIP_CODES[direction])
 
@@ -441,9 +489,18 @@ def pad(
         If `image` does not have 2 or 3 dimensions, any border amount is
         negative, or `mode` is not one of the accepted values.
     TypeError
-        If `top`, `bottom`, `left`, or `right` is not an ``int``.
+        If `top`, `bottom`, `left`, or `right` is not an ``int``, or if
+        `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64``. Unlike the other functions in this
+        module, ``cv2.copyMakeBorder`` does not actually raise for most
+        other dtypes (verified directly) — but it silently downcasts
+        ``int64`` to ``int32`` (corrupting large values) and raises
+        inconsistently for ``bool`` between OpenCV 4 and 5, so the same
+        shared, verified dtype set is enforced here too for a uniform
+        contract.
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     require_non_negative_int(top, "top")
     require_non_negative_int(bottom, "bottom")
     require_non_negative_int(left, "left")
@@ -496,9 +553,15 @@ def warp_affine(
         instead of raising, so this must be checked here rather than left
         to ``cv2.warpAffine``.
     TypeError
-        If `matrix` does not have dtype ``float32`` or ``float64``.
+        If `matrix` does not have dtype ``float32`` or ``float64``, or if
+        `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.warpAffine``
+        on both OpenCV 4 and 5; ``int8``/``int32``/``int64``/``float16``/
+        ``bool`` are not supported and otherwise reach a raw
+        ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     require_transform_matrix(matrix, (2, 3), "matrix")
     height, width = image.shape[:2]
     if output_size is not None:
@@ -550,9 +613,15 @@ def warp_perspective(
         instead of raising, so this must be checked here rather than left
         to ``cv2.warpPerspective``.
     TypeError
-        If `matrix` does not have dtype ``float32`` or ``float64``.
+        If `matrix` does not have dtype ``float32`` or ``float64``, or if
+        `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against
+        ``cv2.warpPerspective`` on both OpenCV 4 and 5;
+        ``int8``/``int32``/``int64``/``float16``/``bool`` are not
+        supported and otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _GEOMETRIC_DTYPES)
     require_transform_matrix(matrix, (3, 3), "matrix")
     height, width = image.shape[:2]
     if output_size is not None:

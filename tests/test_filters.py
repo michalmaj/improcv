@@ -94,6 +94,53 @@ def test_median_blur_rejects_even_kernel_size(make_image) -> None:
         im.median_blur(image, kernel_size=4)
 
 
+def test_median_blur_rejects_non_uint8_dtype_with_kernel_size_above_5() -> None:
+    # cv2.medianBlur raises a raw cv2.error for uint16 once kernel_size
+    # exceeds 5 — verified directly on Linux CI (OpenCV 4.9 and 4.13);
+    # a prior version of this test wrongly assumed kernel_size=7 was an
+    # exception based on macOS/arm64-only testing, where the same OpenCV
+    # version tolerates it. That tolerance is not portable, so it's not
+    # part of the documented contract.
+    image = np.zeros((10, 10), dtype=np.uint16)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.median_blur(image, kernel_size=7)  # type: ignore[arg-type]
+
+
+def test_median_blur_accepts_uint8_with_kernel_size_above_5() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    result = im.median_blur(image, kernel_size=9)
+
+    assert result.dtype == np.uint8
+
+
+def test_median_blur_rejects_two_channels_with_kernel_size_above_5() -> None:
+    # cv2.medianBlur's own assertion is `cn == 1 || cn == 3 || cn == 4`
+    # for kernel_size > 5 — 2 channels is not in that set, even though a
+    # macOS/arm64 build was observed to tolerate it (not portable, so not
+    # part of the documented contract; see test above).
+    image = np.zeros((10, 10, 2), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="1, 3, or 4 channels"):
+        im.median_blur(image, kernel_size=7)
+
+
+def test_median_blur_rejects_five_channels_with_kernel_size_above_5() -> None:
+    image = np.zeros((10, 10, 5), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="1, 3, or 4 channels"):
+        im.median_blur(image, kernel_size=7)
+
+
+def test_median_blur_accepts_four_channels_with_large_kernel_size() -> None:
+    image = np.zeros((10, 10, 4), dtype=np.uint8)
+
+    result = im.median_blur(image, kernel_size=9)
+
+    assert result.shape == image.shape
+
+
 def test_bilateral_filter_preserves_shape_and_dtype(make_image) -> None:
     image = make_image(10, 10, channels=3)
 

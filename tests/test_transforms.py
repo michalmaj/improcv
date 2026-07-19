@@ -58,6 +58,15 @@ def test_resize_rejects_1d_array() -> None:
         im.resize(image, width=5)
 
 
+def test_resize_rejects_int32_dtype() -> None:
+    # cv2.resize raises a raw cv2.error for int32 input — verified
+    # directly (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.resize(image, width=5)  # type: ignore[arg-type]
+
+
 def test_resize_computed_dimension_clamps_to_minimum_one_pixel() -> None:
     image = _make_image(1, 1000, channels=None)
 
@@ -159,6 +168,15 @@ def test_translate_rejects_1d_array() -> None:
         im.translate(image, x=1, y=1)
 
 
+def test_translate_rejects_int32_dtype() -> None:
+    # cv2.warpAffine raises a raw cv2.error for int32 input — verified
+    # directly (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.translate(image, x=1, y=1)  # type: ignore[arg-type]
+
+
 def test_translate_rejects_non_int_x_or_y() -> None:
     image = _make_image(10, 10)
 
@@ -229,6 +247,15 @@ def test_rotate_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.rotate(image, angle=10)
+
+
+def test_rotate_rejects_int32_dtype() -> None:
+    # cv2.warpAffine raises a raw cv2.error for int32 input — verified
+    # directly (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.rotate(image, angle=10)  # type: ignore[arg-type]
 
 
 def test_rotate_rejects_non_finite_angle() -> None:
@@ -353,6 +380,15 @@ def test_rotate_bound_rejects_1d_array() -> None:
         im.rotate_bound(image, angle=10)
 
 
+def test_rotate_bound_rejects_int32_dtype() -> None:
+    # cv2.warpAffine raises a raw cv2.error for int32 input — verified
+    # directly (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.rotate_bound(image, angle=10)  # type: ignore[arg-type]
+
+
 def test_rotate_bound_rejects_non_finite_angle() -> None:
     # Previously reached an accidental Python ValueError ("cannot convert
     # float NaN to integer") from math.ceil() deep in the canvas-size
@@ -424,6 +460,17 @@ def test_flip_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.flip(image, direction="horizontal")
+
+
+def test_flip_rejects_int64_dtype() -> None:
+    # cv2.flip does not raise for int64 -- it silently downcasts to
+    # int32, corrupting large values (a 5_000_000_000-valued pixel comes
+    # back as -705_032_704) -- verified directly (identical on OpenCV
+    # 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int64)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.flip(image, direction="horizontal")  # type: ignore[arg-type]
 
 
 def test_crop_extracts_expected_region() -> None:
@@ -575,6 +622,16 @@ def test_pad_rejects_1d_array() -> None:
         im.pad(image, top=1, bottom=1, left=1, right=1)
 
 
+def test_pad_rejects_int64_dtype() -> None:
+    # cv2.copyMakeBorder does not raise for int64 -- it silently
+    # downcasts to int32, corrupting large values -- verified directly
+    # (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int64)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.pad(image, top=1, bottom=1, left=1, right=1)  # type: ignore[arg-type]
+
+
 def test_warp_affine_applies_identity_matrix_unchanged() -> None:
     image = _make_image(10, 10, channels=None)
     matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
@@ -624,6 +681,16 @@ def test_warp_affine_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.warp_affine(image, matrix)
+
+
+def test_warp_affine_rejects_int32_dtype() -> None:
+    # cv2.warpAffine raises a raw cv2.error for int32 input — verified
+    # directly (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.warp_affine(image, matrix)  # type: ignore[arg-type]
 
 
 def test_warp_affine_rejects_non_positive_output_size() -> None:
@@ -700,6 +767,16 @@ def test_warp_perspective_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.warp_perspective(image, matrix)
+
+
+def test_warp_perspective_rejects_int32_dtype() -> None:
+    # cv2.warpPerspective raises a raw cv2.error for int32 input —
+    # verified directly (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+    matrix = np.eye(3, dtype=np.float32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.warp_perspective(image, matrix)  # type: ignore[arg-type]
 
 
 def test_warp_perspective_rejects_non_positive_output_size() -> None:

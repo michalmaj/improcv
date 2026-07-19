@@ -2,7 +2,16 @@
 
 try:
     import cv2 as _cv2  # noqa: F401
-except ImportError as _exc:
+except ModuleNotFoundError as _exc:
+    # Only a genuinely absent cv2 gets the friendly "install one of these
+    # extras" message. A present-but-broken installation (ABI mismatch, a
+    # missing shared library, a corrupted build) raises a plain
+    # ImportError instead of ModuleNotFoundError, or a ModuleNotFoundError
+    # for some *other* module cv2 itself failed to import — in either
+    # case, masking that with "you need to install OpenCV" would hide the
+    # real problem, so it's left to propagate unmodified.
+    if _exc.name != "cv2":
+        raise
     raise ImportError(
         "improcv requires an OpenCV installation, which is not installed automatically "
         "(to avoid conflicting with an OpenCV variant you may already have). Install "
