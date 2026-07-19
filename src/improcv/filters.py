@@ -96,40 +96,45 @@ def median_blur(image: Image, kernel_size: int) -> Image:
     Notes
     -----
     ``cv2.medianBlur``'s dtype and channel support both depend on
-    `kernel_size` (verified directly, identical on OpenCV 4 and 5):
+    `kernel_size`. Per OpenCV's own source-level assertion
+    (``src.depth() == CV_8U && (cn == 1 || cn == 3 || cn == 4)``), which a
+    prior version of this docstring understated based on single-platform
+    testing (a macOS/arm64 build tolerated ``uint16`` and 2-channel images
+    at `kernel_size` 7 that a Linux/x86_64 build of the same OpenCV
+    version rejects — this library targets Linux, Windows, and macOS, so
+    the stricter, documented contract is enforced everywhere regardless
+    of what one particular build happens to tolerate):
 
     - `kernel_size` of 3 or 5: any of ``uint8``, ``uint16``, ``int16``,
       ``float32``, with any number of channels.
-    - `kernel_size` of 7 or more: `image` must have at most 4 channels.
-    - `kernel_size` above 7 (9, 11, ...): `image` must additionally have
-      dtype ``uint8``.
+    - `kernel_size` above 5 (7, 9, 11, ...): `image` must have dtype
+      ``uint8`` and exactly 1, 3, or 4 channels.
 
     Raises
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, `kernel_size` is not a
-        positive odd integer, or `image` has more than 4 channels while
-        `kernel_size` is greater than 5.
+        positive odd integer, or `image` does not have 1, 3, or 4 channels
+        while `kernel_size` is greater than 5.
     TypeError
         If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
-        or ``float32``; or, when `kernel_size` is greater than 7, if
+        or ``float32``; or, when `kernel_size` is greater than 5, if
         `image` does not have dtype ``uint8`` specifically. Otherwise
         reaches a raw ``cv2.error``.
     """
     require_image_ndim(image)
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
-    if kernel_size > 7:
-        require_dtype(image, (np.uint8,))
-    else:
-        require_dtype(image, _MEDIAN_BLUR_DTYPES)
     if kernel_size > 5:
+        require_dtype(image, (np.uint8,))
         channels = 1 if image.ndim == 2 else image.shape[2]
-        if channels > 4:
+        if channels not in (1, 3, 4):
             raise ValueError(
-                f"image must have at most 4 channels when kernel_size > 5, "
+                f"image must have 1, 3, or 4 channels when kernel_size > 5, "
                 f"got {channels} channels with kernel_size={kernel_size}"
             )
+    else:
+        require_dtype(image, _MEDIAN_BLUR_DTYPES)
     return cv2.medianBlur(image, kernel_size)
 
 
