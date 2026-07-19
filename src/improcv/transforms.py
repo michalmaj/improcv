@@ -14,6 +14,7 @@ from improcv._validation import (
     require_int,
     require_non_negative_int,
     require_one_of,
+    require_point_2d,
     require_positive,
     require_positive_int,
     require_size_2d,
@@ -192,8 +193,8 @@ def rotate(
     ------
     ValueError
         If `image` does not have 2 or 3 dimensions, `angle` is not finite,
-        `scale` is not finite or not positive, or `center` is given but
-        either element is not finite.
+        `scale` is not finite or not positive, or `center` is given but is
+        not a 2-tuple of finite real numbers.
     """
     require_image_ndim(image)
     require_finite(angle, "angle")
@@ -205,8 +206,7 @@ def rotate(
         # and loses a full row/column on 90/180-degree rotations.
         center = ((width - 1) / 2, (height - 1) / 2)
     else:
-        require_finite(center[0], "center[0]")
-        require_finite(center[1], "center[1]")
+        require_point_2d(center, "center")
     matrix = cv2.getRotationMatrix2D(center, angle, scale)
     return cv2.warpAffine(
         image,

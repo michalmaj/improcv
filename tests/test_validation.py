@@ -11,6 +11,7 @@ from improcv._validation import (
     require_non_negative_int,
     require_odd,
     require_one_of,
+    require_point_2d,
     require_positive,
     require_positive_int,
     require_range,
@@ -337,3 +338,29 @@ def test_require_transform_matrix_rejects_non_finite_values() -> None:
 
     with pytest.raises(ValueError, match="finite"):
         require_transform_matrix(matrix, (2, 3), "matrix")
+
+
+def test_require_point_2d_accepts_valid_point() -> None:
+    require_point_2d((1.0, 2.0), "center")
+    require_point_2d((1, 2), "center")
+
+
+def test_require_point_2d_rejects_wrong_length() -> None:
+    with pytest.raises(ValueError, match="2-tuple"):
+        require_point_2d((1.0,), "center")
+    with pytest.raises(ValueError, match="2-tuple"):
+        require_point_2d((1.0, 2.0, 3.0), "center")
+
+
+def test_require_point_2d_rejects_non_finite_element() -> None:
+    with pytest.raises(ValueError, match=r"center\[0\]"):
+        require_point_2d((float("nan"), 2.0), "center")
+    with pytest.raises(ValueError, match=r"center\[1\]"):
+        require_point_2d((1.0, float("inf")), "center")
+
+
+def test_require_point_2d_rejects_non_numeric_element() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_point_2d(("a", 2.0), "center")
+    with pytest.raises(TypeError, match="real number"):
+        require_point_2d((1.0, True), "center")

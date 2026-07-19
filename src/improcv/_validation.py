@@ -125,6 +125,20 @@ def require_size_2d(value: object, name: str) -> None:
     require_positive_int(height, f"{name}[1]")
 
 
+def require_point_2d(value: object, name: str) -> None:
+    """Raise ValueError/TypeError unless `value` is a 2-tuple of finite real numbers.
+
+    For ``(x, y)``-style parameters (e.g. `rotate`'s `center`), where a
+    wrong-length tuple would otherwise reach an `IndexError` (too short)
+    or a raw `cv2.error`/`TypeError` deep inside OpenCV (too long).
+    """
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise ValueError(f"{name} must be a 2-tuple, got {value!r}")
+    x, y = value
+    require_finite(x, f"{name}[0]")
+    require_finite(y, f"{name}[1]")
+
+
 def require_one_of(value: object, allowed: Collection[object], name: str) -> None:
     """Raise ValueError unless `value` is one of `allowed`.
 
