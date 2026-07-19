@@ -93,21 +93,43 @@ def median_blur(image: Image, kernel_size: int) -> Image:
     np.ndarray
         A new, filtered array with the same shape and dtype as `image`.
 
+    Notes
+    -----
+    ``cv2.medianBlur``'s dtype and channel support both depend on
+    `kernel_size` (verified directly, identical on OpenCV 4 and 5):
+
+    - `kernel_size` of 3 or 5: any of ``uint8``, ``uint16``, ``int16``,
+      ``float32``, with any number of channels.
+    - `kernel_size` of 7 or more: `image` must have at most 4 channels.
+    - `kernel_size` above 7 (9, 11, ...): `image` must additionally have
+      dtype ``uint8``.
+
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `kernel_size` is not
-        a positive odd integer.
+        If `image` does not have 2 or 3 dimensions, `kernel_size` is not a
+        positive odd integer, or `image` has more than 4 channels while
+        `kernel_size` is greater than 5.
     TypeError
         If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
-        or ``float32`` (verified against ``cv2.medianBlur`` on both OpenCV
-        4 and 5; ``int32``/``int64``/``float64``/``bool`` are not
-        supported and otherwise reach a raw ``cv2.error``).
+        or ``float32``; or, when `kernel_size` is greater than 7, if
+        `image` does not have dtype ``uint8`` specifically. Otherwise
+        reaches a raw ``cv2.error``.
     """
     require_image_ndim(image)
-    require_dtype(image, _MEDIAN_BLUR_DTYPES)
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
+    if kernel_size > 7:
+        require_dtype(image, (np.uint8,))
+    else:
+        require_dtype(image, _MEDIAN_BLUR_DTYPES)
+    if kernel_size > 5:
+        channels = 1 if image.ndim == 2 else image.shape[2]
+        if channels > 4:
+            raise ValueError(
+                f"image must have at most 4 channels when kernel_size > 5, "
+                f"got {channels} channels with kernel_size={kernel_size}"
+            )
     return cv2.medianBlur(image, kernel_size)
 
 

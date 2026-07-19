@@ -94,6 +94,52 @@ def test_median_blur_rejects_even_kernel_size(make_image) -> None:
         im.median_blur(image, kernel_size=4)
 
 
+def test_median_blur_accepts_uint16_with_kernel_size_7() -> None:
+    # cv2.medianBlur accepts uint16 at kernel_size=7 (verified directly on
+    # both OpenCV 4.13 and 5.0) — only kernel_size > 7 restricts to uint8.
+    image = np.zeros((10, 10), dtype=np.uint16)
+
+    result = im.median_blur(image, kernel_size=7)
+
+    assert result.dtype == np.uint16
+
+
+def test_median_blur_rejects_non_uint8_dtype_with_kernel_size_above_7() -> None:
+    # cv2.medianBlur raises a raw cv2.error for uint16 at kernel_size=9 —
+    # verified directly (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.uint16)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.median_blur(image, kernel_size=9)  # type: ignore[arg-type]
+
+
+def test_median_blur_accepts_uint8_with_kernel_size_above_7() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    result = im.median_blur(image, kernel_size=9)
+
+    assert result.dtype == np.uint8
+
+
+def test_median_blur_rejects_five_channels_with_kernel_size_above_5() -> None:
+    # cv2.medianBlur raises a raw cv2.error for a 5-channel image once
+    # kernel_size exceeds 5, regardless of dtype — verified directly
+    # (identical on OpenCV 4.13 and 5.0); channel counts 1-4 all work at
+    # any kernel_size.
+    image = np.zeros((10, 10, 5), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="4 channels"):
+        im.median_blur(image, kernel_size=7)
+
+
+def test_median_blur_accepts_up_to_four_channels_with_large_kernel_size() -> None:
+    image = np.zeros((10, 10, 4), dtype=np.uint8)
+
+    result = im.median_blur(image, kernel_size=9)
+
+    assert result.shape == image.shape
+
+
 def test_bilateral_filter_preserves_shape_and_dtype(make_image) -> None:
     image = make_image(10, 10, channels=3)
 
