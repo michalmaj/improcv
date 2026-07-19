@@ -58,7 +58,7 @@ provides-extras = ["cv", "cv-headless", "cv-contrib", "cv-contrib-headless"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "opencv-python-headless", specifier = ">=4.9" },
+    { name = "opencv-python-headless", specifier = ">=4.9,<6" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.15" },
