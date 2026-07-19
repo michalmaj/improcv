@@ -39,6 +39,43 @@ def test_in_range_rejects_wrong_length_for_grayscale_image() -> None:
         im.in_range(image, lower=(0, 0), upper=(255, 255))
 
 
+def test_in_range_rejects_non_finite_bound() -> None:
+    # cv2.inRange raises a raw, low-level cv2.error for NaN bounds
+    # (a dtype-mismatch assertion inside inRange) — verified directly.
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.in_range(image, lower=(float("nan"),), upper=(255,))
+    with pytest.raises(ValueError, match="finite"):
+        im.in_range(image, lower=(0,), upper=(float("inf"),))
+
+
+def test_in_range_rejects_string_bound() -> None:
+    # cv2.inRange raises a raw cv2.error ("data type = <U1 is not
+    # supported") for a string bound — verified directly.
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="real number"):
+        im.in_range(image, lower=("0",), upper=(255,))  # type: ignore[arg-type]
+
+
+def test_in_range_rejects_bool_bound() -> None:
+    # cv2.inRange silently accepts a bool bound, reinterpreting it as 1/0
+    # instead of raising — verified directly.
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="real number"):
+        im.in_range(image, lower=(True,), upper=(255,))  # type: ignore[arg-type]
+
+
+def test_in_range_accepts_fractional_bounds_for_float32_image() -> None:
+    image = np.array([[0.5, 1.5, 2.5]], dtype=np.float32)
+
+    result = im.in_range(image, lower=(1.0,), upper=(2.0,))
+
+    np.testing.assert_array_equal(result, np.array([[0, 255, 0]], dtype=np.uint8))
+
+
 def test_invert_flips_pixel_values() -> None:
     image = np.array([[0, 100, 255]], dtype=np.uint8)
 
