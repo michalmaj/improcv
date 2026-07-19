@@ -15,10 +15,10 @@ except ModuleNotFoundError as _exc:
     raise ImportError(
         "improcv requires an OpenCV installation, which is not installed automatically "
         "(to avoid conflicting with an OpenCV variant you may already have). Install "
-        "exactly one of: `pip install improcv[cv]` (opencv-python), "
-        "`pip install improcv[cv-headless]` (opencv-python-headless), "
-        "`pip install improcv[cv-contrib]` (opencv-contrib-python), or "
-        "`pip install improcv[cv-contrib-headless]` (opencv-contrib-python-headless) — "
+        'exactly one of: `pip install "improcv[cv]"` (opencv-python), '
+        '`pip install "improcv[cv-headless]"` (opencv-python-headless), '
+        '`pip install "improcv[cv-contrib]"` (opencv-contrib-python), or '
+        '`pip install "improcv[cv-contrib-headless]"` (opencv-contrib-python-headless) — '
         "or install one of the four `opencv-*` packages yourself."
     ) from _exc
 

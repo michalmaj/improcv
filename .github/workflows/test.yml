@@ -92,10 +92,13 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
+      - name: Check package metadata and description rendering
+        run: uvx twine check dist/*
+
       - name: Install the built wheel into a clean environment
         run: |
           python -m venv /tmp/smoke-env
-          /tmp/smoke-env/bin/pip install dist/*.whl opencv-python-headless
+          /tmp/smoke-env/bin/pip install dist/*.whl "opencv-python-headless>=4.9,<6"
 
       - name: Smoke-test the installed wheel (not the source tree)
         run: |

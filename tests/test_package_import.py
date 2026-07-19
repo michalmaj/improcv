@@ -15,7 +15,7 @@ def test_missing_cv2_raises_friendly_error() -> None:
     )
 
     assert result.returncode != 0
-    assert "pip install improcv[cv]" in result.stderr
+    assert 'pip install "improcv[cv]"' in result.stderr
     last_line = result.stderr.strip().splitlines()[-1]
     assert last_line.startswith("ImportError:"), f"unexpected final line: {last_line!r}"
 
