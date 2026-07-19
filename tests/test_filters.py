@@ -44,6 +44,31 @@ def test_gaussian_blur_rejects_1d_array() -> None:
         im.gaussian_blur(image, kernel_size=3)
 
 
+def test_gaussian_blur_accepts_zero_sigma(make_image) -> None:
+    # sigma=0.0 is the documented default meaning "derive from kernel_size".
+    image = make_image(10, 10, channels=None)
+
+    result = im.gaussian_blur(image, kernel_size=3, sigma=0.0)
+
+    assert result.shape == image.shape
+
+
+def test_gaussian_blur_rejects_negative_sigma(make_image) -> None:
+    image = make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.gaussian_blur(image, kernel_size=3, sigma=-1.0)
+
+
+def test_gaussian_blur_rejects_non_finite_sigma(make_image) -> None:
+    image = make_image(10, 10, channels=None)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.gaussian_blur(image, kernel_size=3, sigma=float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        im.gaussian_blur(image, kernel_size=3, sigma=float("inf"))
+
+
 def test_median_blur_removes_salt_and_pepper_outlier() -> None:
     image = np.full((11, 11), 100, dtype=np.uint8)
     image[5, 5] = 255

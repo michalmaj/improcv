@@ -10,6 +10,7 @@ import numpy as np
 from improcv._validation import (
     require_dtype,
     require_image_ndim,
+    require_non_negative,
     require_odd,
     require_positive,
     require_positive_int,
@@ -38,6 +39,7 @@ def gaussian_blur(image: Image, kernel_size: int, sigma: float = 0.0) -> Image:
         Kernel width and height; must be a positive odd integer.
     sigma : float, default 0.0
         Gaussian standard deviation; ``0.0`` derives it from `kernel_size`.
+        Must be finite and non-negative.
 
     Returns
     -------
@@ -47,12 +49,13 @@ def gaussian_blur(image: Image, kernel_size: int, sigma: float = 0.0) -> Image:
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `kernel_size` is not
-        a positive odd integer.
+        If `image` does not have 2 or 3 dimensions, `kernel_size` is not a
+        positive odd integer, or `sigma` is not finite or is negative.
     """
     require_image_ndim(image)
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
+    require_non_negative(sigma, "sigma")
     return cv2.GaussianBlur(image, (kernel_size, kernel_size), sigma)
 
 
@@ -93,9 +96,11 @@ def bilateral_filter(image: Image, diameter: int, sigma_color: float, sigma_spac
     diameter : int
         Diameter of the pixel neighborhood; must be positive.
     sigma_color : float
-        Filter sigma in color space — larger values mix more distant colors.
+        Filter sigma in color space — larger values mix more distant
+        colors. Must be finite and non-negative.
     sigma_space : float
-        Filter sigma in coordinate space — larger values mix more distant pixels.
+        Filter sigma in coordinate space — larger values mix more distant
+        pixels. Must be finite and non-negative.
 
     Returns
     -------
@@ -105,12 +110,16 @@ def bilateral_filter(image: Image, diameter: int, sigma_color: float, sigma_spac
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `diameter` is not positive.
+        If `image` does not have 2 or 3 dimensions, `diameter` is not
+        positive, or `sigma_color`/`sigma_space` is not finite or is
+        negative.
     TypeError
         If `diameter` is not an ``int``.
     """
     require_image_ndim(image)
     require_positive_int(diameter, "diameter")
+    require_non_negative(sigma_color, "sigma_color")
+    require_non_negative(sigma_space, "sigma_space")
     return cv2.bilateralFilter(image, diameter, sigma_color, sigma_space)
 
 
