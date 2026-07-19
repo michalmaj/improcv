@@ -69,6 +69,16 @@ def test_adjust_brightness_increases_pixel_values() -> None:
     assert result[0, 0] == 150
 
 
+def test_adjust_brightness_rounds_fractional_delta_symmetrically() -> None:
+    # Truncating instead of rounding was asymmetric: +0.9 was truncated
+    # away to no change (100 -> 100) while -0.9 kept its full effect
+    # (100 -> 99), because astype(uint8) always truncates toward zero.
+    image = np.full((5, 5), 100, dtype=np.uint8)
+
+    assert im.adjust_brightness(image, delta=0.9)[0, 0] == 101
+    assert im.adjust_brightness(image, delta=-0.9)[0, 0] == 99
+
+
 def test_adjust_brightness_clamps_to_255() -> None:
     image = np.full((5, 5), 240, dtype=np.uint8)
 
@@ -125,6 +135,16 @@ def test_adjust_contrast_expands_values_away_from_midpoint() -> None:
 
     assert result[0, 0] == 255  # (200-128)*2+128 = 272 -> clamps to 255
     assert result[0, 1] == 72  # (100-128)*2+128 = 72
+
+
+def test_adjust_contrast_rounds_fractional_result_instead_of_truncating() -> None:
+    # (138-128)*1.09+128 = 138.9 -> should round to 139, not truncate to 138.
+    image_a = np.full((5, 5), 138, dtype=np.uint8)
+    assert im.adjust_contrast(image_a, factor=1.09)[0, 0] == 139
+
+    # (118-128)*0.91+128 = 118.9 -> should round to 119, not truncate to 118.
+    image_b = np.full((5, 5), 118, dtype=np.uint8)
+    assert im.adjust_contrast(image_b, factor=0.91)[0, 0] == 119
 
 
 def test_adjust_contrast_preserves_midpoint() -> None:

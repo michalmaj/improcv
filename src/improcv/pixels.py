@@ -97,7 +97,12 @@ def adjust_brightness(image: ImageU8, delta: float) -> ImageU8:
     `delta` that would push a pixel below 0 clamps to 0, it does not wrap
     or reflect back to a positive value (unlike a naive
     ``cv2.convertScaleAbs`` call, whose ``beta`` argument takes the
-    absolute value of the result rather than clamping it).
+    absolute value of the result rather than clamping it). A fractional
+    `delta` is rounded to the nearest integer, not truncated — truncating
+    a positive float towards zero always rounds *down*, which loses up
+    to a full unit of intended effect for a positive `delta` while a
+    negative `delta` keeps almost all of its effect, an asymmetry with no
+    principled justification.
 
     Restricted to ``uint8`` input: a float image would be truncated to
     integers before `delta` is even applied, silently destroying
@@ -113,7 +118,7 @@ def adjust_brightness(image: ImageU8, delta: float) -> ImageU8:
     require_image_ndim(image)
     require_dtype(image, (np.uint8,))
     require_finite(delta, "delta")
-    return np.clip(image.astype(np.int32) + delta, 0, 255).astype(np.uint8)
+    return np.clip(np.round(image.astype(np.float64) + delta), 0, 255).astype(np.uint8)
 
 
 def adjust_contrast(image: ImageU8, factor: float) -> ImageU8:
@@ -124,6 +129,9 @@ def adjust_contrast(image: ImageU8, factor: float) -> ImageU8:
     below 128 move further down, matching how "contrast" is defined in
     standard image editors. Scaling around 0 would conflate contrast with
     brightness (every pixel would move in the same direction).
+
+    The scaled result is rounded to the nearest integer, not truncated —
+    see `adjust_brightness` for why truncation is asymmetric here.
 
     Restricted to ``uint8`` input, for the same reason as `adjust_brightness`.
 
@@ -137,7 +145,8 @@ def adjust_contrast(image: ImageU8, factor: float) -> ImageU8:
     require_image_ndim(image)
     require_dtype(image, (np.uint8,))
     require_non_negative(factor, "factor")
-    return np.clip((image.astype(np.float64) - 128.0) * factor + 128.0, 0, 255).astype(np.uint8)
+    scaled = (image.astype(np.float64) - 128.0) * factor + 128.0
+    return np.clip(np.round(scaled), 0, 255).astype(np.uint8)
 
 
 _ALPHA_BLEND_DTYPES = (np.uint8, np.uint16, np.int32, np.float32, np.float64)
