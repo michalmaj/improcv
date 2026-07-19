@@ -213,6 +213,26 @@ def require_range(value: object, low: float, high: float, name: str) -> None:
         raise ValueError(f"{name} must be between {low} and {high}, got {value}")
 
 
+def require_fits_dtype(value: object, dtype: np.dtype | type, name: str) -> None:
+    """Raise ValueError unless `value` fits within `dtype`'s representable range.
+
+    For parameters like `threshold`'s `max_value` that OpenCV silently
+    saturates rather than rejects when out of range for the image's
+    integer dtype (e.g. ``300`` silently becomes ``255`` for a ``uint8``
+    image) — verified directly against ``cv2.threshold``. Floating-point
+    dtypes have no meaningful bound here and are skipped.
+    """
+    require_real_number(value, name)
+    assert isinstance(value, numbers.Real)  # narrows for the type checker
+    if np.issubdtype(dtype, np.integer):
+        info = np.iinfo(dtype)
+        if not info.min <= float(value) <= info.max:
+            raise ValueError(
+                f"{name} must fit within the range of {np.dtype(dtype).name} "
+                f"([{info.min}, {info.max}]), got {value}"
+            )
+
+
 def require_same_shape_and_dtype(
     image_a: np.ndarray, image_b: np.ndarray, name_a: str = "image_a", name_b: str = "image_b"
 ) -> None:

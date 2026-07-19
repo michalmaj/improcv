@@ -101,6 +101,28 @@ def test_laplacian_edge_rejects_kernel_size_above_31() -> None:
         im.laplacian_edge(image, kernel_size=33)
 
 
+def test_laplacian_edge_rejects_float32_dtype() -> None:
+    # cv2.Laplacian always requests a float64 destination here, and OpenCV
+    # rejects the float32-source/float64-dest combination specifically —
+    # verified directly against cv2 (identical on OpenCV 4.13 and 5.0),
+    # even though float32 works for every other function in this module.
+    image = np.zeros((20, 20), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.laplacian_edge(image)  # type: ignore[arg-type]
+
+
+def test_sobel_edge_accepts_float32_dtype() -> None:
+    # Unlike laplacian_edge, cv2.Sobel accepts float32 source with a
+    # float64 destination — verified directly against cv2.
+    image = np.zeros((20, 20), dtype=np.float32)
+    image[:, 10:] = 1.0
+
+    result = im.sobel_edge(image)
+
+    assert result.shape == image.shape
+
+
 def test_harris_corner_detects_corner_of_square() -> None:
     image = np.zeros((30, 30), dtype=np.uint8)
     image[10:20, 10:20] = 255

@@ -5,6 +5,7 @@ from improcv._validation import (
     require_channels,
     require_dtype,
     require_finite,
+    require_fits_dtype,
     require_image_ndim,
     require_int,
     require_non_negative,
@@ -227,6 +228,29 @@ def test_require_same_shape_and_dtype_rejects_mismatched_dtype() -> None:
         require_same_shape_and_dtype(
             np.zeros((4, 4), dtype=np.uint8), np.zeros((4, 4), dtype=np.float32)
         )
+
+
+def test_require_fits_dtype_accepts_value_within_range() -> None:
+    require_fits_dtype(255, np.uint8, "max_value")
+
+
+def test_require_fits_dtype_rejects_value_exceeding_dtype_max() -> None:
+    with pytest.raises(ValueError, match="max_value"):
+        require_fits_dtype(300, np.uint8, "max_value")
+
+
+def test_require_fits_dtype_rejects_value_below_dtype_min() -> None:
+    with pytest.raises(ValueError, match="max_value"):
+        require_fits_dtype(-1, np.uint8, "max_value")
+
+
+def test_require_fits_dtype_skips_bound_check_for_float_dtype() -> None:
+    require_fits_dtype(1e10, np.float32, "max_value")
+
+
+def test_require_fits_dtype_rejects_non_real_value() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_fits_dtype("300", np.uint8, "max_value")  # type: ignore[arg-type]
 
 
 def test_require_one_of_accepts_allowed_value() -> None:

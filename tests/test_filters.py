@@ -69,6 +69,15 @@ def test_gaussian_blur_rejects_non_finite_sigma(make_image) -> None:
         im.gaussian_blur(image, kernel_size=3, sigma=float("inf"))
 
 
+def test_gaussian_blur_rejects_int32_dtype() -> None:
+    # cv2.GaussianBlur raises a raw cv2.error for int32 input — verified
+    # directly against cv2 (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.gaussian_blur(image, kernel_size=3)  # type: ignore[arg-type]
+
+
 def test_median_blur_removes_salt_and_pepper_outlier() -> None:
     image = np.full((11, 11), 100, dtype=np.uint8)
     image[5, 5] = 255
@@ -113,6 +122,16 @@ def test_bilateral_filter_rejects_1d_array() -> None:
 
     with pytest.raises(ValueError, match="2 or 3 dimensions"):
         im.bilateral_filter(image, diameter=5, sigma_color=75.0, sigma_space=75.0)
+
+
+def test_bilateral_filter_rejects_uint16_dtype() -> None:
+    # cv2.bilateralFilter raises a raw cv2.error for uint16 input — only
+    # uint8 and float32 are supported, verified directly against cv2
+    # (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.uint16)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.bilateral_filter(image, diameter=5, sigma_color=75.0, sigma_space=75.0)  # type: ignore[arg-type]
 
 
 def test_clahe_preserves_shape_and_dtype(make_image) -> None:

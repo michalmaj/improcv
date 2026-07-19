@@ -85,6 +85,25 @@ def test_threshold_adaptive_rejects_non_uint8_dtype() -> None:
         im.threshold(image, method="adaptive_mean")
 
 
+def test_threshold_binary_rejects_int32_dtype() -> None:
+    # cv2.threshold raises a raw cv2.error for int32 input — verified
+    # directly against cv2 (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((10, 10), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.threshold(image, method="binary")  # type: ignore[arg-type]
+
+
+def test_threshold_binary_rejects_max_value_exceeding_dtype_range() -> None:
+    # cv2.threshold silently saturates an out-of-range max_value to 255
+    # for a uint8 image instead of raising — verified directly against
+    # cv2 with a foreground pixel of value 200.
+    image = np.full((10, 10), 200, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="max_value"):
+        im.threshold(image, value=100, max_value=300, method="binary")
+
+
 def test_threshold_binary_does_not_follow_mask_convention() -> None:
     # threshold is deliberately not one of the uint8-{0,255}-mask functions
     # (in_range/auto_canny/harris_corner): "binary" mode preserves dtype
@@ -130,6 +149,15 @@ def test_dilate_rejects_negative_iterations() -> None:
 
     with pytest.raises(ValueError, match="non-negative"):
         im.dilate(image, kernel_size=3, iterations=-1)
+
+
+def test_dilate_rejects_int64_dtype() -> None:
+    # cv2.dilate raises a raw cv2.error for int64 input — verified
+    # directly against cv2 (identical on OpenCV 4.13 and 5.0).
+    image = np.zeros((11, 11), dtype=np.int64)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.dilate(image)  # type: ignore[arg-type]
 
 
 def test_erode_shrinks_bright_region() -> None:
