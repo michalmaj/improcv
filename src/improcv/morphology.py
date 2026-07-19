@@ -98,13 +98,16 @@ def threshold(
         directly), or `block_size` is not an odd integer greater than 1
         (adaptive methods only).
     TypeError
-        If `method` is ``"otsu"`` or one of the ``adaptive_*`` methods and
-        `image` does not have dtype ``uint8`` (OpenCV requires 8-bit input
-        for those); or if `method` is ``"binary"`` and `image` does not
-        have dtype ``uint8``, ``uint16``, ``int16``, ``float32``, or
-        ``float64`` (verified against ``cv2.threshold`` on both OpenCV 4
-        and 5; ``int32``/``int64``/``bool`` are not supported and
-        otherwise reach a raw ``cv2.error``).
+        If `method` is one of the ``adaptive_*`` methods and `image` does
+        not have dtype ``uint8`` (OpenCV requires 8-bit input for those);
+        if `method` is ``"otsu"`` and `image` does not have dtype
+        ``uint8`` or ``uint16`` (verified against ``cv2.threshold`` with
+        ``THRESH_OTSU`` on both OpenCV 4 and 5); or if `method` is
+        ``"binary"`` and `image` does not have dtype ``uint8``,
+        ``uint16``, ``int16``, ``float32``, or ``float64`` (verified
+        against ``cv2.threshold`` on both OpenCV 4 and 5;
+        ``int32``/``int64``/``bool`` are not supported and otherwise
+        reach a raw ``cv2.error``).
     """
     require_image_ndim(image, ndims=(2,))
     require_one_of(method, _THRESHOLD_METHODS, "method")
@@ -117,7 +120,7 @@ def threshold(
         _, result = cv2.threshold(image, value, max_value, cv2.THRESH_BINARY)
         return result
     if method == "otsu":
-        require_dtype(image, (np.uint8,))
+        require_dtype(image, (np.uint8, np.uint16))
         require_fits_dtype(max_value, image.dtype, "max_value")
         _, result = cv2.threshold(image, 0, max_value, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return result
