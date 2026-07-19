@@ -34,8 +34,9 @@ resized = im.resize(image, width=640)
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor
-releases. See [CHANGELOG.md](CHANGELOG.md) for what's been added so far.
+releases. See [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for
+what's been added so far.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/michalmaj/improcv/blob/main/LICENSE).

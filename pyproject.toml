@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Image Processing",
     "Typing :: Typed",
 ]
@@ -33,10 +34,10 @@ dependencies = ["numpy>=1.24"]
 #   pip install improcv[cv-contrib-headless] # opencv-contrib-python-headless
 # or install one of the four `opencv-*` packages yourself.
 [project.optional-dependencies]
-cv = ["opencv-python>=4.9"]
-cv-headless = ["opencv-python-headless>=4.9"]
-cv-contrib = ["opencv-contrib-python>=4.9"]
-cv-contrib-headless = ["opencv-contrib-python-headless>=4.9"]
+cv = ["opencv-python>=4.9,<6"]
+cv-headless = ["opencv-python-headless>=4.9,<6"]
+cv-contrib = ["opencv-contrib-python>=4.9,<6"]
+cv-contrib-headless = ["opencv-contrib-python-headless>=4.9,<6"]
 
 [project.urls]
 Homepage = "https://github.com/michalmaj/improcv"
