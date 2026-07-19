@@ -10,6 +10,7 @@ import numpy as np
 from improcv._validation import (
     require_dtype,
     require_finite,
+    require_fits_dtype,
     require_image_ndim,
     require_non_negative_int,
     require_odd,
@@ -36,6 +37,13 @@ _THRESHOLD_METHODS: tuple[ThresholdMethod, ...] = (
     "adaptive_mean",
     "adaptive_gaussian",
 )
+
+# Verified directly against cv2.threshold (THRESH_BINARY) and the
+# structural/morphological ops (cv2.dilate/erode/morphologyEx) on OpenCV
+# 4.13 and 5.0 (identical results on both): int32, int64, and bool reach a
+# raw cv2.error.
+_THRESHOLD_BINARY_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
+_MORPHOLOGY_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
 
 
 def threshold(
@@ -84,13 +92,19 @@ def threshold(
     ValueError
         If `image` does not have exactly 2 dimensions, `method` is not one
         of the accepted values, `value`/`max_value`/`constant` is not
-        finite, or `block_size` is not an odd integer greater than 1
+        finite, `max_value` does not fit within `image`'s integer dtype
+        range (e.g. ``300`` for a ``uint8`` image — OpenCV silently
+        saturates this to ``255`` rather than rejecting it, verified
+        directly), or `block_size` is not an odd integer greater than 1
         (adaptive methods only).
     TypeError
         If `method` is ``"otsu"`` or one of the ``adaptive_*`` methods and
         `image` does not have dtype ``uint8`` (OpenCV requires 8-bit input
-        for those; plain ``"binary"`` thresholding has no such
-        restriction and accepts other dtypes, e.g. ``float32``).
+        for those); or if `method` is ``"binary"`` and `image` does not
+        have dtype ``uint8``, ``uint16``, ``int16``, ``float32``, or
+        ``float64`` (verified against ``cv2.threshold`` on both OpenCV 4
+        and 5; ``int32``/``int64``/``bool`` are not supported and
+        otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image, ndims=(2,))
     require_one_of(method, _THRESHOLD_METHODS, "method")
@@ -98,14 +112,18 @@ def threshold(
     require_finite(max_value, "max_value")
     require_finite(constant, "constant")
     if method == "binary":
+        require_dtype(image, _THRESHOLD_BINARY_DTYPES)
+        require_fits_dtype(max_value, image.dtype, "max_value")
         _, result = cv2.threshold(image, value, max_value, cv2.THRESH_BINARY)
         return result
     if method == "otsu":
         require_dtype(image, (np.uint8,))
+        require_fits_dtype(max_value, image.dtype, "max_value")
         _, result = cv2.threshold(image, 0, max_value, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return result
 
     require_dtype(image, (np.uint8,))
+    require_fits_dtype(max_value, image.dtype, "max_value")
     require_positive_int(block_size, "block_size")
     require_odd(block_size, "block_size")
     if block_size == 1:
@@ -128,8 +146,17 @@ def dilate(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
 
     `iterations` may be ``0`` (a meaningful no-op, returns `image`
     unchanged) but not negative.
+
+    Raises
+    ------
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.dilate`` on
+        both OpenCV 4 and 5; ``int32``/``int64``/``bool`` are not
+        supported and otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _MORPHOLOGY_DTYPES)
     require_non_negative_int(iterations, "iterations")
     return cv2.dilate(image, _kernel(kernel_size), iterations=iterations)
 
@@ -139,37 +166,101 @@ def erode(image: Image, kernel_size: int = 3, iterations: int = 1) -> Image:
 
     `iterations` may be ``0`` (a meaningful no-op, returns `image`
     unchanged) but not negative.
+
+    Raises
+    ------
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.erode`` on
+        both OpenCV 4 and 5; ``int32``/``int64``/``bool`` are not
+        supported and otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _MORPHOLOGY_DTYPES)
     require_non_negative_int(iterations, "iterations")
     return cv2.erode(image, _kernel(kernel_size), iterations=iterations)
 
 
 def morph_open(image: Image, kernel_size: int = 3) -> Image:
-    """Erosion followed by dilation — removes small bright noise."""
+    """Erosion followed by dilation — removes small bright noise.
+
+    Raises
+    ------
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against
+        ``cv2.morphologyEx`` on both OpenCV 4 and 5;
+        ``int32``/``int64``/``bool`` are not supported and otherwise
+        reach a raw ``cv2.error``).
+    """
     require_image_ndim(image)
+    require_dtype(image, _MORPHOLOGY_DTYPES)
     return cv2.morphologyEx(image, cv2.MORPH_OPEN, _kernel(kernel_size))
 
 
 def morph_close(image: Image, kernel_size: int = 3) -> Image:
-    """Dilation followed by erosion — closes small dark holes."""
+    """Dilation followed by erosion — closes small dark holes.
+
+    Raises
+    ------
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against
+        ``cv2.morphologyEx`` on both OpenCV 4 and 5;
+        ``int32``/``int64``/``bool`` are not supported and otherwise
+        reach a raw ``cv2.error``).
+    """
     require_image_ndim(image)
+    require_dtype(image, _MORPHOLOGY_DTYPES)
     return cv2.morphologyEx(image, cv2.MORPH_CLOSE, _kernel(kernel_size))
 
 
 def morph_gradient(image: Image, kernel_size: int = 3) -> Image:
-    """Difference between dilation and erosion — outlines regions."""
+    """Difference between dilation and erosion — outlines regions.
+
+    Raises
+    ------
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against
+        ``cv2.morphologyEx`` on both OpenCV 4 and 5;
+        ``int32``/``int64``/``bool`` are not supported and otherwise
+        reach a raw ``cv2.error``).
+    """
     require_image_ndim(image)
+    require_dtype(image, _MORPHOLOGY_DTYPES)
     return cv2.morphologyEx(image, cv2.MORPH_GRADIENT, _kernel(kernel_size))
 
 
 def tophat(image: Image, kernel_size: int = 9) -> Image:
-    """Difference between the image and its opening — highlights small bright details."""
+    """Difference between the image and its opening — highlights small bright details.
+
+    Raises
+    ------
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against
+        ``cv2.morphologyEx`` on both OpenCV 4 and 5;
+        ``int32``/``int64``/``bool`` are not supported and otherwise
+        reach a raw ``cv2.error``).
+    """
     require_image_ndim(image)
+    require_dtype(image, _MORPHOLOGY_DTYPES)
     return cv2.morphologyEx(image, cv2.MORPH_TOPHAT, _kernel(kernel_size))
 
 
 def blackhat(image: Image, kernel_size: int = 9) -> Image:
-    """Difference between the image's closing and itself — highlights small dark details."""
+    """Difference between the image's closing and itself — highlights small dark details.
+
+    Raises
+    ------
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against
+        ``cv2.morphologyEx`` on both OpenCV 4 and 5;
+        ``int32``/``int64``/``bool`` are not supported and otherwise
+        reach a raw ``cv2.error``).
+    """
     require_image_ndim(image)
+    require_dtype(image, _MORPHOLOGY_DTYPES)
     return cv2.morphologyEx(image, cv2.MORPH_BLACKHAT, _kernel(kernel_size))

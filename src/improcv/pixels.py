@@ -29,21 +29,23 @@ __all__ = [
 ]
 
 
-def in_range(image: Image, lower: tuple[int, ...], upper: tuple[int, ...]) -> Mask:
+def in_range(image: Image, lower: tuple[float, ...], upper: tuple[float, ...]) -> Mask:
     """Return a mask of pixels within `[lower, upper]` (inclusive, per channel).
 
     Parameters
     ----------
     image : np.ndarray
         Input image with shape ``(H, W)`` or ``(H, W, C)``.
-    lower, upper : tuple of int
+    lower, upper : tuple of float
         Inclusive per-channel bounds; each must have exactly one element
         per channel of `image` (1 for a grayscale image, `C` for an
         ``(H, W, C)`` image). A shorter "scalar" bound is deliberately not
         supported: ``cv2.inRange`` does not broadcast it the way one might
         expect (verified directly — it does not simply apply the same
         bound to every channel), so allowing it here would be a silent
-        correctness trap rather than a convenience.
+        correctness trap rather than a convenience. Each element must be a
+        finite real number — a fractional bound is meaningful for a
+        ``float32`` image.
 
     Returns
     -------
@@ -56,8 +58,14 @@ def in_range(image: Image, lower: tuple[int, ...], upper: tuple[int, ...]) -> Ma
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `lower`/`upper`
-        does not have exactly one element per channel of `image`.
+        If `image` does not have 2 or 3 dimensions, `lower`/`upper` does
+        not have exactly one element per channel of `image`, or any
+        element of `lower`/`upper` is not finite.
+    TypeError
+        If any element of `lower`/`upper` is not a real number (rejects
+        ``bool`` and ``str`` — both otherwise reach ``cv2.inRange``
+        directly: a ``bool`` element is silently reinterpreted as ``1``/
+        ``0`` and a ``str`` element reaches a raw ``cv2.error``).
     """
     require_image_ndim(image)
     channels = 1 if image.ndim == 2 else image.shape[2]
@@ -66,6 +74,10 @@ def in_range(image: Image, lower: tuple[int, ...], upper: tuple[int, ...]) -> Ma
             f"lower and upper must each have {channels} element(s) matching "
             f"image's channel count, got {len(lower)} and {len(upper)}"
         )
+    for i, bound in enumerate(lower):
+        require_finite(bound, f"lower[{i}]")
+    for i, bound in enumerate(upper):
+        require_finite(bound, f"upper[{i}]")
     # cv2.inRange always produces uint8 {0, 255}; cv2's stubs don't say so.
     return cast(Mask, cv2.inRange(image, np.array(lower), np.array(upper)))
 
@@ -97,7 +109,12 @@ def adjust_brightness(image: ImageU8, delta: float) -> ImageU8:
     `delta` that would push a pixel below 0 clamps to 0, it does not wrap
     or reflect back to a positive value (unlike a naive
     ``cv2.convertScaleAbs`` call, whose ``beta`` argument takes the
-    absolute value of the result rather than clamping it).
+    absolute value of the result rather than clamping it). A fractional
+    `delta` is rounded to the nearest integer, not truncated — truncating
+    a positive float towards zero always rounds *down*, which loses up
+    to a full unit of intended effect for a positive `delta` while a
+    negative `delta` keeps almost all of its effect, an asymmetry with no
+    principled justification.
 
     Restricted to ``uint8`` input: a float image would be truncated to
     integers before `delta` is even applied, silently destroying
@@ -113,7 +130,7 @@ def adjust_brightness(image: ImageU8, delta: float) -> ImageU8:
     require_image_ndim(image)
     require_dtype(image, (np.uint8,))
     require_finite(delta, "delta")
-    return np.clip(image.astype(np.int32) + delta, 0, 255).astype(np.uint8)
+    return np.clip(np.round(image.astype(np.float64) + delta), 0, 255).astype(np.uint8)
 
 
 def adjust_contrast(image: ImageU8, factor: float) -> ImageU8:
@@ -124,6 +141,9 @@ def adjust_contrast(image: ImageU8, factor: float) -> ImageU8:
     below 128 move further down, matching how "contrast" is defined in
     standard image editors. Scaling around 0 would conflate contrast with
     brightness (every pixel would move in the same direction).
+
+    The scaled result is rounded to the nearest integer, not truncated —
+    see `adjust_brightness` for why truncation is asymmetric here.
 
     Restricted to ``uint8`` input, for the same reason as `adjust_brightness`.
 
@@ -137,7 +157,8 @@ def adjust_contrast(image: ImageU8, factor: float) -> ImageU8:
     require_image_ndim(image)
     require_dtype(image, (np.uint8,))
     require_non_negative(factor, "factor")
-    return np.clip((image.astype(np.float64) - 128.0) * factor + 128.0, 0, 255).astype(np.uint8)
+    scaled = (image.astype(np.float64) - 128.0) * factor + 128.0
+    return np.clip(np.round(scaled), 0, 255).astype(np.uint8)
 
 
 _ALPHA_BLEND_DTYPES = (np.uint8, np.uint16, np.int32, np.float32, np.float64)

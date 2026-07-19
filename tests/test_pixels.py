@@ -39,6 +39,43 @@ def test_in_range_rejects_wrong_length_for_grayscale_image() -> None:
         im.in_range(image, lower=(0, 0), upper=(255, 255))
 
 
+def test_in_range_rejects_non_finite_bound() -> None:
+    # cv2.inRange raises a raw, low-level cv2.error for NaN bounds
+    # (a dtype-mismatch assertion inside inRange) — verified directly.
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.in_range(image, lower=(float("nan"),), upper=(255,))
+    with pytest.raises(ValueError, match="finite"):
+        im.in_range(image, lower=(0,), upper=(float("inf"),))
+
+
+def test_in_range_rejects_string_bound() -> None:
+    # cv2.inRange raises a raw cv2.error ("data type = <U1 is not
+    # supported") for a string bound — verified directly.
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="real number"):
+        im.in_range(image, lower=("0",), upper=(255,))  # type: ignore[arg-type]
+
+
+def test_in_range_rejects_bool_bound() -> None:
+    # cv2.inRange silently accepts a bool bound, reinterpreting it as 1/0
+    # instead of raising — verified directly.
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="real number"):
+        im.in_range(image, lower=(True,), upper=(255,))  # type: ignore[arg-type]
+
+
+def test_in_range_accepts_fractional_bounds_for_float32_image() -> None:
+    image = np.array([[0.5, 1.5, 2.5]], dtype=np.float32)
+
+    result = im.in_range(image, lower=(1.0,), upper=(2.0,))
+
+    np.testing.assert_array_equal(result, np.array([[0, 255, 0]], dtype=np.uint8))
+
+
 def test_invert_flips_pixel_values() -> None:
     image = np.array([[0, 100, 255]], dtype=np.uint8)
 
@@ -67,6 +104,16 @@ def test_adjust_brightness_increases_pixel_values() -> None:
     result = im.adjust_brightness(image, delta=50)
 
     assert result[0, 0] == 150
+
+
+def test_adjust_brightness_rounds_fractional_delta_symmetrically() -> None:
+    # Truncating instead of rounding was asymmetric: +0.9 was truncated
+    # away to no change (100 -> 100) while -0.9 kept its full effect
+    # (100 -> 99), because astype(uint8) always truncates toward zero.
+    image = np.full((5, 5), 100, dtype=np.uint8)
+
+    assert im.adjust_brightness(image, delta=0.9)[0, 0] == 101
+    assert im.adjust_brightness(image, delta=-0.9)[0, 0] == 99
 
 
 def test_adjust_brightness_clamps_to_255() -> None:
@@ -125,6 +172,16 @@ def test_adjust_contrast_expands_values_away_from_midpoint() -> None:
 
     assert result[0, 0] == 255  # (200-128)*2+128 = 272 -> clamps to 255
     assert result[0, 1] == 72  # (100-128)*2+128 = 72
+
+
+def test_adjust_contrast_rounds_fractional_result_instead_of_truncating() -> None:
+    # (138-128)*1.09+128 = 138.9 -> should round to 139, not truncate to 138.
+    image_a = np.full((5, 5), 138, dtype=np.uint8)
+    assert im.adjust_contrast(image_a, factor=1.09)[0, 0] == 139
+
+    # (118-128)*0.91+128 = 118.9 -> should round to 119, not truncate to 118.
+    image_b = np.full((5, 5), 118, dtype=np.uint8)
+    assert im.adjust_contrast(image_b, factor=0.91)[0, 0] == 119
 
 
 def test_adjust_contrast_preserves_midpoint() -> None:

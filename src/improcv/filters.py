@@ -10,6 +10,7 @@ import numpy as np
 from improcv._validation import (
     require_dtype,
     require_image_ndim,
+    require_non_negative,
     require_odd,
     require_positive,
     require_positive_int,
@@ -26,6 +27,19 @@ __all__ = [
     "histogram_equalization",
 ]
 
+# Verified directly against cv2.GaussianBlur on OpenCV 4.13 and 5.0 (identical
+# results on both): int32, int64, and bool reach a raw cv2.error.
+_GAUSSIAN_BLUR_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
+
+# Verified directly against cv2.medianBlur on OpenCV 4.13 and 5.0 (identical
+# results on both): int32, int64, float64, and bool reach a raw cv2.error.
+_MEDIAN_BLUR_DTYPES = (np.uint8, np.uint16, np.int16, np.float32)
+
+# Verified directly against cv2.bilateralFilter on OpenCV 4.13 and 5.0
+# (identical results on both): only 8-bit and 32-bit float are supported;
+# everything else (including uint16) reaches a raw cv2.error.
+_BILATERAL_FILTER_DTYPES = (np.uint8, np.float32)
+
 
 def gaussian_blur(image: Image, kernel_size: int, sigma: float = 0.0) -> Image:
     """Smooth an image with a Gaussian kernel.
@@ -38,6 +52,7 @@ def gaussian_blur(image: Image, kernel_size: int, sigma: float = 0.0) -> Image:
         Kernel width and height; must be a positive odd integer.
     sigma : float, default 0.0
         Gaussian standard deviation; ``0.0`` derives it from `kernel_size`.
+        Must be finite and non-negative.
 
     Returns
     -------
@@ -47,12 +62,19 @@ def gaussian_blur(image: Image, kernel_size: int, sigma: float = 0.0) -> Image:
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `kernel_size` is not
-        a positive odd integer.
+        If `image` does not have 2 or 3 dimensions, `kernel_size` is not a
+        positive odd integer, or `sigma` is not finite or is negative.
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.GaussianBlur``
+        on both OpenCV 4 and 5; ``int32``/``int64``/``bool`` are not
+        supported and otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _GAUSSIAN_BLUR_DTYPES)
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
+    require_non_negative(sigma, "sigma")
     return cv2.GaussianBlur(image, (kernel_size, kernel_size), sigma)
 
 
@@ -76,8 +98,14 @@ def median_blur(image: Image, kernel_size: int) -> Image:
     ValueError
         If `image` does not have 2 or 3 dimensions, or `kernel_size` is not
         a positive odd integer.
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        or ``float32`` (verified against ``cv2.medianBlur`` on both OpenCV
+        4 and 5; ``int32``/``int64``/``float64``/``bool`` are not
+        supported and otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _MEDIAN_BLUR_DTYPES)
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
     return cv2.medianBlur(image, kernel_size)
@@ -93,9 +121,11 @@ def bilateral_filter(image: Image, diameter: int, sigma_color: float, sigma_spac
     diameter : int
         Diameter of the pixel neighborhood; must be positive.
     sigma_color : float
-        Filter sigma in color space — larger values mix more distant colors.
+        Filter sigma in color space — larger values mix more distant
+        colors. Must be finite and non-negative.
     sigma_space : float
-        Filter sigma in coordinate space — larger values mix more distant pixels.
+        Filter sigma in coordinate space — larger values mix more distant
+        pixels. Must be finite and non-negative.
 
     Returns
     -------
@@ -105,12 +135,20 @@ def bilateral_filter(image: Image, diameter: int, sigma_color: float, sigma_spac
     Raises
     ------
     ValueError
-        If `image` does not have 2 or 3 dimensions, or `diameter` is not positive.
+        If `image` does not have 2 or 3 dimensions, `diameter` is not
+        positive, or `sigma_color`/`sigma_space` is not finite or is
+        negative.
     TypeError
-        If `diameter` is not an ``int``.
+        If `diameter` is not an ``int``, or `image` does not have dtype
+        ``uint8`` or ``float32`` (verified against ``cv2.bilateralFilter``
+        on both OpenCV 4 and 5; every other dtype, including ``uint16``,
+        is not supported and otherwise reaches a raw ``cv2.error``).
     """
     require_image_ndim(image)
+    require_dtype(image, _BILATERAL_FILTER_DTYPES)
     require_positive_int(diameter, "diameter")
+    require_non_negative(sigma_color, "sigma_color")
+    require_non_negative(sigma_space, "sigma_space")
     return cv2.bilateralFilter(image, diameter, sigma_color, sigma_space)
 
 

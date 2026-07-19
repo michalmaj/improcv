@@ -125,6 +125,20 @@ def require_size_2d(value: object, name: str) -> None:
     require_positive_int(height, f"{name}[1]")
 
 
+def require_point_2d(value: object, name: str) -> None:
+    """Raise ValueError/TypeError unless `value` is a 2-tuple of finite real numbers.
+
+    For ``(x, y)``-style parameters (e.g. `rotate`'s `center`), where a
+    wrong-length tuple would otherwise reach an `IndexError` (too short)
+    or a raw `cv2.error`/`TypeError` deep inside OpenCV (too long).
+    """
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise ValueError(f"{name} must be a 2-tuple, got {value!r}")
+    x, y = value
+    require_finite(x, f"{name}[0]")
+    require_finite(y, f"{name}[1]")
+
+
 def require_one_of(value: object, allowed: Collection[object], name: str) -> None:
     """Raise ValueError unless `value` is one of `allowed`.
 
@@ -197,6 +211,26 @@ def require_range(value: object, low: float, high: float, name: str) -> None:
     assert isinstance(value, numbers.Real)  # narrows for the type checker
     if not low <= float(value) <= high:
         raise ValueError(f"{name} must be between {low} and {high}, got {value}")
+
+
+def require_fits_dtype(value: object, dtype: np.dtype | type, name: str) -> None:
+    """Raise ValueError unless `value` fits within `dtype`'s representable range.
+
+    For parameters like `threshold`'s `max_value` that OpenCV silently
+    saturates rather than rejects when out of range for the image's
+    integer dtype (e.g. ``300`` silently becomes ``255`` for a ``uint8``
+    image) — verified directly against ``cv2.threshold``. Floating-point
+    dtypes have no meaningful bound here and are skipped.
+    """
+    require_real_number(value, name)
+    assert isinstance(value, numbers.Real)  # narrows for the type checker
+    if np.issubdtype(dtype, np.integer):
+        info = np.iinfo(dtype)
+        if not info.min <= float(value) <= info.max:
+            raise ValueError(
+                f"{name} must fit within the range of {np.dtype(dtype).name} "
+                f"([{info.min}, {info.max}]), got {value}"
+            )
 
 
 def require_same_shape_and_dtype(

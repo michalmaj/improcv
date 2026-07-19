@@ -5,12 +5,14 @@ from improcv._validation import (
     require_channels,
     require_dtype,
     require_finite,
+    require_fits_dtype,
     require_image_ndim,
     require_int,
     require_non_negative,
     require_non_negative_int,
     require_odd,
     require_one_of,
+    require_point_2d,
     require_positive,
     require_positive_int,
     require_range,
@@ -228,6 +230,29 @@ def test_require_same_shape_and_dtype_rejects_mismatched_dtype() -> None:
         )
 
 
+def test_require_fits_dtype_accepts_value_within_range() -> None:
+    require_fits_dtype(255, np.uint8, "max_value")
+
+
+def test_require_fits_dtype_rejects_value_exceeding_dtype_max() -> None:
+    with pytest.raises(ValueError, match="max_value"):
+        require_fits_dtype(300, np.uint8, "max_value")
+
+
+def test_require_fits_dtype_rejects_value_below_dtype_min() -> None:
+    with pytest.raises(ValueError, match="max_value"):
+        require_fits_dtype(-1, np.uint8, "max_value")
+
+
+def test_require_fits_dtype_skips_bound_check_for_float_dtype() -> None:
+    require_fits_dtype(1e10, np.float32, "max_value")
+
+
+def test_require_fits_dtype_rejects_non_real_value() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_fits_dtype("300", np.uint8, "max_value")  # type: ignore[arg-type]
+
+
 def test_require_one_of_accepts_allowed_value() -> None:
     require_one_of("horizontal", ("horizontal", "vertical"), "direction")
 
@@ -337,3 +362,29 @@ def test_require_transform_matrix_rejects_non_finite_values() -> None:
 
     with pytest.raises(ValueError, match="finite"):
         require_transform_matrix(matrix, (2, 3), "matrix")
+
+
+def test_require_point_2d_accepts_valid_point() -> None:
+    require_point_2d((1.0, 2.0), "center")
+    require_point_2d((1, 2), "center")
+
+
+def test_require_point_2d_rejects_wrong_length() -> None:
+    with pytest.raises(ValueError, match="2-tuple"):
+        require_point_2d((1.0,), "center")
+    with pytest.raises(ValueError, match="2-tuple"):
+        require_point_2d((1.0, 2.0, 3.0), "center")
+
+
+def test_require_point_2d_rejects_non_finite_element() -> None:
+    with pytest.raises(ValueError, match=r"center\[0\]"):
+        require_point_2d((float("nan"), 2.0), "center")
+    with pytest.raises(ValueError, match=r"center\[1\]"):
+        require_point_2d((1.0, float("inf")), "center")
+
+
+def test_require_point_2d_rejects_non_numeric_element() -> None:
+    with pytest.raises(TypeError, match="real number"):
+        require_point_2d(("a", 2.0), "center")
+    with pytest.raises(TypeError, match="real number"):
+        require_point_2d((1.0, True), "center")

@@ -20,6 +20,19 @@ from improcv.types import Image, ImageU8, Mask
 
 __all__ = ["auto_canny", "sobel_edge", "laplacian_edge", "harris_corner"]
 
+# Verified directly against cv2.Sobel on OpenCV 4.13 and 5.0 (identical
+# results on both): int32, int64, and bool reach a raw cv2.error.
+_SOBEL_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
+
+# Verified directly against cv2.Laplacian on OpenCV 4.13 and 5.0 (identical
+# results on both). Notably excludes float32: this function always requests
+# a CV_64F destination, and OpenCV rejects the float32-source/float64-dest
+# combination specifically ("Unsupported combination of source format and
+# destination format") even though float32 input works for every other
+# function here — a float32 source only works when the destination is also
+# float32 (CV_32F), which `laplacian_edge` does not use.
+_LAPLACIAN_DTYPES = (np.uint8, np.uint16, np.int16, np.float64)
+
 
 def auto_canny(image: ImageU8, sigma: float = 0.33) -> Mask:
     """Detect edges with Canny, picking thresholds automatically from the image's median intensity.
@@ -85,8 +98,14 @@ def sobel_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     ValueError
         If `image` does not have exactly 2 dimensions, or `kernel_size` is
         not a positive odd integer.
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        ``float32``, or ``float64`` (verified against ``cv2.Sobel`` on
+        both OpenCV 4 and 5; ``int32``/``int64``/``bool`` are not
+        supported and otherwise reach a raw ``cv2.error``).
     """
     require_image_ndim(image, ndims=(2,))
+    require_dtype(image, _SOBEL_DTYPES)
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
     require_range(kernel_size, 1, 31, "kernel_size")
@@ -119,8 +138,17 @@ def laplacian_edge(image: Image, kernel_size: int = 3) -> ImageU8:
     ValueError
         If `image` does not have exactly 2 dimensions, or `kernel_size` is
         not a positive odd integer.
+    TypeError
+        If `image` does not have dtype ``uint8``, ``uint16``, ``int16``,
+        or ``float64`` (verified against ``cv2.Laplacian`` on both OpenCV
+        4 and 5; notably excludes ``float32``, which — unlike every other
+        function in this module — is rejected here because this function
+        always requests a ``float64`` destination and OpenCV does not
+        support that specific source/destination combination;
+        ``int32``/``int64``/``bool`` are not supported either).
     """
     require_image_ndim(image, ndims=(2,))
+    require_dtype(image, _LAPLACIAN_DTYPES)
     require_positive_int(kernel_size, "kernel_size")
     require_odd(kernel_size, "kernel_size")
     require_range(kernel_size, 1, 31, "kernel_size")

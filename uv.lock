@@ -49,10 +49,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.24" },
-    { name = "opencv-contrib-python", marker = "extra == 'cv-contrib'", specifier = ">=4.9" },
-    { name = "opencv-contrib-python-headless", marker = "extra == 'cv-contrib-headless'", specifier = ">=4.9" },
-    { name = "opencv-python", marker = "extra == 'cv'", specifier = ">=4.9" },
-    { name = "opencv-python-headless", marker = "extra == 'cv-headless'", specifier = ">=4.9" },
+    { name = "opencv-contrib-python", marker = "extra == 'cv-contrib'", specifier = ">=4.9,<6" },
+    { name = "opencv-contrib-python-headless", marker = "extra == 'cv-contrib-headless'", specifier = ">=4.9,<6" },
+    { name = "opencv-python", marker = "extra == 'cv'", specifier = ">=4.9,<6" },
+    { name = "opencv-python-headless", marker = "extra == 'cv-headless'", specifier = ">=4.9,<6" },
 ]
 provides-extras = ["cv", "cv-headless", "cv-contrib", "cv-contrib-headless"]
 

@@ -254,6 +254,17 @@ def test_rotate_rejects_non_finite_center() -> None:
         im.rotate(image, angle=10, center=(float("nan"), 0.0))
 
 
+def test_rotate_rejects_wrong_length_center() -> None:
+    # Previously: a 1-element center reached an IndexError, and a
+    # 3-element center reached a raw cv2 TypeError.
+    image = _make_image(20, 20)
+
+    with pytest.raises(ValueError, match="2-tuple"):
+        im.rotate(image, angle=10, center=(1.0,))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="2-tuple"):
+        im.rotate(image, angle=10, center=(1.0, 2.0, 3.0))  # type: ignore[arg-type]
+
+
 def test_rotate_bound_by_zero_degrees_preserves_size_and_content() -> None:
     image = _make_image(20, 20)
 
