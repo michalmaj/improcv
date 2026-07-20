@@ -26,11 +26,36 @@ __all__ = [
     "connected_components_with_stats",
     "distance_transform",
     "flood_fill",
+    "Connectivity",
+    "Labels",
+    "ComponentStats",
+    "Centroids",
+    "DistanceType",
+    "DistanceMaskSize",
     "FloodFillResult",
 ]
 
 Connectivity = Literal[4, 8]
 _CONNECTIVITIES: tuple[Connectivity, ...] = (4, 8)
+
+
+def _require_integral_choice(value: object, allowed: tuple[int, ...], name: str) -> int:
+    """Validate `value` as an integral choice from `allowed`, returning it as plain `int`.
+
+    A bare `require_one_of` membership check does not catch a `float` equal
+    to an accepted value (`4.0 == 4` in Python) — verified directly that
+    this let a `float` reach a raw `cv2.error` (or, for `flood_fill`'s
+    `connectivity`, an unrelated `TypeError` from the `|` operator) instead
+    of a clear validation error. `require_integral` rejects `bool` and any
+    non-integral type first; the `int(...)` conversion then guarantees a
+    plain `int` reaches the underlying `cv2.*` call regardless of whether
+    `value` was a builtin `int` or a NumPy integer scalar.
+    """
+    require_integral(value, name)
+    value_int = int(value)  # type: ignore[arg-type]
+    require_one_of(value_int, allowed, name)
+    return value_int
+
 
 Labels = npt.NDArray[np.int32]
 """A label map: shape ``(H, W)``, dtype ``int32``. Label ``0`` is always the
@@ -70,8 +95,8 @@ def connected_components(mask: Mask, connectivity: Connectivity = 8) -> tuple[in
     """
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
-    require_one_of(connectivity, _CONNECTIVITIES, "connectivity")
-    num_labels, labels = cv2.connectedComponents(mask, connectivity=connectivity)
+    connectivity_int = _require_integral_choice(connectivity, _CONNECTIVITIES, "connectivity")
+    num_labels, labels = cv2.connectedComponents(mask, connectivity=connectivity_int)
     return num_labels, cast(Labels, labels)
 
 
@@ -141,9 +166,9 @@ def connected_components_with_stats(
     """
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
-    require_one_of(connectivity, _CONNECTIVITIES, "connectivity")
+    connectivity_int = _require_integral_choice(connectivity, _CONNECTIVITIES, "connectivity")
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        mask, connectivity=connectivity
+        mask, connectivity=connectivity_int
     )
     return num_labels, cast(Labels, labels), cast(ComponentStats, stats), cast(Centroids, centroids)
 
@@ -209,8 +234,18 @@ def distance_transform(
     """
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
+    if not np.any(mask == 0):
+        # An all-foreground mask has no zero pixel to measure distance to;
+        # cv2.distanceTransform returns large sentinel-like values in that
+        # case (verified directly) that look like plausible float32
+        # distances but are meaningless.
+        raise ValueError("mask must contain at least one zero-valued background pixel")
     require_one_of(distance_type, tuple(_DISTANCE_TYPE_FLAGS), "distance_type")
-    resolved_mask_size = _DEFAULT_MASK_SIZE[distance_type] if mask_size is None else mask_size
+    if mask_size is None:
+        resolved_mask_size: int = _DEFAULT_MASK_SIZE[distance_type]
+    else:
+        require_integral(mask_size, "mask_size")
+        resolved_mask_size = int(mask_size)
     valid_sizes = _VALID_MASK_SIZES[distance_type]
     if resolved_mask_size not in valid_sizes:
         raise ValueError(
@@ -249,6 +284,18 @@ def _resolve_channel_values(
         else:
             require_finite(value, name)
         return (float(value),) * channels
+    if isinstance(value, (str, bytes, bytearray, memoryview)):
+        # These are technically iterable (bytes/bytearray/memoryview yield
+        # plain ints; str yields single-character strings), so without this
+        # explicit rejection a bytes/bytearray value of the right length
+        # would silently pass through the length/finiteness checks below as
+        # if it were a genuine sequence of numbers -- verified directly that
+        # b"x" (length 1) filled a grayscale image with 120 (ord("x")), no
+        # error at all.
+        raise TypeError(
+            f"{name} must be a real number or a sequence of real numbers, "
+            f"got {type(value).__name__}"
+        )
     try:
         # `value` is a Sequence at this point (the numbers.Real case already
         # returned above), but pyright can't narrow numbers.Real exclusion
@@ -366,7 +413,7 @@ def flood_fill(
     channels = 1 if image.ndim == 2 else image.shape[2]
     if channels not in (1, 3):
         raise ValueError(f"image must have 1 or 3 channels, got {channels}")
-    require_one_of(connectivity, _CONNECTIVITIES, "connectivity")
+    connectivity_int = _require_integral_choice(connectivity, _CONNECTIVITIES, "connectivity")
     require_bool(fixed_range, "fixed_range")
     height, width = image.shape[:2]
     x, y = _require_seed_point(seed_point, width, height)
@@ -374,9 +421,30 @@ def flood_fill(
     new_value_resolved = _resolve_channel_values(new_value, channels, "new_value")
     if image.dtype == np.uint8:
         for i, element in enumerate(new_value_resolved):
+            # cv2.floodFill silently rounds a fractional new_value instead
+            # of rejecting it (0.5 -> 0, 254.5 -> 254) -- verified directly.
+            if not float(element).is_integer():
+                raise ValueError(
+                    f"new_value[{i}] must be an integer value for a uint8 image, got {element}"
+                )
             if not (0 <= element <= 255):
                 raise ValueError(
                     f"new_value[{i}] must be in [0, 255] for a uint8 image, got {element}"
+                )
+    elif image.dtype == np.float32:
+        for i, element in enumerate(new_value_resolved):
+            # A finite Python float can still overflow float32 (e.g. 3.5e38
+            # exceeds float32's max of ~3.4028235e38) -- cv2.floodFill
+            # silently produces inf in the result instead of raising,
+            # verified directly. np.errstate suppresses the (expected,
+            # harmless) overflow-in-cast RuntimeWarning this check itself
+            # triggers for an out-of-range element.
+            with np.errstate(over="ignore"):
+                representable = np.isfinite(np.float32(element))
+            if not representable:
+                raise ValueError(
+                    f"new_value[{i}] must be representable as float32 "
+                    f"without overflow, got {element}"
                 )
     lo_diff_resolved = _resolve_channel_values(lo_diff, channels, "lo_diff", non_negative=True)
     up_diff_resolved = _resolve_channel_values(up_diff, channels, "up_diff", non_negative=True)
@@ -386,7 +454,7 @@ def flood_fill(
     # Packs the mask-fill value 255 into the flags word so the internal
     # mask comes back already {0, 255}-valued -- verified directly, no
     # separate normalization step needed.
-    flags = connectivity | (255 << 8)
+    flags = connectivity_int | (255 << 8)
     if fixed_range:
         flags |= cv2.FLOODFILL_FIXED_RANGE
 
