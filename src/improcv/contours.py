@@ -16,7 +16,7 @@ from improcv._validation import (
     require_non_negative,
     require_one_of,
 )
-from improcv.types import Mask
+from improcv.types import BoundingBox, Mask
 
 __all__ = [
     "find_contours",
@@ -44,19 +44,6 @@ Hierarchy = npt.NDArray[np.int32]
 ``[next, previous, first_child, parent]`` (``-1`` for none) — squeezed from
 OpenCV's raw ``(1, N, 4)``; that leading dimension is never meaningful and is
 never fed back into any ``cv2.*`` call."""
-
-
-class BoundingBox(NamedTuple):
-    """An axis-aligned bounding box, matching ``cv2.boundingRect``'s ``(x, y, w, h)``.
-
-    Unpacks like a plain tuple (``x, y, w, h = box``), so it costs nothing in
-    interop versus a bare tuple, while still giving named field access.
-    """
-
-    x: int
-    y: int
-    width: int
-    height: int
 
 
 class RotatedRect(NamedTuple):

@@ -8,12 +8,26 @@ without blocking a later move to a stricter Pyright mode.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["Image", "ImageFloat32", "ImageU8", "Mask", "TransformMatrix"]
+__all__ = ["BoundingBox", "Image", "ImageFloat32", "ImageU8", "Mask", "TransformMatrix"]
+
+
+class BoundingBox(NamedTuple):
+    """An axis-aligned bounding box, matching ``cv2.boundingRect``'s ``(x, y, w, h)``.
+
+    Unpacks like a plain tuple (``x, y, w, h = box``), so it costs nothing in
+    interop versus a bare tuple, while still giving named field access.
+    """
+
+    x: int
+    y: int
+    width: int
+    height: int
+
 
 Image = npt.NDArray[Any]
 """A generic image array of any dtype, shape ``(H, W)`` or ``(H, W, C)``."""
