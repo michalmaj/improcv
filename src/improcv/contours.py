@@ -9,10 +9,16 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from improcv._validation import require_dtype, require_image_ndim, require_one_of
+from improcv._validation import (
+    require_bool,
+    require_dtype,
+    require_image_ndim,
+    require_non_negative,
+    require_one_of,
+)
 from improcv.types import Mask
 
-__all__ = ["find_contours", "bounding_boxes", "sort_contours", "convex_hull"]
+__all__ = ["find_contours", "bounding_boxes", "sort_contours", "convex_hull", "approx_poly_dp"]
 
 Contour = npt.NDArray[np.int32]
 """A single contour: shape ``(N, 1, 2)``, dtype ``int32`` — the exact shape and
@@ -270,3 +276,44 @@ def convex_hull(contour: Contour) -> Contour:
     """
     _require_contour(contour, min_points=1)
     return cast(Contour, cv2.convexHull(contour))
+
+
+def approx_poly_dp(contour: Contour, epsilon: float, closed: bool = True) -> Contour:
+    """Approximate a contour with a simplified polygon (Douglas-Peucker algorithm).
+
+    Parameters
+    ----------
+    contour : np.ndarray
+        A `Contour`. A 1- or 2-point contour is accepted; only a genuinely
+        empty (0-point) contour is rejected, since `cv2.approxPolyDP` returns
+        `None` for that case (verified directly) — see `convex_hull` for the
+        same reasoning.
+    epsilon : float
+        Maximum distance between the original contour and its approximation;
+        must be finite and non-negative. ``0.0`` is a legitimate value (no
+        simplification — verified directly).
+    closed : bool, default True
+        Whether the approximated curve is closed. Must be an actual `bool`:
+        `cv2.approxPolyDP` itself loosely coerces other types for this
+        parameter (verified: even `0`/`1`/`None` are silently accepted),
+        which this function rejects before it reaches OpenCV.
+
+    Returns
+    -------
+    np.ndarray
+        The approximated polygon, shape ``(M, 1, 2)``, dtype ``int32``. A new
+        array; `contour` is never modified.
+
+    Raises
+    ------
+    ValueError
+        If `contour` has 0 points or does not have shape ``(N, 1, 2)``, or
+        `epsilon` is negative, infinite, or NaN.
+    TypeError
+        If `contour` is not an ``int32`` `np.ndarray`, or `closed` is not a
+        `bool`.
+    """
+    _require_contour(contour, min_points=1)
+    require_non_negative(epsilon, "epsilon")
+    require_bool(closed, "closed")
+    return cast(Contour, cv2.approxPolyDP(contour, epsilon, closed))

@@ -349,3 +349,72 @@ def test_convex_hull_rejects_wrong_shape() -> None:
 
     with pytest.raises(ValueError, match=r"\(N, 1, 2\)"):
         im.convex_hull(bad_contour)  # type: ignore[arg-type]
+
+
+def test_approx_poly_dp_zero_epsilon_preserves_all_points() -> None:
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[2:18, 2:8] = 255
+    mask[12:18, 2:18] = 255
+    contours, _ = im.find_contours(mask)
+    raw_contour = contours[0]
+    assert raw_contour.shape[0] == 7
+
+    approx = im.approx_poly_dp(raw_contour, epsilon=0.0)
+
+    assert approx.shape[0] == 7
+
+
+def test_approx_poly_dp_larger_epsilon_reduces_points() -> None:
+    # Verified directly: epsilon=5.0 simplifies this 7-point L-shape to 3.
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[2:18, 2:8] = 255
+    mask[12:18, 2:18] = 255
+    contours, _ = im.find_contours(mask)
+    raw_contour = contours[0]
+
+    approx = im.approx_poly_dp(raw_contour, epsilon=5.0)
+
+    assert approx.shape[0] == 3
+    assert approx.dtype == np.int32
+
+
+def test_approx_poly_dp_rejects_negative_epsilon() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        im.approx_poly_dp(_RECT_CONTOUR, epsilon=-1.0)
+
+
+def test_approx_poly_dp_rejects_non_finite_epsilon() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        im.approx_poly_dp(_RECT_CONTOUR, epsilon=float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        im.approx_poly_dp(_RECT_CONTOUR, epsilon=float("inf"))
+
+
+def test_approx_poly_dp_rejects_non_bool_closed() -> None:
+    with pytest.raises(TypeError, match="bool"):
+        im.approx_poly_dp(_RECT_CONTOUR, epsilon=1.0, closed=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="bool"):
+        im.approx_poly_dp(_RECT_CONTOUR, epsilon=1.0, closed=None)  # type: ignore[arg-type]
+
+
+def test_approx_poly_dp_accepts_single_and_two_point_contour() -> None:
+    single_point = _contour([[5, 5]])
+    two_points = _contour([[0, 0], [5, 5]])
+
+    assert im.approx_poly_dp(single_point, epsilon=1.0).shape[0] == 1
+    assert im.approx_poly_dp(two_points, epsilon=1.0).shape[0] == 2
+
+
+def test_approx_poly_dp_rejects_empty_contour() -> None:
+    empty_contour = np.zeros((0, 1, 2), dtype=np.int32)
+
+    with pytest.raises(ValueError, match="at least 1 point"):
+        im.approx_poly_dp(empty_contour, epsilon=1.0)
+
+
+def test_approx_poly_dp_does_not_mutate_input() -> None:
+    original = _RECT_CONTOUR.copy()
+
+    im.approx_poly_dp(_RECT_CONTOUR, epsilon=1.0)
+
+    np.testing.assert_array_equal(_RECT_CONTOUR, original)
