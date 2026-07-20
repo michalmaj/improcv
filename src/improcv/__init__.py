@@ -79,7 +79,7 @@ from improcv.transforms import (
     warp_affine,
     warp_perspective,
 )
-from improcv.types import Image, ImageU8, Mask, TransformMatrix
+from improcv.types import Image, ImageFloat32, ImageU8, Mask, TransformMatrix
 
 __all__ = [
     "ApproxMethod",
@@ -87,6 +87,7 @@ __all__ = [
     "Contour",
     "Hierarchy",
     "Image",
+    "ImageFloat32",
     "ImageU8",
     "Mask",
     "RetrievalMode",
