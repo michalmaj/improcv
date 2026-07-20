@@ -95,6 +95,24 @@ def require_int(value: object, name: str) -> None:
         raise TypeError(f"{name} must be an int, got {type(value).__name__}")
 
 
+def require_integral(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is an integral number.
+
+    Accepts plain Python `int` as well as NumPy integer scalar types
+    (`np.int32`, `np.int64`, ...) — anything registered as `numbers.Integral`
+    — but rejects `bool` (a `bool` is technically an `int` subclass, and
+    therefore also registers as `numbers.Integral`, but accepting
+    `True`/`False` here would silently misinterpret a boolean argument as
+    `1`/`0`) and non-integral types such as `float`.
+
+    Unlike `require_int`, which only accepts plain `int`, this accepts any
+    `numbers.Integral` — for parameters where a coordinate might legitimately
+    come straight out of a NumPy array (e.g. a centroid or contour point).
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
+
+
 def require_bool(value: object, name: str) -> None:
     """Raise TypeError unless `value` is an actual `bool`.
 

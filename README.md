@@ -46,6 +46,20 @@ contours, boxes = im.sort_contours(contours, order="left-to-right")
 cv2.drawContours(image, contours, -1, (0, 255, 0), 2)
 ```
 
+Connected components and flood fill:
+
+```python
+import improcv as im
+
+mask = im.threshold(im.ensure_gray(image), method="otsu")
+num_labels, labels, stats, centroids = im.connected_components_with_stats(mask)
+# stats[0]/centroids[0] describe the background label (0); inspect
+# stats[label, 4] (area) before trusting a component's other statistics.
+
+result = im.flood_fill(image, seed_point=(10, 10), new_value=(0, 255, 0))
+print(result.filled_count, result.bounding_box)
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor

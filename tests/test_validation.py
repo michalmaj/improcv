@@ -9,6 +9,7 @@ from improcv._validation import (
     require_fits_dtype,
     require_image_ndim,
     require_int,
+    require_integral,
     require_non_negative,
     require_non_negative_int,
     require_odd,
@@ -305,6 +306,30 @@ def test_require_int_rejects_bool() -> None:
 def test_require_int_rejects_float() -> None:
     with pytest.raises(TypeError, match="int"):
         require_int(1.5, "x")
+
+
+def test_require_integral_accepts_int_and_numpy_integer() -> None:
+    require_integral(3, "x")
+    require_integral(-3, "x")
+    require_integral(np.int32(5), "x")
+    require_integral(np.int64(-7), "x")
+
+
+def test_require_integral_rejects_bool() -> None:
+    # bool is technically an int subclass (and therefore registers as
+    # numbers.Integral too), but accepting True/False here would silently
+    # misinterpret a boolean argument as 1/0 -- same reasoning as require_int.
+    with pytest.raises(TypeError, match="integer"):
+        require_integral(True, "x")
+    with pytest.raises(TypeError, match="integer"):
+        require_integral(np.bool_(True), "x")  # type: ignore[arg-type]
+
+
+def test_require_integral_rejects_float() -> None:
+    with pytest.raises(TypeError, match="integer"):
+        require_integral(1.5, "x")
+    with pytest.raises(TypeError, match="integer"):
+        require_integral(np.float32(1.0), "x")  # type: ignore[arg-type]
 
 
 def test_require_bool_accepts_bool() -> None:

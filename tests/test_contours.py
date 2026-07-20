@@ -485,6 +485,15 @@ def test_contour_types_are_importable_from_top_level_package() -> None:
     assert improcv.RotatedRect is contours_module.RotatedRect
 
 
+def test_bounding_box_is_the_same_object_from_types_and_contours() -> None:
+    # BoundingBox moved to types.py (regions.py needs it too); contours.py
+    # must keep re-exporting the exact same class, not a duplicate.
+    from improcv.contours import BoundingBox as ContoursBoundingBox
+    from improcv.types import BoundingBox as TypesBoundingBox
+
+    assert ContoursBoundingBox is TypesBoundingBox
+
+
 def test_sort_contours_reorders_lists_but_preserves_contour_array_identity() -> None:
     # sort_contours must allocate new output lists, but must NOT copy the
     # underlying contour arrays -- verified via `is` identity, not just

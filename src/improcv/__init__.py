@@ -67,6 +67,19 @@ from improcv.pixels import (
     in_range,
     invert,
 )
+from improcv.regions import (
+    Centroids,
+    ComponentStats,
+    Connectivity,
+    DistanceMaskSize,
+    DistanceType,
+    FloodFillResult,
+    Labels,
+    connected_components,
+    connected_components_with_stats,
+    distance_transform,
+    flood_fill,
+)
 from improcv.transforms import (
     center_crop,
     crop,
@@ -79,15 +92,23 @@ from improcv.transforms import (
     warp_affine,
     warp_perspective,
 )
-from improcv.types import Image, ImageU8, Mask, TransformMatrix
+from improcv.types import Image, ImageFloat32, ImageU8, Mask, TransformMatrix
 
 __all__ = [
     "ApproxMethod",
     "BoundingBox",
+    "Centroids",
+    "ComponentStats",
+    "Connectivity",
     "Contour",
+    "DistanceMaskSize",
+    "DistanceType",
+    "FloodFillResult",
     "Hierarchy",
     "Image",
+    "ImageFloat32",
     "ImageU8",
+    "Labels",
     "Mask",
     "RetrievalMode",
     "RotatedRect",
@@ -107,13 +128,17 @@ __all__ = [
     "bounding_boxes",
     "center_crop",
     "clahe",
+    "connected_components",
+    "connected_components_with_stats",
     "convex_hull",
     "crop",
     "dilate",
+    "distance_transform",
     "ensure_gray",
     "erode",
     "find_contours",
     "flip",
+    "flood_fill",
     "gamma_correction",
     "gaussian_blur",
     "harris_corner",

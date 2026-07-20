@@ -26,12 +26,22 @@ carries a working `0.1.0a1` version number for local development.
 - Edge and corner detection: `auto_canny`, `sobel_edge`, `laplacian_edge`, `harris_corner`.
 - Pixel-level operations: `in_range`, `invert`, `adjust_brightness`, `adjust_contrast`,
   `alpha_blend`, `bitwise_and`, `bitwise_or`, `apply_lut`.
-- `improcv.types`: `Image`, `ImageU8`, `Mask`, `TransformMatrix` type aliases.
+- `improcv.types`: `Image`, `ImageU8`, `Mask`, `TransformMatrix`, `ImageFloat32`, `BoundingBox`
+  type aliases.
 - Optional extras `cv`, `cv-headless`, `cv-contrib`, `cv-contrib-headless` for installing an
   OpenCV distribution alongside improcv.
 - Contours: `find_contours`, `sort_contours`, `bounding_boxes`, `convex_hull`, `approx_poly_dp`,
   `min_area_rect`.
-- `improcv.contours`: `Contour`, `Hierarchy`, `BoundingBox`, `RotatedRect` types.
+- `improcv.contours`: `Contour`, `Hierarchy`, `RotatedRect` types (`BoundingBox` lives in
+  `improcv.types`, re-exported here — see below).
+- Region analysis: `connected_components`, `connected_components_with_stats`,
+  `distance_transform`, `flood_fill`.
+- `improcv.regions`: `Connectivity`, `Labels`, `ComponentStats`, `Centroids`, `DistanceType`,
+  `DistanceMaskSize`, `FloodFillResult` types.
+
+### Changed
+- `BoundingBox` moved from `improcv.contours` to `improcv.types` (still importable from both
+  locations — no existing import breaks).
 
 ### Fixed
 - `adjust_brightness`/`adjust_contrast`: no longer reflect negative results back to positive via
