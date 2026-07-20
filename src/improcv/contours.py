@@ -12,7 +12,7 @@ import numpy.typing as npt
 from improcv._validation import require_dtype, require_image_ndim, require_one_of
 from improcv.types import Mask
 
-__all__ = ["find_contours", "bounding_boxes", "sort_contours"]
+__all__ = ["find_contours", "bounding_boxes", "sort_contours", "convex_hull"]
 
 Contour = npt.NDArray[np.int32]
 """A single contour: shape ``(N, 1, 2)``, dtype ``int32`` — the exact shape and
@@ -240,3 +240,33 @@ def sort_contours(
     sorted_contours = [pair[0] for pair in paired]
     sorted_boxes = [pair[1] for pair in paired]
     return sorted_contours, sorted_boxes
+
+
+def convex_hull(contour: Contour) -> Contour:
+    """Compute the convex hull of a contour.
+
+    Parameters
+    ----------
+    contour : np.ndarray
+        A `Contour`. A 1- or 2-point contour is well-defined and accepted
+        (returned as-is, or as a 2-point hull, respectively) — only a
+        genuinely empty (0-point) contour is rejected, since `cv2.convexHull`
+        returns `None` for that case (verified directly), which would
+        otherwise silently violate this function's ``-> Contour`` return
+        contract.
+
+    Returns
+    -------
+    np.ndarray
+        The hull's vertices, shape ``(M, 1, 2)``, dtype ``int32``, ``M <= N``.
+        A new array; `contour` is never modified.
+
+    Raises
+    ------
+    ValueError
+        If `contour` has 0 points or does not have shape ``(N, 1, 2)``.
+    TypeError
+        If `contour` is not an ``int32`` `np.ndarray`.
+    """
+    _require_contour(contour, min_points=1)
+    return cast(Contour, cv2.convexHull(contour))

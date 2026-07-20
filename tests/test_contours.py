@@ -279,3 +279,73 @@ def test_sort_contours_accepts_raw_cv2_findcontours_tuple_directly() -> None:
 def test_sort_contours_rejects_invalid_order() -> None:
     with pytest.raises(ValueError, match="order"):
         im.sort_contours([_RECT_CONTOUR], order="diagonal")  # type: ignore[arg-type]
+
+
+def test_convex_hull_removes_concave_points() -> None:
+    # An L-shaped mask: raw contour has 7 points, hull has 5 (the concave
+    # notch is filled in). Verified directly against cv2.
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[2:18, 2:8] = 255
+    mask[12:18, 2:18] = 255
+    contours, _ = im.find_contours(mask)
+    raw_contour = contours[0]
+    assert raw_contour.shape[0] == 7
+
+    hull = im.convex_hull(raw_contour)
+
+    assert hull.shape == (5, 1, 2)
+    assert hull.dtype == np.int32
+    assert cv2.contourArea(hull) > cv2.contourArea(raw_contour)
+
+
+def test_convex_hull_accepts_single_point_contour() -> None:
+    single_point = _contour([[5, 5]])
+
+    hull = im.convex_hull(single_point)
+
+    assert hull.shape == (1, 1, 2)
+
+
+def test_convex_hull_accepts_two_point_contour() -> None:
+    two_points = _contour([[0, 0], [5, 5]])
+
+    hull = im.convex_hull(two_points)
+
+    assert hull.shape[0] == 2
+
+
+def test_convex_hull_rejects_empty_contour() -> None:
+    empty_contour = np.zeros((0, 1, 2), dtype=np.int32)
+
+    with pytest.raises(ValueError, match="at least 1 point"):
+        im.convex_hull(empty_contour)
+
+
+def test_convex_hull_does_not_mutate_input() -> None:
+    original = _RECT_CONTOUR.copy()
+
+    im.convex_hull(_RECT_CONTOUR)
+
+    np.testing.assert_array_equal(_RECT_CONTOUR, original)
+
+
+def test_convex_hull_accepts_non_contiguous_contour() -> None:
+    non_contiguous = _RECT_CONTOUR[::-1]
+
+    hull = im.convex_hull(non_contiguous)
+
+    assert hull.shape[0] > 0
+
+
+def test_convex_hull_rejects_non_int32_dtype() -> None:
+    bad_contour = _RECT_CONTOUR.astype(np.float32)
+
+    with pytest.raises(TypeError, match="int32"):
+        im.convex_hull(bad_contour)  # type: ignore[arg-type]
+
+
+def test_convex_hull_rejects_wrong_shape() -> None:
+    bad_contour = np.zeros((4, 2), dtype=np.int32)
+
+    with pytest.raises(ValueError, match=r"\(N, 1, 2\)"):
+        im.convex_hull(bad_contour)  # type: ignore[arg-type]
