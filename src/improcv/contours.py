@@ -25,6 +25,13 @@ __all__ = [
     "convex_hull",
     "approx_poly_dp",
     "min_area_rect",
+    "Contour",
+    "Hierarchy",
+    "BoundingBox",
+    "RotatedRect",
+    "RetrievalMode",
+    "ApproxMethod",
+    "SortOrder",
 ]
 
 Contour = npt.NDArray[np.int32]

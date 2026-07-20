@@ -24,6 +24,13 @@ except ModuleNotFoundError as _exc:
 
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
 from improcv.contours import (
+    ApproxMethod,
+    BoundingBox,
+    Contour,
+    Hierarchy,
+    RetrievalMode,
+    RotatedRect,
+    SortOrder,
     approx_poly_dp,
     bounding_boxes,
     convex_hull,
@@ -75,9 +82,16 @@ from improcv.transforms import (
 from improcv.types import Image, ImageU8, Mask, TransformMatrix
 
 __all__ = [
+    "ApproxMethod",
+    "BoundingBox",
+    "Contour",
+    "Hierarchy",
     "Image",
     "ImageU8",
     "Mask",
+    "RetrievalMode",
+    "RotatedRect",
+    "SortOrder",
     "TransformMatrix",
     "adjust_brightness",
     "adjust_contrast",
