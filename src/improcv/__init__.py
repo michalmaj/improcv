@@ -67,6 +67,7 @@ from improcv.pixels import (
     in_range,
     invert,
 )
+from improcv.regions import Connectivity, Labels, connected_components
 from improcv.transforms import (
     center_crop,
     crop,
@@ -84,11 +85,13 @@ from improcv.types import Image, ImageFloat32, ImageU8, Mask, TransformMatrix
 __all__ = [
     "ApproxMethod",
     "BoundingBox",
+    "Connectivity",
     "Contour",
     "Hierarchy",
     "Image",
     "ImageFloat32",
     "ImageU8",
+    "Labels",
     "Mask",
     "RetrievalMode",
     "RotatedRect",
@@ -108,6 +111,7 @@ __all__ = [
     "bounding_boxes",
     "center_crop",
     "clahe",
+    "connected_components",
     "convex_hull",
     "crop",
     "dilate",
