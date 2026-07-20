@@ -228,6 +228,12 @@ def distance_transform(
     """
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
+    if not np.any(mask == 0):
+        # An all-foreground mask has no zero pixel to measure distance to;
+        # cv2.distanceTransform returns large sentinel-like values in that
+        # case (verified directly) that look like plausible float32
+        # distances but are meaningless.
+        raise ValueError("mask must contain at least one zero-valued background pixel")
     require_one_of(distance_type, tuple(_DISTANCE_TYPE_FLAGS), "distance_type")
     if mask_size is None:
         resolved_mask_size: int = _DEFAULT_MASK_SIZE[distance_type]

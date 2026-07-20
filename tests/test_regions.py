@@ -213,6 +213,26 @@ def test_distance_transform_computes_distance_to_nearest_zero_pixel() -> None:
     assert result[6, 6] == 0.0  # background pixels have distance 0
 
 
+def test_distance_transform_all_black_mask_returns_all_zeros() -> None:
+    mask = np.zeros((10, 10), dtype=np.uint8)
+
+    result = im.distance_transform(mask)
+
+    assert np.all(result == 0.0)
+
+
+def test_distance_transform_rejects_mask_with_no_zero_pixel() -> None:
+    # An all-foreground mask has no zero pixel to measure distance to --
+    # cv2.distanceTransform returns large sentinel-like values in that case
+    # (verified directly: ~65533-65535 for a 10x10 all-white mask,
+    # depending on distance_type) that look like plausible float32
+    # distances but are meaningless.
+    mask = np.full((10, 10), 255, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="zero"):
+        im.distance_transform(mask)
+
+
 def test_distance_transform_l2_accepts_0_3_and_5() -> None:
     mask = np.zeros((10, 10), dtype=np.uint8)
     mask[3:7, 3:7] = 255
