@@ -32,6 +32,25 @@ __all__ = [
 Connectivity = Literal[4, 8]
 _CONNECTIVITIES: tuple[Connectivity, ...] = (4, 8)
 
+
+def _require_integral_choice(value: object, allowed: tuple[int, ...], name: str) -> int:
+    """Validate `value` as an integral choice from `allowed`, returning it as plain `int`.
+
+    A bare `require_one_of` membership check does not catch a `float` equal
+    to an accepted value (`4.0 == 4` in Python) — verified directly that
+    this let a `float` reach a raw `cv2.error` (or, for `flood_fill`'s
+    `connectivity`, an unrelated `TypeError` from the `|` operator) instead
+    of a clear validation error. `require_integral` rejects `bool` and any
+    non-integral type first; the `int(...)` conversion then guarantees a
+    plain `int` reaches the underlying `cv2.*` call regardless of whether
+    `value` was a builtin `int` or a NumPy integer scalar.
+    """
+    require_integral(value, name)
+    value_int = int(value)  # type: ignore[arg-type]
+    require_one_of(value_int, allowed, name)
+    return value_int
+
+
 Labels = npt.NDArray[np.int32]
 """A label map: shape ``(H, W)``, dtype ``int32``. Label ``0`` is always the
 background; labels ``1..N`` are the connected foreground components."""
@@ -70,8 +89,8 @@ def connected_components(mask: Mask, connectivity: Connectivity = 8) -> tuple[in
     """
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
-    require_one_of(connectivity, _CONNECTIVITIES, "connectivity")
-    num_labels, labels = cv2.connectedComponents(mask, connectivity=connectivity)
+    connectivity_int = _require_integral_choice(connectivity, _CONNECTIVITIES, "connectivity")
+    num_labels, labels = cv2.connectedComponents(mask, connectivity=connectivity_int)
     return num_labels, cast(Labels, labels)
 
 
@@ -141,9 +160,9 @@ def connected_components_with_stats(
     """
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
-    require_one_of(connectivity, _CONNECTIVITIES, "connectivity")
+    connectivity_int = _require_integral_choice(connectivity, _CONNECTIVITIES, "connectivity")
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        mask, connectivity=connectivity
+        mask, connectivity=connectivity_int
     )
     return num_labels, cast(Labels, labels), cast(ComponentStats, stats), cast(Centroids, centroids)
 
@@ -210,7 +229,11 @@ def distance_transform(
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
     require_one_of(distance_type, tuple(_DISTANCE_TYPE_FLAGS), "distance_type")
-    resolved_mask_size = _DEFAULT_MASK_SIZE[distance_type] if mask_size is None else mask_size
+    if mask_size is None:
+        resolved_mask_size: int = _DEFAULT_MASK_SIZE[distance_type]
+    else:
+        require_integral(mask_size, "mask_size")
+        resolved_mask_size = int(mask_size)
     valid_sizes = _VALID_MASK_SIZES[distance_type]
     if resolved_mask_size not in valid_sizes:
         raise ValueError(
@@ -366,7 +389,7 @@ def flood_fill(
     channels = 1 if image.ndim == 2 else image.shape[2]
     if channels not in (1, 3):
         raise ValueError(f"image must have 1 or 3 channels, got {channels}")
-    require_one_of(connectivity, _CONNECTIVITIES, "connectivity")
+    connectivity_int = _require_integral_choice(connectivity, _CONNECTIVITIES, "connectivity")
     require_bool(fixed_range, "fixed_range")
     height, width = image.shape[:2]
     x, y = _require_seed_point(seed_point, width, height)
@@ -386,7 +409,7 @@ def flood_fill(
     # Packs the mask-fill value 255 into the flags word so the internal
     # mask comes back already {0, 255}-valued -- verified directly, no
     # separate normalization step needed.
-    flags = connectivity | (255 << 8)
+    flags = connectivity_int | (255 << 8)
     if fixed_range:
         flags |= cv2.FLOODFILL_FIXED_RANGE
 

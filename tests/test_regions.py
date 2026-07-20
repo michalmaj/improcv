@@ -76,6 +76,45 @@ def test_connected_components_rejects_invalid_connectivity() -> None:
         im.connected_components(mask, connectivity=6)  # type: ignore[arg-type]
 
 
+def test_connected_components_accepts_numpy_integer_connectivity() -> None:
+    mask = _rect_mask(2, 6, 2, 6)
+
+    n32, _ = im.connected_components(mask, connectivity=np.int32(4))  # type: ignore[arg-type]
+    n64, _ = im.connected_components(mask, connectivity=np.int64(8))  # type: ignore[arg-type]
+
+    assert n32 == 2
+    assert n64 == 2
+
+
+def test_connected_components_rejects_float_connectivity() -> None:
+    # 4.0 == 4 in Python, so a bare require_one_of membership check would
+    # silently accept it -- verified directly that this previously reached
+    # a raw cv2.error instead of a clear validation error.
+    mask = _rect_mask(2, 6, 2, 6)
+
+    with pytest.raises(TypeError, match="integer"):
+        im.connected_components(mask, connectivity=4.0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="integer"):
+        im.connected_components(mask, connectivity=np.float32(4))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="integer"):
+        im.connected_components(mask, connectivity=True)  # type: ignore[arg-type]
+
+
+def test_connected_components_with_stats_accepts_numpy_integer_connectivity() -> None:
+    mask = _rect_mask(2, 6, 2, 6)
+
+    n, *_ = im.connected_components_with_stats(mask, connectivity=np.int32(8))  # type: ignore[arg-type]
+
+    assert n == 2
+
+
+def test_connected_components_with_stats_rejects_float_connectivity() -> None:
+    mask = _rect_mask(2, 6, 2, 6)
+
+    with pytest.raises(TypeError, match="integer"):
+        im.connected_components_with_stats(mask, connectivity=4.0)  # type: ignore[arg-type]
+
+
 def test_connected_components_with_stats_reads_component_stats_by_label() -> None:
     # Two known squares. Read each component's label from a specific pixel
     # rather than assuming a fixed label numbering -- verified directly
@@ -243,6 +282,29 @@ def test_distance_transform_rejects_invalid_distance_type() -> None:
         im.distance_transform(mask, distance_type="bogus")  # type: ignore[arg-type]
 
 
+def test_distance_transform_accepts_numpy_integer_mask_size() -> None:
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[3:7, 3:7] = 255
+
+    result = im.distance_transform(mask, distance_type="l2", mask_size=np.int32(3))  # type: ignore[arg-type]
+
+    assert result.shape == mask.shape
+
+
+def test_distance_transform_rejects_float_mask_size() -> None:
+    # 3.0 == 3 in Python, so a bare membership check would silently accept
+    # it -- verified directly that this previously reached a raw cv2.error.
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[3:7, 3:7] = 255
+
+    with pytest.raises(TypeError, match="integer"):
+        im.distance_transform(mask, distance_type="l2", mask_size=3.0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="integer"):
+        im.distance_transform(mask, distance_type="l2", mask_size=np.float32(3))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="integer"):
+        im.distance_transform(mask, distance_type="l2", mask_size=True)  # type: ignore[arg-type]
+
+
 def test_flood_fill_does_not_mutate_input() -> None:
     image = np.zeros((10, 10, 3), dtype=np.uint8)
     original = image.copy()
@@ -307,6 +369,26 @@ def test_flood_fill_accepts_numpy_integer_seed_point() -> None:
     result = im.flood_fill(image, (np.int32(0), np.int32(0)), 200)  # type: ignore[arg-type]
 
     assert result.filled_count == 100
+
+
+def test_flood_fill_accepts_numpy_integer_connectivity() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    result = im.flood_fill(image, (0, 0), 200, connectivity=np.int32(8))  # type: ignore[arg-type]
+
+    assert result.filled_count == 100
+
+
+def test_flood_fill_rejects_float_connectivity() -> None:
+    # 4.0 == 4 in Python, so a bare membership check would silently accept
+    # it and reach `connectivity | (255 << 8)` -- verified directly that
+    # this previously raised an unrelated TypeError from the `|` operator.
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="integer"):
+        im.flood_fill(image, (0, 0), 200, connectivity=4.0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="integer"):
+        im.flood_fill(image, (0, 0), 200, connectivity=True)  # type: ignore[arg-type]
 
 
 def test_flood_fill_rejects_out_of_bounds_seed() -> None:
