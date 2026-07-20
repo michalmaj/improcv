@@ -9,9 +9,9 @@ import numpy as np
 import numpy.typing as npt
 
 from improcv._validation import require_dtype, require_image_ndim, require_one_of
-from improcv.types import Mask
+from improcv.types import ImageFloat32, Mask
 
-__all__ = ["connected_components", "connected_components_with_stats"]
+__all__ = ["connected_components", "connected_components_with_stats", "distance_transform"]
 
 Connectivity = Literal[4, 8]
 _CONNECTIVITIES: tuple[Connectivity, ...] = (4, 8)
@@ -130,3 +130,76 @@ def connected_components_with_stats(
         mask, connectivity=connectivity
     )
     return num_labels, cast(Labels, labels), cast(ComponentStats, stats), cast(Centroids, centroids)
+
+
+DistanceType = Literal["l1", "l2", "c"]
+_DISTANCE_TYPE_FLAGS: dict[DistanceType, int] = {
+    "l1": cv2.DIST_L1,
+    "l2": cv2.DIST_L2,
+    "c": cv2.DIST_C,
+}
+
+DistanceMaskSize = Literal[0, 3, 5]
+# Verified directly against cv2.distanceTransform on OpenCV 4.13 and 5.0
+# (identical on both): "l1"/"c" silently ignore mask_size 0 or 5, producing
+# output identical to mask_size=3 -- not an error, so this validation is
+# the only thing that prevents a caller from believing they requested a
+# precision that was never actually applied.
+_VALID_MASK_SIZES: dict[DistanceType, tuple[DistanceMaskSize, ...]] = {
+    "l2": (0, 3, 5),
+    "l1": (3,),
+    "c": (3,),
+}
+_DEFAULT_MASK_SIZE: dict[DistanceType, DistanceMaskSize] = {"l2": 5, "l1": 3, "c": 3}
+
+
+def distance_transform(
+    mask: Mask,
+    distance_type: DistanceType = "l2",
+    mask_size: DistanceMaskSize | None = None,
+) -> ImageFloat32:
+    """Compute, for every nonzero pixel, its distance to the nearest zero pixel.
+
+    Parameters
+    ----------
+    mask : np.ndarray
+        Input mask with shape ``(H, W)``, dtype ``uint8``.
+    distance_type : {"l1", "l2", "c"}, default "l2"
+        Distance metric: ``"l1"`` (city-block), ``"l2"`` (Euclidean), or
+        ``"c"`` (chessboard).
+    mask_size : {0, 3, 5} or None, default None
+        Distance-transform mask size. ``None`` resolves to a metric-specific
+        default: ``5`` for ``"l2"``, ``3`` for ``"l1"``/``"c"``. Only
+        ``"l2"`` accepts all three explicit values (``0`` selects OpenCV's
+        precise algorithm); ``"l1"``/``"c"`` accept only ``3`` — verified
+        directly that OpenCV silently produces the ``mask_size=3`` result
+        for any other value with `"l1"`/`"c"` rather than erroring, so this
+        function rejects that combination instead of silently ignoring it.
+
+    Returns
+    -------
+    np.ndarray
+        An `ImageFloat32` shaped ``(H, W)``, matching `mask`'s shape. A new
+        array; `mask` is never modified.
+
+    Raises
+    ------
+    ValueError
+        If `mask` does not have exactly 2 dimensions or is empty,
+        `distance_type` is not one of the accepted values, or `mask_size`
+        (explicit or defaulted) is not valid for the chosen `distance_type`.
+    TypeError
+        If `mask` does not have dtype ``uint8``.
+    """
+    require_image_ndim(mask, ndims=(2,))
+    require_dtype(mask, (np.uint8,))
+    require_one_of(distance_type, tuple(_DISTANCE_TYPE_FLAGS), "distance_type")
+    resolved_mask_size = _DEFAULT_MASK_SIZE[distance_type] if mask_size is None else mask_size
+    valid_sizes = _VALID_MASK_SIZES[distance_type]
+    if resolved_mask_size not in valid_sizes:
+        raise ValueError(
+            f"mask_size {resolved_mask_size} is not valid for distance_type "
+            f"{distance_type!r}; accepted values are {valid_sizes}"
+        )
+    result = cv2.distanceTransform(mask, _DISTANCE_TYPE_FLAGS[distance_type], resolved_mask_size)
+    return cast(ImageFloat32, result)
