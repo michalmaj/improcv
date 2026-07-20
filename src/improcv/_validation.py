@@ -95,6 +95,18 @@ def require_int(value: object, name: str) -> None:
         raise TypeError(f"{name} must be an int, got {type(value).__name__}")
 
 
+def require_bool(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is an actual `bool`.
+
+    OpenCV's Python bindings loosely coerce several types (including `int`
+    and even `None`) into a boolean parameter — this rejects that before it
+    reaches OpenCV, so a caller's mistake surfaces as a clear error instead
+    of silently-wrong behavior.
+    """
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool, got {type(value).__name__}")
+
+
 def require_positive_int(value: object, name: str) -> None:
     """Raise TypeError unless `value` is an int, then ValueError unless it's positive."""
     require_int(value, name)

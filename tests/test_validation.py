@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from improcv._validation import (
+    require_bool,
     require_channels,
     require_dtype,
     require_finite,
@@ -304,6 +305,22 @@ def test_require_int_rejects_bool() -> None:
 def test_require_int_rejects_float() -> None:
     with pytest.raises(TypeError, match="int"):
         require_int(1.5, "x")
+
+
+def test_require_bool_accepts_bool() -> None:
+    require_bool(True, "closed")
+    require_bool(False, "closed")
+
+
+def test_require_bool_rejects_non_bool() -> None:
+    # OpenCV's own cv2.approxPolyDP loosely coerces 0/1/None for a bool
+    # parameter — verified directly — so this must reject before that.
+    with pytest.raises(TypeError, match="bool"):
+        require_bool(1, "closed")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="bool"):
+        require_bool(None, "closed")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="bool"):
+        require_bool("yes", "closed")  # type: ignore[arg-type]
 
 
 def test_require_non_negative_int_accepts_zero_and_positive() -> None:

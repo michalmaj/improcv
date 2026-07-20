@@ -23,6 +23,14 @@ except ModuleNotFoundError as _exc:
     ) from _exc
 
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
+from improcv.contours import (
+    approx_poly_dp,
+    bounding_boxes,
+    convex_hull,
+    find_contours,
+    min_area_rect,
+    sort_contours,
+)
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.filters import (
     bilateral_filter,
@@ -75,18 +83,22 @@ __all__ = [
     "adjust_contrast",
     "alpha_blend",
     "apply_lut",
+    "approx_poly_dp",
     "auto_canny",
     "bgr_to_rgb",
     "bilateral_filter",
     "bitwise_and",
     "bitwise_or",
     "blackhat",
+    "bounding_boxes",
     "center_crop",
     "clahe",
+    "convex_hull",
     "crop",
     "dilate",
     "ensure_gray",
     "erode",
+    "find_contours",
     "flip",
     "gamma_correction",
     "gaussian_blur",
@@ -96,6 +108,7 @@ __all__ = [
     "invert",
     "laplacian_edge",
     "median_blur",
+    "min_area_rect",
     "morph_close",
     "morph_gradient",
     "morph_open",
@@ -105,6 +118,7 @@ __all__ = [
     "rotate",
     "rotate_bound",
     "sobel_edge",
+    "sort_contours",
     "threshold",
     "to_hsv",
     "to_lab",
