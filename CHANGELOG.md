@@ -29,6 +29,9 @@ carries a working `0.1.0a1` version number for local development.
 - `improcv.types`: `Image`, `ImageU8`, `Mask`, `TransformMatrix` type aliases.
 - Optional extras `cv`, `cv-headless`, `cv-contrib`, `cv-contrib-headless` for installing an
   OpenCV distribution alongside improcv.
+- Contours: `find_contours`, `sort_contours`, `bounding_boxes`, `convex_hull`, `approx_poly_dp`,
+  `min_area_rect`.
+- `improcv.contours`: `Contour`, `Hierarchy`, `BoundingBox`, `RotatedRect` types.
 
 ### Fixed
 - `adjust_brightness`/`adjust_contrast`: no longer reflect negative results back to positive via
