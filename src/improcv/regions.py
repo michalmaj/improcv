@@ -272,6 +272,18 @@ def _resolve_channel_values(
         else:
             require_finite(value, name)
         return (float(value),) * channels
+    if isinstance(value, (str, bytes, bytearray, memoryview)):
+        # These are technically iterable (bytes/bytearray/memoryview yield
+        # plain ints; str yields single-character strings), so without this
+        # explicit rejection a bytes/bytearray value of the right length
+        # would silently pass through the length/finiteness checks below as
+        # if it were a genuine sequence of numbers -- verified directly that
+        # b"x" (length 1) filled a grayscale image with 120 (ord("x")), no
+        # error at all.
+        raise TypeError(
+            f"{name} must be a real number or a sequence of real numbers, "
+            f"got {type(value).__name__}"
+        )
     try:
         # `value` is a Sequence at this point (the numbers.Real case already
         # returned above), but pyright can't narrow numbers.Real exclusion

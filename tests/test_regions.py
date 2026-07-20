@@ -412,6 +412,42 @@ def test_flood_fill_rejects_wrong_new_value_element_count() -> None:
         im.flood_fill(image, (0, 0), (255, 0))  # type: ignore[arg-type]
 
 
+def test_flood_fill_rejects_bytes_new_value() -> None:
+    # bytes/bytearray iterate to plain ints (b"x" -> 120), so without an
+    # explicit rejection a bytes value of the right length would silently
+    # pass through as if it were a sequence of numbers -- verified directly
+    # that this previously filled the image with 120, no error at all.
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="new_value"):
+        im.flood_fill(image, (0, 0), b"x")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="new_value"):
+        im.flood_fill(image, (0, 0), bytearray(b"x"))  # type: ignore[arg-type]
+
+
+def test_flood_fill_rejects_str_new_value() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="new_value"):
+        im.flood_fill(image, (0, 0), "1")  # type: ignore[arg-type]
+
+
+def test_flood_fill_rejects_memoryview_new_value() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="new_value"):
+        im.flood_fill(image, (0, 0), memoryview(b"x"))  # type: ignore[arg-type]
+
+
+def test_flood_fill_rejects_bytes_lo_diff_and_up_diff() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="lo_diff"):
+        im.flood_fill(image, (0, 0), 200, lo_diff=b"x")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="up_diff"):
+        im.flood_fill(image, (0, 0), 200, up_diff=b"x")  # type: ignore[arg-type]
+
+
 def test_flood_fill_rejects_out_of_range_new_value_for_uint8() -> None:
     image = np.zeros((10, 10), dtype=np.uint8)
 
