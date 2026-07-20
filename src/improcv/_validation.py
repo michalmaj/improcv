@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import numbers
 from collections.abc import Collection
+from typing import cast
 
 import numpy as np
 
@@ -39,11 +40,30 @@ def require_real_number(value: object, name: str) -> None:
         raise TypeError(f"{name} must be a real number, got {type(value).__name__}")
 
 
+def _safe_float(value: numbers.Real) -> float:
+    """Convert `value` to float, treating an unconvertible magnitude as infinity.
+
+    `float(value)` raises a raw `OverflowError` for a Python `int` too huge
+    to represent as a float (e.g. ``10**400``) — verified directly. Such a
+    value is not representable as a finite float either way, so this
+    treats it the same as an already-infinite value rather than letting
+    the raw `OverflowError` propagate past validation.
+    """
+    try:
+        return float(value)
+    except OverflowError:
+        # Only a Python int (arbitrary precision) can overflow float() in
+        # practice; the cast is purely to satisfy Pyright (numbers.Real
+        # doesn't support comparison operators reliably per typeshed) and
+        # has no runtime effect.
+        return math.inf if cast(int, value) > 0 else -math.inf
+
+
 def _is_nan_or_inf(value: numbers.Real) -> bool:
-    # float(value) normalizes any numbers.Real (including NumPy scalar
-    # types like np.float32, which math.isnan/math.isinf don't accept
-    # directly on some platforms) before checking finiteness.
-    return not math.isfinite(float(value))
+    # _safe_float normalizes any numbers.Real (including NumPy scalar types
+    # like np.float32, which math.isnan/math.isinf don't accept directly on
+    # some platforms) before checking finiteness.
+    return not math.isfinite(_safe_float(value))
 
 
 def require_positive(value: object, name: str) -> None:
@@ -239,7 +259,7 @@ def require_range(value: object, low: float, high: float, name: str) -> None:
     `low <= value <= high`."""
     require_real_number(value, name)
     assert isinstance(value, numbers.Real)  # narrows for the type checker
-    if not low <= float(value) <= high:
+    if not low <= _safe_float(value) <= high:
         raise ValueError(f"{name} must be between {low} and {high}, got {value}")
 
 
@@ -256,7 +276,7 @@ def require_fits_dtype(value: object, dtype: np.dtype | type, name: str) -> None
     assert isinstance(value, numbers.Real)  # narrows for the type checker
     if np.issubdtype(dtype, np.integer):
         info = np.iinfo(dtype)
-        if not info.min <= float(value) <= info.max:
+        if not info.min <= _safe_float(value) <= info.max:
             raise ValueError(
                 f"{name} must fit within the range of {np.dtype(dtype).name} "
                 f"([{info.min}, {info.max}]), got {value}"
