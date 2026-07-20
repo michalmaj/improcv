@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 import improcv as im
+from improcv.contours import BoundingBox
 
 
 def _rect_mask(y0: int, y1: int, x0: int, x1: int, shape: tuple[int, int] = (20, 20)) -> np.ndarray:
@@ -124,3 +125,64 @@ def test_find_contours_rejects_invalid_approximation() -> None:
 
     with pytest.raises(ValueError, match="approximation"):
         im.find_contours(mask, approximation="bogus")  # type: ignore[arg-type]
+
+
+def _contour(points: list[list[int]]) -> np.ndarray:
+    return np.array(points, dtype=np.int32).reshape(-1, 1, 2)
+
+
+# A verified-exact rectangle contour: cv2.boundingRect gives (3, 5, 7, 10).
+_RECT_CONTOUR = _contour([[3, 5], [3, 14], [9, 14], [9, 5]])
+
+
+def test_bounding_boxes_computes_expected_box() -> None:
+    result = im.bounding_boxes([_RECT_CONTOUR])
+
+    assert result == [BoundingBox(3, 5, 7, 10)]
+
+
+def test_bounding_boxes_accepts_empty_sequence() -> None:
+    assert im.bounding_boxes([]) == []
+    assert im.bounding_boxes(()) == []
+
+
+def test_bounding_boxes_accepts_raw_cv2_findcontours_tuple_directly() -> None:
+    mask = _rect_mask(5, 15, 3, 10)
+    raw_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    result = im.bounding_boxes(raw_contours)  # type: ignore[arg-type]
+
+    assert result == [BoundingBox(3, 5, 7, 10)]
+
+
+def test_bounding_boxes_accepts_zero_point_contour() -> None:
+    # cv2.boundingRect on a 0-point contour returns (0, 0, 0, 0) rather than
+    # erroring — verified directly — so bounding_boxes must not reject it.
+    empty_contour = np.zeros((0, 1, 2), dtype=np.int32)
+
+    result = im.bounding_boxes([empty_contour])
+
+    assert result == [BoundingBox(0, 0, 0, 0)]
+
+
+def test_bounding_boxes_accepts_non_contiguous_contour() -> None:
+    non_contiguous = _RECT_CONTOUR[::-1]
+    assert not non_contiguous.flags["C_CONTIGUOUS"]
+
+    result = im.bounding_boxes([non_contiguous])
+
+    assert result == [BoundingBox(3, 5, 7, 10)]
+
+
+def test_bounding_boxes_rejects_non_int32_dtype() -> None:
+    bad_contour = _RECT_CONTOUR.astype(np.float32)
+
+    with pytest.raises(TypeError, match="int32"):
+        im.bounding_boxes([bad_contour])  # type: ignore[arg-type]
+
+
+def test_bounding_boxes_rejects_wrong_shape() -> None:
+    bad_contour = np.zeros((4, 2), dtype=np.int32)
+
+    with pytest.raises(ValueError, match=r"\(N, 1, 2\)"):
+        im.bounding_boxes([bad_contour])  # type: ignore[arg-type]

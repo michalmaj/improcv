@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, NamedTuple, cast
 
 import cv2
@@ -11,7 +12,7 @@ import numpy.typing as npt
 from improcv._validation import require_dtype, require_image_ndim, require_one_of
 from improcv.types import Mask
 
-__all__ = ["find_contours"]
+__all__ = ["find_contours", "bounding_boxes"]
 
 Contour = npt.NDArray[np.int32]
 """A single contour: shape ``(N, 1, 2)``, dtype ``int32`` — the exact shape and
@@ -67,6 +68,25 @@ _APPROX_METHOD_FLAGS: dict[ApproxMethod, int] = {
     "tc89_l1": cv2.CHAIN_APPROX_TC89_L1,
     "tc89_kcos": cv2.CHAIN_APPROX_TC89_KCOS,
 }
+
+
+def _require_contour(contour: object, min_points: int, name: str = "contour") -> None:
+    """Raise TypeError/ValueError unless `contour` is a valid `Contour` with `min_points` points.
+
+    Checks, in order: `contour` is an `np.ndarray`, has dtype `int32`, has
+    shape `(N, 1, 2)`, and `N >= min_points`. Does not check C-contiguity:
+    `cv2.boundingRect`/`convexHull`/`approxPolyDP`/`minAreaRect` all accept a
+    non-contiguous `(N, 1, 2)` int32 array directly (verified), so no
+    contiguity check or implicit copy is made here.
+    """
+    if not isinstance(contour, np.ndarray):
+        raise TypeError(f"{name} must be a numpy.ndarray, got {type(contour).__name__}")
+    if contour.dtype != np.int32:
+        raise TypeError(f"{name} must have dtype int32, got {contour.dtype}")
+    if contour.ndim != 3 or contour.shape[1:] != (1, 2):
+        raise ValueError(f"{name} must have shape (N, 1, 2), got {contour.shape}")
+    if contour.shape[0] < min_points:
+        raise ValueError(f"{name} must have at least {min_points} point(s), got {contour.shape[0]}")
 
 
 def find_contours(
@@ -132,3 +152,34 @@ def find_contours(
     # cv2's stubs type contours as the loose `list[MatLike]`; cv2.findContours
     # always produces int32 (N, 1, 2) arrays in practice.
     return cast(list[Contour], list(contours)), hierarchy
+
+
+def bounding_boxes(contours: Sequence[Contour]) -> list[BoundingBox]:
+    """Compute the axis-aligned bounding box of each contour.
+
+    Parameters
+    ----------
+    contours : sequence of np.ndarray
+        Each element a `Contour`. May be empty — an empty `contours` is not
+        an error and produces an empty result, matching how "no shapes
+        found" is a normal outcome in contour detection. Accepts the raw
+        tuple `cv2.findContours` itself returns directly; no `list(...)`
+        conversion is required from the caller.
+
+    Returns
+    -------
+    list of BoundingBox
+        One box per input contour, in input order.
+
+    Raises
+    ------
+    ValueError
+        If any element of `contours` does not have shape ``(N, 1, 2)``.
+    TypeError
+        If any element of `contours` is not an ``int32`` `np.ndarray`.
+    """
+    boxes = []
+    for i, contour in enumerate(contours):
+        _require_contour(contour, min_points=0, name=f"contours[{i}]")
+        boxes.append(BoundingBox(*cv2.boundingRect(contour)))
+    return boxes

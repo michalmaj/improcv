@@ -23,7 +23,7 @@ except ModuleNotFoundError as _exc:
     ) from _exc
 
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
-from improcv.contours import find_contours
+from improcv.contours import bounding_boxes, find_contours
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.filters import (
     bilateral_filter,
@@ -82,6 +82,7 @@ __all__ = [
     "bitwise_and",
     "bitwise_or",
     "blackhat",
+    "bounding_boxes",
     "center_crop",
     "clahe",
     "crop",
