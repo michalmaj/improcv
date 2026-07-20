@@ -186,3 +186,96 @@ def test_bounding_boxes_rejects_wrong_shape() -> None:
 
     with pytest.raises(ValueError, match=r"\(N, 1, 2\)"):
         im.bounding_boxes([bad_contour])  # type: ignore[arg-type]
+
+
+def test_sort_contours_orders_left_to_right() -> None:
+    # Verified original cv2.findContours order for this mask: bbox (12,5,4,4)
+    # then bbox (3,5,4,4) — left-to-right must reverse that.
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[5:9, 3:7] = 255
+    mask[5:9, 12:16] = 255
+    contours, _ = im.find_contours(mask)
+
+    sorted_contours, sorted_boxes = im.sort_contours(contours, order="left-to-right")
+
+    assert sorted_boxes == [
+        BoundingBox(3, 5, 4, 4),
+        BoundingBox(12, 5, 4, 4),
+    ]
+    assert len(sorted_contours) == 2
+
+
+def test_sort_contours_right_to_left_is_reverse_of_left_to_right() -> None:
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[5:9, 3:7] = 255
+    mask[5:9, 12:16] = 255
+    contours, _ = im.find_contours(mask)
+
+    _, left_to_right = im.sort_contours(contours, order="left-to-right")
+    _, right_to_left = im.sort_contours(contours, order="right-to-left")
+
+    assert right_to_left == list(reversed(left_to_right))
+
+
+def test_sort_contours_orders_top_to_bottom() -> None:
+    # Verified original cv2.findContours order for this mask: bbox (5,12,4,4)
+    # then bbox (5,3,4,4) — top-to-bottom must reverse that.
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[3:7, 5:9] = 255
+    mask[12:16, 5:9] = 255
+    contours, _ = im.find_contours(mask)
+
+    _, sorted_boxes = im.sort_contours(contours, order="top-to-bottom")
+
+    assert sorted_boxes == [
+        BoundingBox(5, 3, 4, 4),
+        BoundingBox(5, 12, 4, 4),
+    ]
+
+
+def test_sort_contours_bottom_to_top_is_reverse_of_top_to_bottom() -> None:
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[3:7, 5:9] = 255
+    mask[12:16, 5:9] = 255
+    contours, _ = im.find_contours(mask)
+
+    _, top_to_bottom = im.sort_contours(contours, order="top-to-bottom")
+    _, bottom_to_top = im.sort_contours(contours, order="bottom-to-top")
+
+    assert bottom_to_top == list(reversed(top_to_bottom))
+
+
+def test_sort_contours_stable_sort_preserves_original_order_on_tie() -> None:
+    # Both boxes share x=3 -- a tie on the left-to-right sort key. Verified
+    # original cv2.findContours order: bbox (3,10,3,3) then bbox (3,2,3,3).
+    # A stable sort must leave that relative order unchanged.
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[2:5, 3:6] = 255
+    mask[10:13, 3:6] = 255
+    contours, _ = im.find_contours(mask)
+
+    _, sorted_boxes = im.sort_contours(contours, order="left-to-right")
+
+    assert sorted_boxes == [
+        BoundingBox(3, 10, 3, 3),
+        BoundingBox(3, 2, 3, 3),
+    ]
+
+
+def test_sort_contours_accepts_empty_sequence() -> None:
+    assert im.sort_contours([]) == ([], [])
+
+
+def test_sort_contours_accepts_raw_cv2_findcontours_tuple_directly() -> None:
+    mask = _rect_mask(5, 15, 3, 10)
+    raw_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    sorted_contours, sorted_boxes = im.sort_contours(raw_contours)  # type: ignore[arg-type]
+
+    assert sorted_boxes == [BoundingBox(3, 5, 7, 10)]
+    assert len(sorted_contours) == 1
+
+
+def test_sort_contours_rejects_invalid_order() -> None:
+    with pytest.raises(ValueError, match="order"):
+        im.sort_contours([_RECT_CONTOUR], order="diagonal")  # type: ignore[arg-type]

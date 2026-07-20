@@ -12,7 +12,7 @@ import numpy.typing as npt
 from improcv._validation import require_dtype, require_image_ndim, require_one_of
 from improcv.types import Mask
 
-__all__ = ["find_contours", "bounding_boxes"]
+__all__ = ["find_contours", "bounding_boxes", "sort_contours"]
 
 Contour = npt.NDArray[np.int32]
 """A single contour: shape ``(N, 1, 2)``, dtype ``int32`` — the exact shape and
@@ -183,3 +183,60 @@ def bounding_boxes(contours: Sequence[Contour]) -> list[BoundingBox]:
         _require_contour(contour, min_points=0, name=f"contours[{i}]")
         boxes.append(BoundingBox(*cv2.boundingRect(contour)))
     return boxes
+
+
+SortOrder = Literal["left-to-right", "right-to-left", "top-to-bottom", "bottom-to-top"]
+_SORT_ORDERS: tuple[SortOrder, ...] = (
+    "left-to-right",
+    "right-to-left",
+    "top-to-bottom",
+    "bottom-to-top",
+)
+
+
+def sort_contours(
+    contours: Sequence[Contour],
+    order: SortOrder = "left-to-right",
+) -> tuple[list[Contour], list[BoundingBox]]:
+    """Sort contours by the position of their bounding box.
+
+    Parameters
+    ----------
+    contours : sequence of np.ndarray
+        Each element a `Contour`. May be empty — ``sort_contours([])``
+        returns ``([], [])`` rather than raising, matching `bounding_boxes`.
+    order : {"left-to-right", "right-to-left", "top-to-bottom", "bottom-to-top"}
+        Sort key and direction: horizontal orders sort by each box's `x`,
+        vertical orders by `y`. Default ``"left-to-right"``.
+
+    Returns
+    -------
+    sorted_contours : list of np.ndarray
+    sorted_boxes : list of BoundingBox
+        Parallel lists: ``sorted_boxes[i]`` is `sorted_contours[i]`'s
+        bounding box, avoiding a second bounding-box pass for the caller.
+
+    Notes
+    -----
+    Uses Python's stable sort: contours whose sort key (`x` or `y`) is
+    exactly equal keep their original relative order — no secondary
+    tie-break key is applied.
+
+    Raises
+    ------
+    ValueError
+        If `order` is not one of the accepted values, or any element of
+        `contours` does not have shape ``(N, 1, 2)``.
+    TypeError
+        If any element of `contours` is not an ``int32`` `np.ndarray`.
+    """
+    require_one_of(order, _SORT_ORDERS, "order")
+    boxes = bounding_boxes(contours)
+    paired = list(zip(contours, boxes, strict=True))
+    if order in ("left-to-right", "right-to-left"):
+        paired.sort(key=lambda pair: pair[1].x, reverse=order == "right-to-left")
+    else:
+        paired.sort(key=lambda pair: pair[1].y, reverse=order == "bottom-to-top")
+    sorted_contours = [pair[0] for pair in paired]
+    sorted_boxes = [pair[1] for pair in paired]
+    return sorted_contours, sorted_boxes
