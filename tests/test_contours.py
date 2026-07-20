@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 import improcv as im
-from improcv.contours import BoundingBox
+from improcv.contours import BoundingBox, RotatedRect
 
 
 def _rect_mask(y0: int, y1: int, x0: int, x1: int, shape: tuple[int, int] = (20, 20)) -> np.ndarray:
@@ -418,3 +418,55 @@ def test_approx_poly_dp_does_not_mutate_input() -> None:
     im.approx_poly_dp(_RECT_CONTOUR, epsilon=1.0)
 
     np.testing.assert_array_equal(_RECT_CONTOUR, original)
+
+
+def test_min_area_rect_area_matches_contour_area_via_box_points() -> None:
+    # Verified directly: cv2.contourArea(_RECT_CONTOUR) == 54.0, and the
+    # rotated rect's box points reproduce that same area (a tolerance check,
+    # not one hardcoded angle/dimension-order combination, since OpenCV's
+    # angle/axis convention for a near-degenerate rect is not obviously
+    # unique).
+    rect = im.min_area_rect(_RECT_CONTOUR)
+
+    box_points = cv2.boxPoints(rect)
+
+    contour_area = cv2.contourArea(_RECT_CONTOUR)
+    box_area = cv2.contourArea(box_points)
+    assert abs(box_area - contour_area) < 1e-6
+
+
+def test_min_area_rect_returns_named_tuple_with_working_field_access() -> None:
+    rect = im.min_area_rect(_RECT_CONTOUR)
+
+    assert isinstance(rect, RotatedRect)
+    cx, cy = rect.center
+    width, height = rect.size
+    assert isinstance(rect.angle, float)
+    assert isinstance(cx, float) and isinstance(cy, float)
+    assert isinstance(width, float) and isinstance(height, float)
+
+
+def test_min_area_rect_accepts_empty_contour() -> None:
+    # Unlike convex_hull/approx_poly_dp, cv2.minAreaRect handles a 0-point
+    # contour gracefully -- verified directly: ((0.0, 0.0), (0.0, 0.0), -90.0)
+    # -- so min_area_rect must not reject it.
+    empty_contour = np.zeros((0, 1, 2), dtype=np.int32)
+
+    rect = im.min_area_rect(empty_contour)
+
+    assert rect.center == (0.0, 0.0)
+    assert rect.size == (0.0, 0.0)
+
+
+def test_min_area_rect_rejects_non_int32_dtype() -> None:
+    bad_contour = _RECT_CONTOUR.astype(np.float32)
+
+    with pytest.raises(TypeError, match="int32"):
+        im.min_area_rect(bad_contour)  # type: ignore[arg-type]
+
+
+def test_min_area_rect_rejects_wrong_shape() -> None:
+    bad_contour = np.zeros((4, 2), dtype=np.int32)
+
+    with pytest.raises(ValueError, match=r"\(N, 1, 2\)"):
+        im.min_area_rect(bad_contour)  # type: ignore[arg-type]

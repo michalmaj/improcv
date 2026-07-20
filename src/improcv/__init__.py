@@ -28,6 +28,7 @@ from improcv.contours import (
     bounding_boxes,
     convex_hull,
     find_contours,
+    min_area_rect,
     sort_contours,
 )
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
@@ -107,6 +108,7 @@ __all__ = [
     "invert",
     "laplacian_edge",
     "median_blur",
+    "min_area_rect",
     "morph_close",
     "morph_gradient",
     "morph_open",

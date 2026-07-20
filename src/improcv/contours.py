@@ -18,7 +18,14 @@ from improcv._validation import (
 )
 from improcv.types import Mask
 
-__all__ = ["find_contours", "bounding_boxes", "sort_contours", "convex_hull", "approx_poly_dp"]
+__all__ = [
+    "find_contours",
+    "bounding_boxes",
+    "sort_contours",
+    "convex_hull",
+    "approx_poly_dp",
+    "min_area_rect",
+]
 
 Contour = npt.NDArray[np.int32]
 """A single contour: shape ``(N, 1, 2)``, dtype ``int32`` — the exact shape and
@@ -317,3 +324,38 @@ def approx_poly_dp(contour: Contour, epsilon: float, closed: bool = True) -> Con
     require_non_negative(epsilon, "epsilon")
     require_bool(closed, "closed")
     return cast(Contour, cv2.approxPolyDP(contour, epsilon, closed))
+
+
+def min_area_rect(contour: Contour) -> RotatedRect:
+    """Compute the minimum-area rotated bounding rectangle of a contour.
+
+    Parameters
+    ----------
+    contour : np.ndarray
+        A `Contour`. Unlike `convex_hull`/`approx_poly_dp`, a 0-point contour
+        is accepted: `cv2.minAreaRect` handles it gracefully, returning a
+        well-defined degenerate rectangle rather than `None` or an error
+        (verified directly).
+
+    Returns
+    -------
+    RotatedRect
+        ``(center, size, angle)`` — usable directly as the argument to
+        `cv2.boxPoints` (verified).
+
+    Raises
+    ------
+    ValueError
+        If `contour` does not have shape ``(N, 1, 2)``.
+    TypeError
+        If `contour` is not an ``int32`` `np.ndarray`.
+    """
+    _require_contour(contour, min_points=0)
+    # cv2's stubs type minAreaRect's return as (Point2f, Size2f, float), not
+    # plain tuples of float; RotatedRect's fields behave identically to
+    # those at runtime (verified: cv2.boxPoints accepts a RotatedRect built
+    # this way exactly as it accepts the raw tuple).
+    center, size, angle = cast(
+        tuple[tuple[float, float], tuple[float, float], float], cv2.minAreaRect(contour)
+    )
+    return RotatedRect(center, size, angle)
