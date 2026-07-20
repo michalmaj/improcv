@@ -26,6 +26,12 @@ __all__ = [
     "connected_components_with_stats",
     "distance_transform",
     "flood_fill",
+    "Connectivity",
+    "Labels",
+    "ComponentStats",
+    "Centroids",
+    "DistanceType",
+    "DistanceMaskSize",
     "FloodFillResult",
 ]
 

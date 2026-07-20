@@ -534,3 +534,22 @@ def test_flood_fill_rejects_four_channel_image() -> None:
 
     with pytest.raises(ValueError, match="channels"):
         im.flood_fill(image, (0, 0), (255, 0, 0, 0))  # type: ignore[arg-type]
+
+
+def test_region_types_are_in_module_all() -> None:
+    # regions.__all__ must list every public type, not just the four
+    # functions -- the same lesson already applied once to __init__.py's
+    # incremental exports during the contours slice.
+    import improcv.regions as regions_module
+
+    for name in (
+        "Connectivity",
+        "Labels",
+        "ComponentStats",
+        "Centroids",
+        "DistanceType",
+        "DistanceMaskSize",
+        "FloodFillResult",
+    ):
+        assert name in regions_module.__all__
+        assert hasattr(regions_module, name)
