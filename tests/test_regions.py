@@ -74,3 +74,87 @@ def test_connected_components_rejects_invalid_connectivity() -> None:
 
     with pytest.raises(ValueError, match="connectivity"):
         im.connected_components(mask, connectivity=6)  # type: ignore[arg-type]
+
+
+def test_connected_components_with_stats_reads_component_stats_by_label() -> None:
+    # Two known squares. Read each component's label from a specific pixel
+    # rather than assuming a fixed label numbering -- verified directly
+    # against cv2 that these exact stats/centroids result from this mask.
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[2:4, 2:4] = 255
+    mask[6:8, 6:8] = 255
+
+    num_labels, labels, stats, centroids = im.connected_components_with_stats(mask, connectivity=8)
+
+    assert num_labels == 3
+    assert stats.shape == (3, 5)
+    assert stats.dtype == np.int32
+    assert centroids.shape == (3, 2)
+    assert centroids.dtype == np.float64
+
+    label_a = labels[3, 3]
+    label_b = labels[7, 7]
+    np.testing.assert_array_equal(stats[label_a], [2, 2, 2, 2, 4])
+    np.testing.assert_array_equal(stats[label_b], [6, 6, 2, 2, 4])
+    np.testing.assert_allclose(centroids[label_a], [2.5, 2.5])
+    np.testing.assert_allclose(centroids[label_b], [6.5, 6.5])
+
+
+def test_connected_components_with_stats_all_black_mask() -> None:
+    # All background: stats[0] legitimately covers the whole image here --
+    # but this is a consequence of every pixel being background, not a
+    # general property of label 0 (see the mixed-mask and all-white tests).
+    mask = np.zeros((10, 10), dtype=np.uint8)
+
+    num_labels, labels, stats, centroids = im.connected_components_with_stats(mask)
+
+    assert num_labels == 1
+    np.testing.assert_array_equal(stats[0], [0, 0, 10, 10, 100])
+    np.testing.assert_allclose(centroids[0], [4.5, 4.5])
+
+
+def test_connected_components_with_stats_background_bbox_is_not_always_whole_image() -> None:
+    # Background pixels confined near one corner: background bbox must NOT
+    # be asserted as the whole image -- only as covering the specific
+    # region the background pixels actually occupy.
+    mask = np.full((10, 10), 255, dtype=np.uint8)
+    mask[0:3, 0:3] = 0  # small background patch in the corner
+
+    num_labels, labels, stats, _ = im.connected_components_with_stats(mask)
+
+    assert num_labels == 2
+    background_label = labels[0, 0]
+    x, y, w, h, area = stats[background_label]
+    assert (x, y, w, h) == (0, 0, 3, 3)
+    assert area == 9
+
+
+def test_connected_components_with_stats_all_white_mask() -> None:
+    # No background pixels at all: OpenCV returns a degenerate sentinel box
+    # and a NaN centroid for label 0 -- verified directly, identical on
+    # OpenCV 4.13 and 5.0.
+    mask = np.full((10, 10), 255, dtype=np.uint8)
+
+    num_labels, labels, stats, centroids = im.connected_components_with_stats(mask)
+
+    assert num_labels == 2
+    assert stats[0, 4] == 0  # background area is zero
+    assert np.all(np.isnan(centroids[0]))
+    foreground_label = labels[0, 0]
+    np.testing.assert_array_equal(stats[foreground_label], [0, 0, 10, 10, 100])
+
+
+def test_connected_components_with_stats_does_not_mutate_input() -> None:
+    mask = _rect_mask(2, 6, 2, 6)
+    original = mask.copy()
+
+    im.connected_components_with_stats(mask)
+
+    np.testing.assert_array_equal(mask, original)
+
+
+def test_connected_components_with_stats_rejects_non_uint8_dtype() -> None:
+    mask = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.connected_components_with_stats(mask)  # type: ignore[arg-type]
