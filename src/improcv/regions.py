@@ -2,16 +2,32 @@
 
 from __future__ import annotations
 
-from typing import Literal, cast
+import numbers
+from collections.abc import Sequence
+from typing import Literal, NamedTuple, cast
 
 import cv2
 import numpy as np
 import numpy.typing as npt
 
-from improcv._validation import require_dtype, require_image_ndim, require_one_of
-from improcv.types import ImageFloat32, Mask
+from improcv._validation import (
+    require_bool,
+    require_dtype,
+    require_finite,
+    require_image_ndim,
+    require_integral,
+    require_non_negative,
+    require_one_of,
+)
+from improcv.types import BoundingBox, Image, ImageFloat32, Mask
 
-__all__ = ["connected_components", "connected_components_with_stats", "distance_transform"]
+__all__ = [
+    "connected_components",
+    "connected_components_with_stats",
+    "distance_transform",
+    "flood_fill",
+    "FloodFillResult",
+]
 
 Connectivity = Literal[4, 8]
 _CONNECTIVITIES: tuple[Connectivity, ...] = (4, 8)
@@ -203,3 +219,185 @@ def distance_transform(
         )
     result = cv2.distanceTransform(mask, _DISTANCE_TYPE_FLAGS[distance_type], resolved_mask_size)
     return cast(ImageFloat32, result)
+
+
+class FloodFillResult(NamedTuple):
+    """Result of `flood_fill`.
+
+    `filled_count` is `cv2.floodFill`'s own return value (number of pixels
+    repainted). `image`/`mask` are always fresh, independent arrays.
+    """
+
+    filled_count: int
+    image: Image
+    mask: Mask
+    bounding_box: BoundingBox
+
+
+_FLOOD_FILL_DTYPES = (np.uint8, np.float32)
+
+
+def _resolve_channel_values(
+    value: float | Sequence[float], channels: int, name: str, *, non_negative: bool = False
+) -> tuple[float, ...]:
+    """Resolve a scalar-or-per-channel parameter to an exact `channels`-length tuple of floats."""
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be a real number or a sequence of real numbers, got bool")
+    if isinstance(value, numbers.Real):
+        if non_negative:
+            require_non_negative(value, name)
+        else:
+            require_finite(value, name)
+        return (float(value),) * channels
+    try:
+        # `value` is a Sequence at this point (the numbers.Real case already
+        # returned above), but pyright can't narrow numbers.Real exclusion
+        # from the `float | Sequence[float]` union -- verified this is
+        # exactly the case reached at runtime.
+        values = list(value)  # type: ignore[arg-type]
+    except TypeError:
+        raise TypeError(
+            f"{name} must be a real number or a sequence of real numbers, "
+            f"got {type(value).__name__}"
+        ) from None
+    if len(values) != channels:
+        raise ValueError(
+            f"{name} must have {channels} element(s) matching image's channel count, "
+            f"got {len(values)}"
+        )
+    for i, element in enumerate(values):
+        if non_negative:
+            require_non_negative(element, f"{name}[{i}]")
+        else:
+            require_finite(element, f"{name}[{i}]")
+    return tuple(float(element) for element in values)
+
+
+def _require_seed_point(
+    value: object, width: int, height: int, name: str = "seed_point"
+) -> tuple[int, int]:
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise ValueError(f"{name} must be a 2-tuple, got {value!r}")
+    x, y = value
+    require_integral(x, f"{name}[0]")
+    require_integral(y, f"{name}[1]")
+    x_int, y_int = int(x), int(y)
+    if not (0 <= x_int < width and 0 <= y_int < height):
+        raise ValueError(
+            f"{name} must be within image bounds, got ({x_int}, {y_int}) "
+            f"for a {width}x{height} image"
+        )
+    return x_int, y_int
+
+
+def flood_fill(
+    image: Image,
+    seed_point: tuple[int, int],
+    new_value: float | Sequence[float],
+    lo_diff: float | Sequence[float] = 0,
+    up_diff: float | Sequence[float] = 0,
+    connectivity: Connectivity = 4,
+    fixed_range: bool = False,
+) -> FloodFillResult:
+    """Fill a connected region of similar-colored pixels, starting from a seed point.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``, dtype ``uint8``
+        or ``float32``, 1 or 3 channels. Never modified: `cv2.floodFill`
+        itself mutates its `image` argument in place by default (verified
+        directly), but this function copies internally and fills the copy.
+    seed_point : tuple of int
+        ``(x, y)`` pixel coordinates (column, then row — matching OpenCV's
+        point convention, not ``(row, column)``) where the fill starts.
+        Accepts any `numbers.Integral`, including NumPy integer scalars
+        (e.g. `np.int32`), not just plain `int` — coordinates routinely
+        come straight out of NumPy arrays or other OpenCV results. Must be
+        within `image`'s bounds.
+    new_value : float or sequence of float
+        Fill color. A scalar broadcasts to every channel; a sequence must
+        have exactly as many elements as `image` has channels. For a
+        ``uint8`` `image`, every element must be in ``[0, 255]`` — verified
+        directly that `cv2.floodFill` itself silently saturates an
+        out-of-range value instead of raising.
+    lo_diff, up_diff : float or sequence of float, default 0
+        Maximum lower/upper brightness/color difference between a
+        candidate pixel and its comparison pixel (see `fixed_range`) still
+        considered part of the region. Same scalar/sequence convention as
+        `new_value`; must be non-negative.
+    connectivity : {4, 8}, default 4
+        Pixel connectivity. Defaults to 4, matching `cv2.floodFill`'s own
+        conventional default (unlike `connected_components`, which
+        defaults to 8 — each function keeps its own underlying OpenCV
+        call's conventional default).
+    fixed_range : bool, default False
+        If ``False`` ("floating range"), each candidate pixel is compared
+        to its already-filled neighbor. If ``True`` ("fixed range"), every
+        candidate is compared to the seed pixel's original value instead —
+        verified directly that these produce genuinely different fill
+        regions on the same input.
+
+    Returns
+    -------
+    FloodFillResult
+        ``filled_count`` (number of pixels repainted), ``image`` (a new,
+        filled copy), ``mask`` (a new ``uint8`` ``{0, 255}`` array shaped
+        like `image`'s spatial dimensions, marking the filled region),
+        ``bounding_box`` (the filled region's bounding box).
+
+    Raises
+    ------
+    ValueError
+        If `image` is not 2D/3D or is empty, does not have 1 or 3 channels,
+        `seed_point` is out of bounds, `new_value`/`lo_diff`/`up_diff` has
+        the wrong element count for `image`'s channels or contains a
+        non-finite value, `lo_diff`/`up_diff` contains a negative value, or
+        (for a ``uint8`` `image`) `new_value` contains a value outside
+        ``[0, 255]``.
+    TypeError
+        If `image` does not have dtype ``uint8`` or ``float32``,
+        `seed_point` is not a 2-tuple of `numbers.Integral` (rejecting
+        `bool`), or `new_value`/`lo_diff`/`up_diff` is not a real number or
+        a sequence of real numbers.
+    """
+    require_image_ndim(image, ndims=(2, 3))
+    require_dtype(image, _FLOOD_FILL_DTYPES)
+    channels = 1 if image.ndim == 2 else image.shape[2]
+    if channels not in (1, 3):
+        raise ValueError(f"image must have 1 or 3 channels, got {channels}")
+    require_one_of(connectivity, _CONNECTIVITIES, "connectivity")
+    require_bool(fixed_range, "fixed_range")
+    height, width = image.shape[:2]
+    x, y = _require_seed_point(seed_point, width, height)
+
+    new_value_resolved = _resolve_channel_values(new_value, channels, "new_value")
+    if image.dtype == np.uint8:
+        for i, element in enumerate(new_value_resolved):
+            if not (0 <= element <= 255):
+                raise ValueError(
+                    f"new_value[{i}] must be in [0, 255] for a uint8 image, got {element}"
+                )
+    lo_diff_resolved = _resolve_channel_values(lo_diff, channels, "lo_diff", non_negative=True)
+    up_diff_resolved = _resolve_channel_values(up_diff, channels, "up_diff", non_negative=True)
+
+    image_copy = image.copy()
+    internal_mask = np.zeros((height + 2, width + 2), dtype=np.uint8)
+    # Packs the mask-fill value 255 into the flags word so the internal
+    # mask comes back already {0, 255}-valued -- verified directly, no
+    # separate normalization step needed.
+    flags = connectivity | (255 << 8)
+    if fixed_range:
+        flags |= cv2.FLOODFILL_FIXED_RANGE
+
+    new_value_cv2 = new_value_resolved[0] if channels == 1 else new_value_resolved
+    lo_diff_cv2 = lo_diff_resolved[0] if channels == 1 else lo_diff_resolved
+    up_diff_cv2 = up_diff_resolved[0] if channels == 1 else up_diff_resolved
+
+    filled_count, _, mask_out, rect = cv2.floodFill(
+        image_copy, internal_mask, (x, y), new_value_cv2, lo_diff_cv2, up_diff_cv2, flags
+    )
+    # mask_out[1:-1, 1:-1] is a view into mask_out (same reasoning as
+    # find_contours' Hierarchy) -- .copy() guarantees a fresh array.
+    mask_result = cast(Mask, mask_out[1:-1, 1:-1].copy())
+    return FloodFillResult(filled_count, image_copy, mask_result, BoundingBox(*rect))

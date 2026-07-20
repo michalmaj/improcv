@@ -73,10 +73,12 @@ from improcv.regions import (
     Connectivity,
     DistanceMaskSize,
     DistanceType,
+    FloodFillResult,
     Labels,
     connected_components,
     connected_components_with_stats,
     distance_transform,
+    flood_fill,
 )
 from improcv.transforms import (
     center_crop,
@@ -101,6 +103,7 @@ __all__ = [
     "Contour",
     "DistanceMaskSize",
     "DistanceType",
+    "FloodFillResult",
     "Hierarchy",
     "Image",
     "ImageFloat32",
@@ -135,6 +138,7 @@ __all__ = [
     "erode",
     "find_contours",
     "flip",
+    "flood_fill",
     "gamma_correction",
     "gaussian_blur",
     "harris_corner",

@@ -241,3 +241,118 @@ def test_distance_transform_rejects_invalid_distance_type() -> None:
 
     with pytest.raises(ValueError, match="distance_type"):
         im.distance_transform(mask, distance_type="bogus")  # type: ignore[arg-type]
+
+
+def test_flood_fill_does_not_mutate_input() -> None:
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+    original = image.copy()
+
+    im.flood_fill(image, (0, 0), (255, 0, 0))
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_flood_fill_grayscale_scalar_values() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    result = im.flood_fill(image, (0, 0), 200)
+
+    assert result.filled_count == 100
+    assert result.image[0, 0] == 200
+    assert result.mask.shape == (10, 10)
+    assert set(np.unique(result.mask).tolist()) <= {0, 255}
+    assert result.bounding_box == im.BoundingBox(0, 0, 10, 10)
+
+
+def test_flood_fill_bgr_per_channel_values() -> None:
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    result = im.flood_fill(image, (0, 0), (10, 20, 30))
+
+    assert result.filled_count == 100
+    np.testing.assert_array_equal(result.image[0, 0], [10, 20, 30])
+
+
+def test_flood_fill_result_invariants() -> None:
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+    image[:, 5:] = 100  # confine the fill to the left half
+
+    result = im.flood_fill(image, (0, 0), (255, 0, 0))
+
+    assert result.filled_count == np.count_nonzero(result.mask)
+    assert set(np.unique(result.mask).tolist()) <= {0, 255}
+
+
+def test_flood_fill_floating_range_vs_fixed_range_differ() -> None:
+    # A step-5 gradient with loDiff=upDiff=10: floating range keeps
+    # flooding because each consecutive step is within the diff, but fixed
+    # range compares every pixel back to the seed's original value and
+    # stops once the cumulative difference exceeds 10 -- verified directly,
+    # identical on OpenCV 4.13 and 5.0 (floating fills all 20 pixels, fixed
+    # fills only 3).
+    image = np.zeros((1, 20), dtype=np.uint8)
+    for i in range(20):
+        image[0, i] = i * 5
+
+    floating = im.flood_fill(image, (0, 0), 255, lo_diff=10, up_diff=10, fixed_range=False)
+    fixed = im.flood_fill(image, (0, 0), 255, lo_diff=10, up_diff=10, fixed_range=True)
+
+    assert floating.filled_count == 20
+    assert fixed.filled_count == 3
+
+
+def test_flood_fill_accepts_numpy_integer_seed_point() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    result = im.flood_fill(image, (np.int32(0), np.int32(0)), 200)  # type: ignore[arg-type]
+
+    assert result.filled_count == 100
+
+
+def test_flood_fill_rejects_out_of_bounds_seed() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="seed_point"):
+        im.flood_fill(image, (100, 100), 200)
+
+
+def test_flood_fill_rejects_bool_seed_point_element() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="integer"):
+        im.flood_fill(image, (True, 0), 200)  # type: ignore[arg-type]
+
+
+def test_flood_fill_rejects_wrong_new_value_element_count() -> None:
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="new_value"):
+        im.flood_fill(image, (0, 0), (255, 0))  # type: ignore[arg-type]
+
+
+def test_flood_fill_rejects_out_of_range_new_value_for_uint8() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="new_value"):
+        im.flood_fill(image, (0, 0), 300)
+
+
+def test_flood_fill_rejects_negative_diff() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        im.flood_fill(image, (0, 0), 200, lo_diff=-1)
+
+
+def test_flood_fill_rejects_unsupported_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.float64)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.flood_fill(image, (0, 0), 200.0)  # type: ignore[arg-type]
+
+
+def test_flood_fill_rejects_four_channel_image() -> None:
+    image = np.zeros((10, 10, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="channels"):
+        im.flood_fill(image, (0, 0), (255, 0, 0, 0))  # type: ignore[arg-type]
