@@ -409,9 +409,30 @@ def flood_fill(
     new_value_resolved = _resolve_channel_values(new_value, channels, "new_value")
     if image.dtype == np.uint8:
         for i, element in enumerate(new_value_resolved):
+            # cv2.floodFill silently rounds a fractional new_value instead
+            # of rejecting it (0.5 -> 0, 254.5 -> 254) -- verified directly.
+            if not float(element).is_integer():
+                raise ValueError(
+                    f"new_value[{i}] must be an integer value for a uint8 image, got {element}"
+                )
             if not (0 <= element <= 255):
                 raise ValueError(
                     f"new_value[{i}] must be in [0, 255] for a uint8 image, got {element}"
+                )
+    elif image.dtype == np.float32:
+        for i, element in enumerate(new_value_resolved):
+            # A finite Python float can still overflow float32 (e.g. 3.5e38
+            # exceeds float32's max of ~3.4028235e38) -- cv2.floodFill
+            # silently produces inf in the result instead of raising,
+            # verified directly. np.errstate suppresses the (expected,
+            # harmless) overflow-in-cast RuntimeWarning this check itself
+            # triggers for an out-of-range element.
+            with np.errstate(over="ignore"):
+                representable = np.isfinite(np.float32(element))
+            if not representable:
+                raise ValueError(
+                    f"new_value[{i}] must be representable as float32 "
+                    f"without overflow, got {element}"
                 )
     lo_diff_resolved = _resolve_channel_values(lo_diff, channels, "lo_diff", non_negative=True)
     up_diff_resolved = _resolve_channel_values(up_diff, channels, "up_diff", non_negative=True)

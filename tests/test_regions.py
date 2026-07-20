@@ -455,6 +455,46 @@ def test_flood_fill_rejects_out_of_range_new_value_for_uint8() -> None:
         im.flood_fill(image, (0, 0), 300)
 
 
+def test_flood_fill_accepts_integer_valued_float_new_value_for_uint8() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    result = im.flood_fill(image, (0, 0), 7.0)
+
+    assert result.image[0, 0] == 7
+
+
+def test_flood_fill_rejects_fractional_new_value_for_uint8() -> None:
+    # Verified directly: raw cv2.floodFill silently rounds a fractional
+    # new_value instead of rejecting it (0.5 -> 0, 254.5 -> 254).
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="new_value"):
+        im.flood_fill(image, (0, 0), 0.5)
+    with pytest.raises(ValueError, match="new_value"):
+        im.flood_fill(image, (0, 0), 254.5)
+    with pytest.raises(ValueError, match="new_value"):
+        im.flood_fill(image, (0, 0), 7.5)
+
+
+def test_flood_fill_accepts_float32_max_new_value() -> None:
+    image = np.zeros((10, 10), dtype=np.float32)
+    max_value = float(np.finfo(np.float32).max)
+
+    result = im.flood_fill(image, (0, 0), max_value)
+
+    assert np.isfinite(result.image[0, 0])
+
+
+def test_flood_fill_rejects_new_value_overflowing_float32() -> None:
+    # Verified directly: a finite Python float comfortably inside float64's
+    # range (3.5e38 > float32's max of ~3.4028235e38) silently produces inf
+    # in the filled result instead of raising.
+    image = np.zeros((10, 10), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="new_value"):
+        im.flood_fill(image, (0, 0), 3.5e38)
+
+
 def test_flood_fill_rejects_negative_diff() -> None:
     image = np.zeros((10, 10), dtype=np.uint8)
 
