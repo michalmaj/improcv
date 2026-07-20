@@ -470,3 +470,32 @@ def test_min_area_rect_rejects_wrong_shape() -> None:
 
     with pytest.raises(ValueError, match=r"\(N, 1, 2\)"):
         im.min_area_rect(bad_contour)  # type: ignore[arg-type]
+
+
+def test_contour_types_are_importable_from_top_level_package() -> None:
+    # The four data types must be part of the public API surface, not just
+    # the six functions -- importable directly from `improcv`, not only
+    # from `improcv.contours`.
+    import improcv
+    import improcv.contours as contours_module
+
+    assert improcv.Contour is contours_module.Contour
+    assert improcv.Hierarchy is contours_module.Hierarchy
+    assert improcv.BoundingBox is contours_module.BoundingBox
+    assert improcv.RotatedRect is contours_module.RotatedRect
+
+
+def test_sort_contours_reorders_lists_but_preserves_contour_array_identity() -> None:
+    # sort_contours must allocate new output lists, but must NOT copy the
+    # underlying contour arrays -- verified via `is` identity, not just
+    # value equality, since two different arrays can hold equal values.
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[5:9, 3:7] = 255
+    mask[5:9, 12:16] = 255
+    contours, _ = im.find_contours(mask)
+
+    sorted_contours, _ = im.sort_contours(contours, order="left-to-right")
+
+    assert sorted_contours is not contours
+    for original_contour in contours:
+        assert any(sorted_contour is original_contour for sorted_contour in sorted_contours)

@@ -31,6 +31,21 @@ image = cv2.imread("photo.jpg")
 resized = im.resize(image, width=640)
 ```
 
+Finding and sorting contours:
+
+```python
+import cv2
+import improcv as im
+
+mask = im.threshold(im.ensure_gray(image), method="otsu")
+contours, hierarchy = im.find_contours(mask, retrieval_mode="external")
+contours, boxes = im.sort_contours(contours, order="left-to-right")
+
+# `Contour` keeps OpenCV's own (N, 1, 2) int32 shape, so results pass
+# straight into any cv2.* function that expects a contour — no conversion.
+cv2.drawContours(image, contours, -1, (0, 255, 0), 2)
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor
