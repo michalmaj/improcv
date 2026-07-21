@@ -14,6 +14,7 @@ from improcv._validation import (
     require_image_ndim,
     require_one_of,
     require_positive_integral,
+    require_real_number,
     require_spatial_mask,
 )
 from improcv.types import Image, Mask
@@ -21,6 +22,7 @@ from improcv.types import Image, Mask
 __all__ = [
     "detect_and_compute",
     "match_features",
+    "match_features_ratio",
     "FeatureMethod",
     "DescriptorNorm",
     "Features",
@@ -256,6 +258,32 @@ def _require_valid_features(value: Features, name: str) -> None:
         raise ValueError(f"{name}.descriptors must contain only finite values")
 
 
+def _require_safe_l2_magnitude(query: Features, train: Features) -> None:
+    """Raise ValueError if `"l2"`-norm descriptors are too large for safe float32 L2 distance.
+
+    Only applies when `query.norm == "l2"` (SIFT). Verified directly,
+    identically on both OpenCV versions: finite but extreme `float32`
+    values (e.g. ``1e18``) overflow `BFMatcher`'s internal L2 distance
+    computation, silently producing corrupted results (zero total matches
+    from `match()`, or fewer neighbors than requested from `knnMatch()`)
+    instead of raising.
+    """
+    if query.norm != "l2":
+        return
+    descriptor_width = query.descriptors.shape[1]
+    max_abs_value = float(
+        max(
+            np.abs(query.descriptors).max(initial=0.0),
+            np.abs(train.descriptors).max(initial=0.0),
+        )
+    )
+    safe_abs_limit = math.sqrt(float(np.finfo(np.float32).max) / (4.0 * descriptor_width))
+    if max_abs_value >= safe_abs_limit:
+        raise ValueError(
+            "SIFT descriptor values are too large for safe float32 L2 distance computation"
+        )
+
+
 def match_features(
     query: Features,
     train: Features,
@@ -342,19 +370,7 @@ def match_features(
             f"{query.descriptors.shape[1]} and {train.descriptors.shape[1]}"
         )
 
-    if query.norm == "l2":
-        descriptor_width = query.descriptors.shape[1]
-        max_abs_value = float(
-            max(
-                np.abs(query.descriptors).max(initial=0.0),
-                np.abs(train.descriptors).max(initial=0.0),
-            )
-        )
-        safe_abs_limit = math.sqrt(float(np.finfo(np.float32).max) / (4.0 * descriptor_width))
-        if max_abs_value >= safe_abs_limit:
-            raise ValueError(
-                "SIFT descriptor values are too large for safe float32 L2 distance computation"
-            )
+    _require_safe_l2_magnitude(query, train)
 
     if query.descriptors.shape[0] == 0 or train.descriptors.shape[0] == 0:
         return []
@@ -390,3 +406,170 @@ def match_features(
             raise RuntimeError("BFMatcher produced a duplicate trainIdx for cross_check=True")
 
     return matches
+
+
+def match_features_ratio(
+    query: Features,
+    train: Features,
+    ratio: float = 0.75,
+) -> list[cv2.DMatch]:
+    """Match `query`'s descriptors against `train`'s using KNN and Lowe's ratio test.
+
+    For each query descriptor, compares its two nearest `train` neighbors
+    and keeps the match only if the best candidate is meaningfully closer
+    than the second-best (``best.distance < ratio * second_best.distance``)
+    -- this filters out ambiguous matches where the two best candidates are
+    nearly equidistant (likely a false positive), rather than filtering by
+    cross-matcher agreement like `match_features`'s `cross_check`.
+
+    There is no `cross_check` parameter: OpenCV's built-in `crossCheck` only
+    works for a single nearest neighbor and cannot be directly combined with
+    the two-neighbor search this function needs -- verified directly that
+    `cv2.BFMatcher(crossCheck=True).knnMatch(..., k=2)` raises a raw
+    `cv2.error` assertion on both OpenCV versions. A bidirectional
+    ratio-matching algorithm is possible in principle but out of scope
+    here; this function is one-directional (query -> train) only. There is
+    also no `k` parameter -- the ratio test is only defined for exactly two
+    neighbors, so `k=2` is fixed internally.
+
+    Parameters
+    ----------
+    query : Features
+        The descriptors to find matches for. `queryIdx` on each returned
+        `cv2.DMatch` indexes into `query.keypoints`/`query.descriptors`.
+    train : Features
+        The descriptors to search within. `trainIdx` on each returned
+        `cv2.DMatch` indexes into `train.keypoints`/`train.descriptors`.
+        Must use the same `method`/`norm` as `query`. If `train` has fewer
+        than 2 descriptors, the ratio test is undefined for every query
+        descriptor and this function returns ``[]`` without calling OpenCV
+        at all -- this is expected, not an error.
+    ratio : float, default 0.75
+        A common, more conservative choice used in practice (e.g. OpenCV's
+        own tutorials) -- not the literal value from Lowe's original paper,
+        which used ``0.8``. Must be strictly between ``0.0`` and ``1.0``.
+        ``1.0`` is rejected even though the strict ``<`` comparison would
+        still reject an exact tie between the two candidate distances: it
+        removes the intended margin of distinctiveness and so defeats the
+        point of the test, rather than genuinely disabling filtering.
+
+    Returns
+    -------
+    list of cv2.DMatch
+        Sorted by ``distance`` ascending (best match first). Lower
+        ``distance`` means a better match. A query descriptor is silently
+        excluded from the result if `train` has fewer than 2 descriptors
+        (see `train` above) or if it fails the ratio test -- both are
+        expected outcomes, not errors. `queryIdx` values in the result are
+        unique (at most one match survives per query descriptor);
+        `trainIdx` duplicates across different queries are not, since
+        there is no cross-check enforcing a one-to-one mapping on the
+        `train` side.
+
+    Raises
+    ------
+    ValueError
+        If `ratio` is not strictly between ``0.0`` and ``1.0``, `query`/
+        `train` fails its own internal contract (unrecognized `method`,
+        wrong `descriptors` dimensionality, a row count not matching its
+        keypoint count, the wrong width for its `method`, or a `norm`
+        inconsistent with its `method`), `query`/`train` are not pairwise
+        compatible (different `method`, `norm`, or descriptor width), or
+        (for ``"l2"``/SIFT descriptors) any descriptor value is too large
+        for safe ``float32`` L2 distance computation.
+    TypeError
+        If `ratio` is not a real number, `query`/`train` is not a
+        `Features`, its `keypoints` is not a `list`, any element of
+        `keypoints` is not a `cv2.KeyPoint`, its `descriptors` is not an
+        `np.ndarray`, its `method` is not a `str`, or `query`/`train` have
+        mismatched descriptor dtypes.
+    RuntimeError
+        If OpenCV's raw KNN result is internally inconsistent given
+        `train` has at least 2 descriptors: the wrong number of neighbor
+        lists overall, the wrong number of neighbors for a query, a
+        neighbor that isn't a `cv2.DMatch`, a non-finite or negative
+        `distance`, a `queryIdx` inconsistent with its position in the
+        result, an out-of-range `trainIdx`, neighbors not sorted by
+        distance, or both neighbors of one query sharing the same
+        `trainIdx`.
+    """
+    require_real_number(ratio, "ratio")
+    if not (0.0 < float(ratio) < 1.0):
+        raise ValueError(f"ratio must be strictly between 0.0 and 1.0, got {ratio}")
+
+    _require_valid_features(query, "query")
+    _require_valid_features(train, "train")
+
+    if query.method != train.method:
+        raise ValueError(
+            f"query and train must use the same method, got {query.method!r} and {train.method!r}"
+        )
+    if query.norm != train.norm:
+        raise ValueError(
+            f"query and train must use the same norm, got {query.norm!r} and {train.norm!r}"
+        )
+    if query.descriptors.dtype != train.descriptors.dtype:
+        raise TypeError(
+            f"query and train descriptors must have the same dtype, got "
+            f"{query.descriptors.dtype} and {train.descriptors.dtype}"
+        )
+    if query.descriptors.shape[1] != train.descriptors.shape[1]:
+        raise ValueError(
+            f"query and train descriptors must have the same width, got "
+            f"{query.descriptors.shape[1]} and {train.descriptors.shape[1]}"
+        )
+
+    _require_safe_l2_magnitude(query, train)
+
+    if query.descriptors.shape[0] == 0 or train.descriptors.shape[0] < 2:
+        return []
+
+    matcher = cv2.BFMatcher(_NORM_CV_TYPES[query.norm], crossCheck=False)
+    knn_matches = matcher.knnMatch(query.descriptors, train.descriptors, k=2)
+
+    num_query = query.descriptors.shape[0]
+    num_train = train.descriptors.shape[0]
+    if len(knn_matches) != num_query:
+        raise RuntimeError(
+            f"BFMatcher.knnMatch returned {len(knn_matches)} neighbor lists, expected exactly "
+            f"{num_query} (one per query descriptor)"
+        )
+
+    kept: list[cv2.DMatch] = []
+    for query_index, neighbors in enumerate(knn_matches):
+        if len(neighbors) != 2:
+            raise RuntimeError(
+                f"BFMatcher.knnMatch returned {len(neighbors)} neighbors for query descriptor "
+                f"{query_index}, expected exactly 2 (train has {num_train} >= 2 descriptors)"
+            )
+        for match in neighbors:
+            if not isinstance(match, cv2.DMatch):
+                raise RuntimeError(f"BFMatcher.knnMatch returned a non-DMatch neighbor: {match!r}")
+            if not math.isfinite(match.distance):
+                raise RuntimeError(f"BFMatcher produced a non-finite distance: {match.distance}")
+            if match.distance < 0.0:
+                raise RuntimeError(f"BFMatcher produced a negative distance: {match.distance}")
+            if match.queryIdx != query_index:
+                raise RuntimeError(
+                    f"BFMatcher returned queryIdx {match.queryIdx} for neighbor list {query_index}"
+                )
+            if not (0 <= match.trainIdx < num_train):
+                raise RuntimeError(f"BFMatcher produced an out-of-range trainIdx: {match.trainIdx}")
+
+        best, second_best = neighbors
+        if not (best.distance <= second_best.distance):
+            raise RuntimeError(
+                f"BFMatcher's neighbors for query descriptor {query_index} are not sorted "
+                "by distance"
+            )
+        if best.trainIdx == second_best.trainIdx:
+            raise RuntimeError(
+                f"BFMatcher returned the same trainIdx {best.trainIdx} for both neighbors of "
+                f"query descriptor {query_index}"
+            )
+
+        if best.distance < ratio * second_best.distance:
+            kept.append(best)
+
+    kept.sort(key=lambda match: match.distance)
+    return kept

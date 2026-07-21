@@ -50,6 +50,10 @@ carries a working `0.1.0a1` version number for local development.
   accepting two `Features` values so a caller can never pass a norm mismatched to the descriptor
   type. Raw `list[cv2.DMatch]`, sorted by distance ascending; no ratio test, KNN, FLANN, RANSAC, or
   match drawing in this slice.
+- `match_features_ratio`: KNN (`k=2`) matching filtered by Lowe's ratio test, sharing
+  `match_features`'s `Features`-contract validation and L2-magnitude guard. Same raw
+  `list[cv2.DMatch]`, sorted-by-distance return contract. Still no FLANN, RANSAC, homography, or
+  match drawing.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 

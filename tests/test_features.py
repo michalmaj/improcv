@@ -245,6 +245,21 @@ def _two_textured_images() -> tuple[np.ndarray, np.ndarray]:
     return image1, image2
 
 
+def _two_overlapping_images() -> tuple[np.ndarray, np.ndarray]:
+    # Two crops of the same underlying texture, shifted relative to each
+    # other -- unlike _two_textured_images (two fully independent noise
+    # images, which share no real correspondences), this gives ORB/SIFT
+    # genuine matching content. Verified directly that Lowe's ratio test
+    # against two independent noise images legitimately finds zero
+    # survivors (correctly rejecting coincidental NN matches as
+    # ambiguous), which would make behavioral assertions about
+    # match_features_ratio's output vacuously true.
+    base = np.random.default_rng(0).integers(0, 255, (150, 150), dtype=np.uint8)
+    image1 = base[:100, :100]
+    image2 = base[20:120, 20:120]
+    return image1, image2
+
+
 def _empty_features(method: im.FeatureMethod) -> im.Features:
     image1, image2 = _two_textured_images()
     blank = np.full((50, 50), 128, dtype=np.uint8)
@@ -597,3 +612,382 @@ def test_match_features_rejects_duplicate_train_idx_with_cross_check(
 
     with pytest.raises(RuntimeError, match="duplicate trainIdx"):
         im.match_features(query, train, cross_check=True)
+
+
+def _orb_features_with_n_descriptors(n: int) -> im.Features:
+    rng = np.random.default_rng(0)
+    descriptors = rng.integers(0, 255, (n, 32), dtype=np.uint8)
+    keypoints = [cv2.KeyPoint(float(i), float(i), 1) for i in range(n)]
+    return im.Features(method="orb", norm="hamming", keypoints=keypoints, descriptors=descriptors)
+
+
+@pytest.mark.parametrize("method", ["orb", "sift"])
+def test_match_features_ratio_matches_real_features(method: str) -> None:
+    image1, image2 = _two_overlapping_images()
+    query = im.detect_and_compute(image1, method=method)  # type: ignore[arg-type]
+    train = im.detect_and_compute(image2, method=method)  # type: ignore[arg-type]
+
+    matches = im.match_features_ratio(query, train)
+
+    assert len(matches) > 0
+    for match in matches:
+        assert 0 <= match.queryIdx < len(query.keypoints)
+        assert 0 <= match.trainIdx < len(train.keypoints)
+
+
+def test_match_features_ratio_result_is_sorted_by_distance() -> None:
+    image1, image2 = _two_overlapping_images()
+    query = im.detect_and_compute(image1, method="orb", nfeatures=2000)
+    train = im.detect_and_compute(image2, method="orb", nfeatures=2000)
+
+    matches = im.match_features_ratio(query, train)
+
+    assert len(matches) > 0
+    distances = [m.distance for m in matches]
+    assert distances == sorted(distances)
+
+
+def test_match_features_ratio_result_works_directly_with_cv2_drawMatches() -> None:
+    image1, image2 = _two_overlapping_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+
+    matches = im.match_features_ratio(query, train)
+    output = cv2.drawMatches(
+        image1,
+        query.keypoints,
+        image2,
+        train.keypoints,
+        matches,
+        None,  # type: ignore[call-overload]
+    )
+
+    assert len(matches) > 0
+    assert output.ndim == 3
+
+
+def test_match_features_ratio_default_matches_explicit_default() -> None:
+    image1, image2 = _two_overlapping_images()
+    query = im.detect_and_compute(image1, method="orb", nfeatures=2000)
+    train = im.detect_and_compute(image2, method="orb", nfeatures=2000)
+
+    default_matches = im.match_features_ratio(query, train)
+    explicit_matches = im.match_features_ratio(query, train, ratio=0.75)
+
+    default_pairs = {(m.queryIdx, m.trainIdx) for m in default_matches}
+    explicit_pairs = {(m.queryIdx, m.trainIdx) for m in explicit_matches}
+    assert len(default_pairs) > 0
+    assert default_pairs == explicit_pairs
+
+
+def test_match_features_ratio_stricter_ratio_yields_subset() -> None:
+    image1, image2 = _two_overlapping_images()
+    query = im.detect_and_compute(image1, method="orb", nfeatures=2000)
+    train = im.detect_and_compute(image2, method="orb", nfeatures=2000)
+
+    strict_matches = im.match_features_ratio(query, train, ratio=0.5)
+    loose_matches = im.match_features_ratio(query, train, ratio=0.9)
+
+    strict_pairs = {(m.queryIdx, m.trainIdx) for m in strict_matches}
+    loose_pairs = {(m.queryIdx, m.trainIdx) for m in loose_matches}
+    assert len(loose_pairs) > 0
+    assert strict_pairs <= loose_pairs
+
+
+def test_match_features_ratio_query_idx_values_are_unique() -> None:
+    image1, image2 = _two_overlapping_images()
+    query = im.detect_and_compute(image1, method="orb", nfeatures=2000)
+    train = im.detect_and_compute(image2, method="orb", nfeatures=2000)
+
+    matches = im.match_features_ratio(query, train)
+
+    assert len(matches) > 0
+    query_indices = [m.queryIdx for m in matches]
+    assert len(set(query_indices)) == len(query_indices)
+
+
+def test_match_features_ratio_does_not_mutate_descriptors() -> None:
+    image1, image2 = _two_overlapping_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+    query_before = query.descriptors.copy()
+    train_before = train.descriptors.copy()
+
+    matches = im.match_features_ratio(query, train)
+
+    assert len(matches) > 0
+    assert np.array_equal(query.descriptors, query_before)
+    assert np.array_equal(train.descriptors, train_before)
+
+
+@pytest.mark.parametrize("train_size", [0, 1])
+def test_match_features_ratio_too_small_train_returns_empty(train_size: int) -> None:
+    image1, _ = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = _orb_features_with_n_descriptors(train_size)
+
+    matches = im.match_features_ratio(query, train)
+
+    assert matches == []
+
+
+def test_match_features_ratio_empty_query_returns_empty() -> None:
+    query = _empty_features("orb")
+    _, image2 = _two_textured_images()
+    train = im.detect_and_compute(image2, method="orb")
+
+    matches = im.match_features_ratio(query, train)
+
+    assert matches == []
+
+
+def test_match_features_ratio_rejects_empty_but_incompatible_pair() -> None:
+    query = _empty_features("orb")
+    train = _empty_features("sift")
+
+    with pytest.raises(ValueError, match="method"):
+        im.match_features_ratio(query, train)
+
+
+@pytest.mark.parametrize("ratio", [0.0, 1.0, -0.1, 1.5])
+def test_match_features_ratio_rejects_out_of_range_ratio(ratio: float) -> None:
+    query, train = _orb_query_and_train()
+
+    with pytest.raises(ValueError, match="ratio"):
+        im.match_features_ratio(query, train, ratio=ratio)
+
+
+@pytest.mark.parametrize("ratio", [True, "0.75", None])
+def test_match_features_ratio_rejects_non_real_ratio(ratio: object) -> None:
+    query, train = _orb_query_and_train()
+
+    with pytest.raises(TypeError, match="ratio"):
+        im.match_features_ratio(query, train, ratio=ratio)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("ratio", [np.float32(0.75), np.float64(0.75)])
+def test_match_features_ratio_accepts_numpy_scalar_ratio(ratio: object) -> None:
+    query, train = _orb_query_and_train()
+
+    matches = im.match_features_ratio(query, train, ratio=ratio)  # type: ignore[arg-type]
+
+    assert isinstance(matches, list)
+
+
+def test_match_features_ratio_rejects_non_features_argument() -> None:
+    train = _orb_features_with_n_descriptors(5)
+
+    with pytest.raises(TypeError, match="Features"):
+        im.match_features_ratio("not features", train)  # type: ignore[arg-type]
+
+
+def test_match_features_ratio_rejects_mismatched_method() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="sift")
+
+    with pytest.raises(ValueError, match="method"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_mismatched_dtype() -> None:
+    query = _orb_features_with_n_descriptors(5)
+    train = _orb_features_with_n_descriptors(5)
+    bad_train = train._replace(descriptors=train.descriptors.astype(np.int16))
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.match_features_ratio(query, bad_train)
+
+
+def test_match_features_ratio_rejects_excessively_large_sift_descriptors() -> None:
+    query_descriptors = np.full((1, 128), 1e18, dtype=np.float32)
+    train_descriptors = np.full((2, 128), -1e18, dtype=np.float32)
+    query = im.Features(
+        method="sift", norm="l2", keypoints=[cv2.KeyPoint(0, 0, 1)], descriptors=query_descriptors
+    )
+    train = im.Features(
+        method="sift",
+        norm="l2",
+        keypoints=[cv2.KeyPoint(0, 0, 1), cv2.KeyPoint(1, 1, 1)],
+        descriptors=train_descriptors,
+    )
+
+    with pytest.raises(ValueError, match="large"):
+        im.match_features_ratio(query, train)
+
+
+class _FakeKnnBFMatcher:
+    """Stand-in for cv2.BFMatcher returning a fixed, possibly-broken knnMatch result.
+
+    Used to exercise match_features_ratio's raw-result validation, which
+    real BFMatcher output never violates and so can't otherwise be reached
+    from real descriptors.
+    """
+
+    def __init__(self, fake_knn_matches: list[list[cv2.DMatch]]) -> None:
+        self._fake_knn_matches = fake_knn_matches
+
+    def __call__(self, norm_type: int, crossCheck: bool) -> "_FakeKnnBFMatcher":
+        return self
+
+    def knnMatch(
+        self, query_descriptors: np.ndarray, train_descriptors: np.ndarray, k: int
+    ) -> list[list[cv2.DMatch]]:
+        return self._fake_knn_matches
+
+
+def _orb_query_and_train_ratio(n: int = 2) -> tuple[im.Features, im.Features]:
+    return _orb_features_with_n_descriptors(n), _orb_features_with_n_descriptors(n)
+
+
+def test_match_features_ratio_rejects_wrong_outer_length_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [[cv2.DMatch(0, 0, 1.0), cv2.DMatch(0, 1, 2.0)]]  # only 1, expected 2
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="neighbor lists"):
+        im.match_features_ratio(query, train)
+
+
+@pytest.mark.parametrize("neighbor_count", [0, 1])
+def test_match_features_ratio_rejects_too_few_neighbors_from_matcher(
+    neighbor_count: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    short_neighbors = [cv2.DMatch(0, 0, 1.0), cv2.DMatch(0, 1, 2.0)][:neighbor_count]
+    fake_knn_matches = [short_neighbors, [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)]]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="expected exactly 2"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_too_many_neighbors_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, 1.0), cv2.DMatch(0, 1, 2.0), cv2.DMatch(0, 0, 3.0)],
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="expected exactly 2"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_non_dmatch_neighbor_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [object(), cv2.DMatch(0, 1, 2.0)],  # type: ignore[list-item]
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="non-DMatch"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_non_finite_distance_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, float("nan")), cv2.DMatch(0, 1, 2.0)],
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="non-finite"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_negative_distance_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, -1.0), cv2.DMatch(0, 1, 2.0)],
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="negative"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_query_idx_inconsistent_with_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],  # queryIdx 1, but this is list index 0
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="queryIdx"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_out_of_range_train_idx_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, 1.0), cv2.DMatch(0, 99, 2.0)],
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="out-of-range trainIdx"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_neighbors_not_sorted_by_distance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, 5.0), cv2.DMatch(0, 1, 1.0)],  # decreasing, not ascending
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="not sorted"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_duplicate_train_idx_within_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, 1.0), cv2.DMatch(0, 0, 2.0)],  # both neighbors trainIdx=0
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="same trainIdx"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_allows_duplicate_train_idx_across_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, 10.0), cv2.DMatch(0, 1, 100.0)],
+        [cv2.DMatch(1, 0, 20.0), cv2.DMatch(1, 1, 100.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    matches = im.match_features_ratio(query, train, ratio=0.9)
+
+    train_indices = [m.trainIdx for m in matches]
+    assert len(matches) == 2
+    assert train_indices.count(0) == 2
