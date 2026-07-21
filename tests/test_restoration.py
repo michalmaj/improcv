@@ -196,3 +196,51 @@ def test_restoration_public_names_are_reexported_from_improcv() -> None:
     for name in ("inpaint", "InpaintMethod"):
         assert name in im.__all__
         assert hasattr(im, name)
+
+
+@pytest.mark.parametrize("method", ["ns", "telea"])
+@pytest.mark.parametrize("shape", [(1, 20), (20, 1), (1, 1)])
+def test_inpaint_rejects_single_row_or_column_image(shape: tuple[int, int], method: str) -> None:
+    # Verified directly, repeatedly, across separate processes: a (1, N)
+    # float32 image produces nondeterministic output for the exact same
+    # input -- including NaN -- on both OpenCV 4.13 and 5.0. Rejected
+    # uniformly for every dtype, not only where the corruption is visible
+    # as NaN.
+    image = np.ones(shape, dtype=np.float32)
+    mask = np.zeros(shape, dtype=np.uint8)
+    mask[0, 0] = 255
+
+    with pytest.raises(ValueError, match="at least 2 pixels"):
+        im.inpaint(image, mask, radius=3.0, method=method)  # type: ignore[arg-type]
+
+
+def test_inpaint_rejects_float32_input_with_nan() -> None:
+    image = np.ones((10, 10), dtype=np.float32)
+    image[0, 0] = np.nan
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[4:6, 4:6] = 255
+
+    with pytest.raises(ValueError, match="finite"):
+        im.inpaint(image, mask, radius=3.0)
+
+
+def test_inpaint_rejects_float32_input_with_infinity() -> None:
+    image = np.ones((10, 10), dtype=np.float32)
+    image[0, 0] = np.inf
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[4:6, 4:6] = 255
+
+    with pytest.raises(ValueError, match="finite"):
+        im.inpaint(image, mask, radius=3.0)
+
+
+def test_inpaint_raises_runtime_error_for_non_finite_result_from_finite_float32_input() -> None:
+    # Verified directly, deterministically, on both OpenCV 4.13 and 5.0:
+    # a float32 image filled with numpy.finfo(numpy.float32).max produces
+    # a non-finite (inf/NaN) result even though the input itself is finite.
+    image = np.full((10, 10), np.finfo(np.float32).max, dtype=np.float32)
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[4:6, 4:6] = 255
+
+    with pytest.raises(RuntimeError, match="non-finite"):
+        im.inpaint(image, mask, radius=3.0)
