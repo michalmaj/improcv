@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import cv2
 import numpy as np
 import numpy.typing as npt
 
 from improcv._compat.opencv import _normalize_calc_hist_output
 from improcv._validation import (
+    require_bool,
     require_dtype,
     require_finite,
     require_image_ndim,
@@ -19,6 +22,8 @@ from improcv.types import Image, Mask
 
 __all__ = [
     "histogram",
+    "moments",
+    "Moments",
 ]
 
 _HISTOGRAM_DTYPES = (np.uint8, np.uint16, np.float32)
@@ -97,3 +102,68 @@ def histogram(
 
     raw = cv2.calcHist([image], [channel_int], mask, [bins_int], [float(low), float(high)])
     return _normalize_calc_hist_output(raw, bins_int)
+
+
+class Moments(NamedTuple):
+    """Image or spatial moments, matching ``cv2.moments()``'s 24 returned fields exactly."""
+
+    m00: float
+    m10: float
+    m01: float
+    m20: float
+    m11: float
+    m02: float
+    m30: float
+    m21: float
+    m12: float
+    m03: float
+    mu20: float
+    mu11: float
+    mu02: float
+    mu30: float
+    mu21: float
+    mu12: float
+    mu03: float
+    nu20: float
+    nu11: float
+    nu02: float
+    nu30: float
+    nu21: float
+    nu12: float
+    nu03: float
+
+
+_MOMENTS_RASTER_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
+
+
+def moments(image_or_contour: Image, binary_image: bool = False) -> Moments:
+    """Compute image or spatial moments from a raster image/mask.
+
+    Parameters
+    ----------
+    image_or_contour : np.ndarray
+        A 2D, single-channel, non-empty raster image, dtype one of
+        ``uint8``, ``uint16``, ``int16``, ``float32``, ``float64``.
+    binary_image : bool, default False
+        If ``True``, nonzero pixels are treated as ``1`` (not ``255``) when
+        computing raw moments -- verified directly.
+
+    Returns
+    -------
+    Moments
+        24 fields, matching ``cv2.moments()``'s dict keys exactly.
+
+    Raises
+    ------
+    ValueError
+        If `image_or_contour` does not have exactly 2 dimensions or is
+        empty.
+    TypeError
+        If `image_or_contour` does not have one of the accepted dtypes, or
+        `binary_image` is not an actual `bool`.
+    """
+    require_bool(binary_image, "binary_image")
+    require_image_ndim(image_or_contour, ndims=(2,))
+    require_dtype(image_or_contour, _MOMENTS_RASTER_DTYPES)
+    raw = cv2.moments(image_or_contour, binary_image)
+    return Moments(**raw)

@@ -103,3 +103,62 @@ def test_histogram_does_not_mutate_input() -> None:
     im.histogram(image)
 
     np.testing.assert_array_equal(image, original)
+
+
+def test_moments_computes_raw_moments_for_a_filled_square() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2:8, 2:8] = 255  # 6x6 = 36 pixels, value 255
+
+    result = im.moments(image)
+
+    assert result.m00 == 36.0 * 255.0
+
+
+def test_moments_binary_image_treats_nonzero_as_one_not_255() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2:8, 2:8] = 255
+
+    result = im.moments(image, binary_image=True)
+
+    assert result.m00 == 36.0
+
+
+def test_moments_has_24_named_fields_matching_cv2() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2:8, 2:8] = 255
+
+    result = im.moments(image)
+
+    assert len(result._fields) == 24
+    assert result._fields[:3] == ("m00", "m10", "m01")
+
+
+def test_moments_rejects_multichannel_raster_image() -> None:
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="dimensions"):
+        im.moments(image)
+
+
+def test_moments_rejects_unsupported_raster_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.moments(image)  # type: ignore[arg-type]
+
+
+def test_moments_rejects_non_bool_binary_image() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="bool"):
+        im.moments(image, binary_image=1)  # type: ignore[arg-type]
+
+
+def test_moments_does_not_mutate_raster_input() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2:8, 2:8] = 255
+    original = image.copy()
+
+    im.moments(image)
+
+    np.testing.assert_array_equal(image, original)
