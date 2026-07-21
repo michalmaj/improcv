@@ -25,7 +25,7 @@ def test_detect_and_compute_finds_keypoints_and_descriptors(method: str) -> None
 
 def test_detect_and_compute_orb_descriptor_contract() -> None:
     image = _textured_image()
-    reference = cv2.ORB.create()
+    reference = cv2.ORB_create()  # type: ignore[attr-defined]
 
     features = im.detect_and_compute(image, method="orb")
 
@@ -36,7 +36,7 @@ def test_detect_and_compute_orb_descriptor_contract() -> None:
 
 def test_detect_and_compute_sift_descriptor_contract() -> None:
     image = _textured_image()
-    reference = cv2.SIFT.create()
+    reference = cv2.SIFT_create()  # type: ignore[attr-defined]
 
     features = im.detect_and_compute(image, method="sift")
 
@@ -51,7 +51,11 @@ def test_detect_and_compute_normalizes_empty_result(method: str) -> None:
     # find zero keypoints -- verified directly. cv2 itself returns
     # descriptors=None in this case; detect_and_compute must not.
     image = np.full((50, 50), 128, dtype=np.uint8)
-    reference = cv2.ORB.create() if method == "orb" else cv2.SIFT.create()
+    reference = (
+        cv2.ORB_create()  # type: ignore[attr-defined]
+        if method == "orb"
+        else cv2.SIFT_create()  # type: ignore[attr-defined]
+    )
     expected_width = reference.descriptorSize()
     expected_dtype = np.uint8 if method == "orb" else np.float32
 
@@ -122,6 +126,43 @@ def test_detect_and_compute_rejects_float_nfeatures() -> None:
 
     with pytest.raises(TypeError, match="integer"):
         im.detect_and_compute(image, method="orb", nfeatures=10.0)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("method", ["orb", "sift"])
+def test_detect_and_compute_accepts_int32_max_nfeatures(method: str) -> None:
+    # The int32-range boundary itself, on a small image -- this is a
+    # binding-boundary check, not a performance test.
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    features = im.detect_and_compute(
+        image,
+        method=method,  # type: ignore[arg-type]
+        nfeatures=2**31 - 1,
+    )
+
+    assert features.descriptors.shape[0] == len(features.keypoints)
+
+
+@pytest.mark.parametrize("method", ["orb", "sift"])
+@pytest.mark.parametrize("nfeatures", [2**31, 2**63])
+def test_detect_and_compute_rejects_nfeatures_above_int32_range(
+    nfeatures: int, method: str
+) -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="int32"):
+        im.detect_and_compute(image, method=method, nfeatures=nfeatures)  # type: ignore[arg-type]
+
+
+def test_detect_and_compute_rejects_numpy_uint64_max_nfeatures() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="int32"):
+        im.detect_and_compute(
+            image,
+            method="orb",
+            nfeatures=np.uint64(2**64 - 1),  # type: ignore[arg-type]
+        )
 
 
 def test_detect_and_compute_rejects_three_channel_image() -> None:

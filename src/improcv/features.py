@@ -80,12 +80,19 @@ def detect_and_compute(
     method : {"orb", "sift"}, default "orb"
         Detector/descriptor algorithm.
     nfeatures : int, default 500
-        A positive integer controlling how many of the best-ranked features
-        the detector retains. The actual number of features returned can be
+        A positive integer, at most ``2**31 - 1`` (the range of a signed
+        C ``int``), controlling how many of the best-ranked features the
+        detector retains. The actual number of features returned can be
         fewer (or, rarely, a little more) depending on the detector and the
         image -- this is not an exact count or a hard upper bound. Accepts
         any `numbers.Integral` (including NumPy integer scalars), rejecting
-        `bool` and `float`.
+        `bool` and `float`. Verified directly, identically on both OpenCV
+        versions: OpenCV passes this value to a C ``int`` parameter, and a
+        value above ``2**31 - 1`` raises one of several different raw
+        exceptions depending on the exact value and method (`ValueError`
+        for ORB, a raw `cv2.error` for SIFT, or `OverflowError` for very
+        large values) rather than a single, clear library error -- this
+        function raises its own `ValueError` before ever reaching OpenCV.
     mask : np.ndarray or None, default None
         Optional ``uint8`` mask, shape ``(H, W)`` matching `image`. Any
         nonzero value marks a pixel where features may be detected.
@@ -110,8 +117,8 @@ def detect_and_compute(
     ValueError
         If `image` does not have exactly 2 dimensions or is empty, `image`
         has a height or width below 2 pixels, `method` is not one of the
-        accepted values, `nfeatures` is not positive, or `mask` does not
-        match `image`'s spatial size.
+        accepted values, `nfeatures` is not positive or exceeds
+        ``2**31 - 1``, or `mask` does not match `image`'s spatial size.
     TypeError
         If `image` does not have dtype ``uint8``, `nfeatures` is not
         `numbers.Integral` (rejecting `bool`/`float`), or `mask` does not
@@ -133,6 +140,11 @@ def detect_and_compute(
         )
     require_positive_integral(nfeatures, "nfeatures")
     nfeatures_int = int(nfeatures)
+    max_nfeatures = int(np.iinfo(np.int32).max)
+    if nfeatures_int > max_nfeatures:
+        raise ValueError(
+            f"nfeatures must fit within the range of int32 ([1, {max_nfeatures}]), got {nfeatures}"
+        )
     if mask is not None:
         require_spatial_mask(mask, image)
 
