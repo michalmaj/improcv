@@ -1039,3 +1039,374 @@ def test_match_features_ratio_allows_duplicate_train_idx_across_queries(
     train_indices = [m.trainIdx for m in matches]
     assert len(matches) == 2
     assert train_indices.count(0) == 2
+
+
+def _true_homography() -> np.ndarray:
+    return np.array([[1.2, 0.1, 20.0], [0.05, 1.1, 10.0], [0.0002, 0.0001, 1.0]], dtype=np.float64)
+
+
+def _apply_homography(points: np.ndarray, homography: np.ndarray) -> np.ndarray:
+    points_h = np.hstack([points, np.ones((points.shape[0], 1))])
+    transformed_h = (homography @ points_h.T).T
+    return transformed_h[:, :2] / transformed_h[:, 2:3]
+
+
+def _homography_features(method: im.FeatureMethod, points: np.ndarray) -> im.Features:
+    keypoints = [cv2.KeyPoint(float(x), float(y), 1) for x, y in points]
+    if method == "orb":
+        descriptors = np.zeros((len(points), 32), dtype=np.uint8)
+        norm: im.DescriptorNorm = "hamming"
+    else:
+        descriptors = np.zeros((len(points), 128), dtype=np.float32)
+        norm = "l2"
+    return im.Features(method=method, norm=norm, keypoints=keypoints, descriptors=descriptors)
+
+
+def _identity_dmatches(n: int) -> list[cv2.DMatch]:
+    return [cv2.DMatch(i, i, 0.0) for i in range(n)]
+
+
+def _query_train_matches_with_outliers(
+    n_inliers: int = 16, n_outliers: int = 3
+) -> tuple[im.Features, im.Features, list[cv2.DMatch]]:
+    rng = np.random.default_rng(0)
+    src_points = rng.uniform(0, 500, (n_inliers, 2))
+    dst_points = _apply_homography(src_points, _true_homography())
+
+    outlier_src = rng.uniform(0, 500, (n_outliers, 2))
+    outlier_dst = rng.uniform(0, 500, (n_outliers, 2))  # unrelated to the true homography
+
+    all_src = np.vstack([src_points, outlier_src])
+    all_dst = np.vstack([dst_points, outlier_dst])
+
+    query = _homography_features("orb", all_src)
+    train = _homography_features("orb", all_dst)
+    matches = _identity_dmatches(n_inliers + n_outliers)
+    return query, train, matches
+
+
+def test_find_homography_recovers_known_transformation() -> None:
+    query, train, matches = _query_train_matches_with_outliers(n_inliers=16, n_outliers=3)
+
+    result = im.find_homography(query, train, matches)
+
+    assert result.homography is not None
+    recovered = result.homography / result.homography[2, 2]
+    expected = _true_homography() / _true_homography()[2, 2]
+    assert np.allclose(recovered, expected, atol=1e-2)
+    assert list(result.inlier_mask[:16]) == [True] * 16
+    assert list(result.inlier_mask[16:]) == [False] * 3
+
+
+def test_find_homography_inlier_mask_length_matches_matches() -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    result = im.find_homography(query, train, matches)
+
+    assert len(result.inlier_mask) == len(matches)
+
+
+def test_find_homography_allows_different_methods() -> None:
+    rng = np.random.default_rng(1)
+    src_points = rng.uniform(0, 500, (10, 2))
+    dst_points = _apply_homography(src_points, _true_homography())
+    query = _homography_features("orb", src_points)
+    train = _homography_features("sift", dst_points)
+    matches = _identity_dmatches(10)
+
+    result = im.find_homography(query, train, matches)
+
+    assert result.homography is not None
+
+
+def test_find_homography_does_not_mutate_inputs() -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    query_descriptors_before = query.descriptors.copy()
+    train_descriptors_before = train.descriptors.copy()
+    query_keypoints_before = [(kp.pt, kp.size) for kp in query.keypoints]
+    train_keypoints_before = [(kp.pt, kp.size) for kp in train.keypoints]
+    matches_before = [(m.queryIdx, m.trainIdx, m.distance) for m in matches]
+
+    im.find_homography(query, train, matches)
+
+    assert np.array_equal(query.descriptors, query_descriptors_before)
+    assert np.array_equal(train.descriptors, train_descriptors_before)
+    assert [(kp.pt, kp.size) for kp in query.keypoints] == query_keypoints_before
+    assert [(kp.pt, kp.size) for kp in train.keypoints] == train_keypoints_before
+    assert [(m.queryIdx, m.trainIdx, m.distance) for m in matches] == matches_before
+
+
+def test_find_homography_end_to_end_smoke_test() -> None:
+    image1, _ = _two_textured_images()
+    homography_matrix = np.array(
+        [[1.0, 0.02, 15.0], [0.0, 1.0, 10.0], [0.0001, 0.0, 1.0]], dtype=np.float64
+    )
+    image2 = cv2.warpPerspective(image1, homography_matrix, (image1.shape[1], image1.shape[0]))
+
+    query = im.detect_and_compute(image1, method="orb", nfeatures=2000)
+    train = im.detect_and_compute(image2, method="orb", nfeatures=2000)
+    matches = im.match_features_ratio(query, train)
+
+    result = im.find_homography(query, train, matches)
+
+    assert result.homography is not None
+    assert any(result.inlier_mask)
+
+
+def test_find_homography_degenerate_collinear_points_returns_none() -> None:
+    t = np.linspace(0, 1, 10)
+    src_points = np.stack([t * 100, t * 100], axis=1)
+    dst_points = np.stack([t * 200, t * 50], axis=1)
+    query = _homography_features("orb", src_points)
+    train = _homography_features("orb", dst_points)
+    matches = _identity_dmatches(10)
+
+    result = im.find_homography(query, train, matches)
+
+    assert result.homography is None
+    assert list(result.inlier_mask) == [False] * 10
+
+
+@pytest.mark.parametrize(
+    "coordinate,which",
+    [
+        (float("nan"), "query"),
+        (float("inf"), "query"),
+        (float("nan"), "train"),
+        (float("inf"), "train"),
+    ],
+)
+def test_find_homography_rejects_non_finite_keypoint_coordinate(
+    coordinate: float, which: str
+) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    if which == "query":
+        bad_keypoints = list(query.keypoints)
+        bad_keypoints[0] = cv2.KeyPoint(coordinate, 0.0, 1)
+        query = query._replace(keypoints=bad_keypoints)
+        expected_match = "query"
+    else:
+        bad_keypoints = list(train.keypoints)
+        bad_keypoints[0] = cv2.KeyPoint(coordinate, 0.0, 1)
+        train = train._replace(keypoints=bad_keypoints)
+        expected_match = "train"
+
+    with pytest.raises(ValueError, match=expected_match):
+        im.find_homography(query, train, matches)
+
+
+def test_find_homography_rejects_all_nan_query_at_minimum_correspondences() -> None:
+    # Regression pin for the corrected finding: verified directly that
+    # cv2.findHomography does NOT safely reject this itself at exactly 4
+    # correspondences -- it returns a non-None, NaN-filled 3x3 matrix with
+    # an all-ones mask instead of None. This must be caught by our own
+    # finite-coordinate guard before cv2.findHomography is ever called.
+    nan_points = np.full((4, 2), np.nan)
+    real_points = np.random.default_rng(0).uniform(0, 500, (4, 2))
+    query = _homography_features("orb", nan_points)
+    train = _homography_features("orb", real_points)
+    matches = _identity_dmatches(4)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.find_homography(query, train, matches)
+
+
+def test_find_homography_accepts_exactly_four_correspondences() -> None:
+    rng = np.random.default_rng(2)
+    src_points = rng.uniform(0, 500, (4, 2))
+    dst_points = _apply_homography(src_points, _true_homography())
+    query = _homography_features("orb", src_points)
+    train = _homography_features("orb", dst_points)
+    matches = _identity_dmatches(4)
+
+    result = im.find_homography(query, train, matches)
+
+    assert result.homography is not None
+
+
+@pytest.mark.parametrize("n", [0, 1, 2, 3])
+def test_find_homography_rejects_fewer_than_four_matches(n: int) -> None:
+    rng = np.random.default_rng(3)
+    src_points = rng.uniform(0, 500, (max(n, 1), 2))
+    dst_points = _apply_homography(src_points, _true_homography())
+    query = _homography_features("orb", src_points)
+    train = _homography_features("orb", dst_points)
+    matches = _identity_dmatches(n)
+
+    with pytest.raises(ValueError, match="4"):
+        im.find_homography(query, train, matches)
+
+
+def test_find_homography_rejects_non_list_matches() -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(TypeError, match="list"):
+        im.find_homography(query, train, tuple(matches))  # type: ignore[arg-type]
+
+
+def test_find_homography_rejects_non_dmatch_element() -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    bad_matches = [*matches[:-1], object()]
+
+    with pytest.raises(TypeError, match="DMatch"):
+        im.find_homography(query, train, bad_matches)  # type: ignore[arg-type]
+
+
+def test_find_homography_rejects_non_features_argument() -> None:
+    _, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(TypeError, match="Features"):
+        im.find_homography("not features", train, matches)  # type: ignore[arg-type]
+
+
+def test_find_homography_rejects_out_of_range_query_idx() -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    bad_matches = [*matches[:-1], cv2.DMatch(len(query.keypoints), matches[-1].trainIdx, 0.0)]
+
+    with pytest.raises(ValueError, match="queryIdx"):
+        im.find_homography(query, train, bad_matches)
+
+
+def test_find_homography_rejects_out_of_range_train_idx() -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    bad_matches = [*matches[:-1], cv2.DMatch(matches[-1].queryIdx, len(train.keypoints), 0.0)]
+
+    with pytest.raises(ValueError, match="trainIdx"):
+        im.find_homography(query, train, bad_matches)
+
+
+@pytest.mark.parametrize("threshold", [0.0, -1.0])
+def test_find_homography_rejects_non_positive_threshold(threshold: float) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(ValueError, match="ransac_reproj_threshold"):
+        im.find_homography(query, train, matches, ransac_reproj_threshold=threshold)
+
+
+@pytest.mark.parametrize("threshold", ["3.0", None])
+def test_find_homography_rejects_non_real_threshold(threshold: object) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(TypeError, match="ransac_reproj_threshold"):
+        im.find_homography(query, train, matches, ransac_reproj_threshold=threshold)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("threshold", [10**400, -(10**400)])
+def test_find_homography_rejects_huge_threshold(threshold: int) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(ValueError, match="finite"):
+        im.find_homography(query, train, matches, ransac_reproj_threshold=threshold)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("max_iters", [0, -1])
+def test_find_homography_rejects_non_positive_max_iters(max_iters: int) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(ValueError, match="max_iters"):
+        im.find_homography(query, train, matches, max_iters=max_iters)
+
+
+@pytest.mark.parametrize("max_iters", [10.0, True])
+def test_find_homography_rejects_non_integral_max_iters(max_iters: object) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(TypeError, match="max_iters"):
+        im.find_homography(query, train, matches, max_iters=max_iters)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("max_iters", [2**31, 2**63])
+def test_find_homography_rejects_max_iters_above_int32(max_iters: int) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(ValueError, match="int32"):
+        im.find_homography(query, train, matches, max_iters=max_iters)
+
+
+@pytest.mark.parametrize("confidence", [0.0, 1.0, -0.1, 1.1])
+def test_find_homography_rejects_out_of_range_confidence(confidence: float) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(ValueError, match="confidence"):
+        im.find_homography(query, train, matches, confidence=confidence)
+
+
+@pytest.mark.parametrize("confidence", ["0.9", None])
+def test_find_homography_rejects_non_real_confidence(confidence: object) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(TypeError, match="confidence"):
+        im.find_homography(query, train, matches, confidence=confidence)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("confidence", [10**400, -(10**400)])
+def test_find_homography_rejects_huge_confidence(confidence: int) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+
+    with pytest.raises(ValueError, match="finite"):
+        im.find_homography(query, train, matches, confidence=confidence)  # type: ignore[arg-type]
+
+
+class _FakeHomographyMatcher:
+    """Stand-in for cv2.findHomography returning a fixed, possibly-broken result.
+
+    Used to exercise find_homography's postcondition checks on the raw
+    cv2.findHomography result, which real OpenCV output (once finite
+    input coordinates are guaranteed) never violates and so can't
+    otherwise be reached.
+    """
+
+    def __init__(self, homography: object, mask: np.ndarray) -> None:
+        self._homography = homography
+        self._mask = mask
+
+    def __call__(self, *args: object, **kwargs: object) -> tuple[object, np.ndarray]:
+        return self._homography, self._mask
+
+
+def test_find_homography_rejects_wrong_shape_from_opencv(monkeypatch: pytest.MonkeyPatch) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    fake_homography = np.eye(4, dtype=np.float64)
+    fake_mask = np.ones((len(matches), 1), dtype=np.uint8)
+    monkeypatch.setattr(cv2, "findHomography", _FakeHomographyMatcher(fake_homography, fake_mask))
+
+    with pytest.raises(RuntimeError, match="inconsistent"):
+        im.find_homography(query, train, matches)
+
+
+def test_find_homography_rejects_non_finite_homography_from_opencv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    fake_homography = np.full((3, 3), np.nan, dtype=np.float64)
+    fake_mask = np.ones((len(matches), 1), dtype=np.uint8)
+    monkeypatch.setattr(cv2, "findHomography", _FakeHomographyMatcher(fake_homography, fake_mask))
+
+    with pytest.raises(RuntimeError, match="inconsistent"):
+        im.find_homography(query, train, matches)
+
+
+def test_find_homography_rejects_wrong_dtype_from_opencv(monkeypatch: pytest.MonkeyPatch) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    fake_homography = np.eye(3, dtype=np.float32)
+    fake_mask = np.ones((len(matches), 1), dtype=np.uint8)
+    monkeypatch.setattr(cv2, "findHomography", _FakeHomographyMatcher(fake_homography, fake_mask))
+
+    with pytest.raises(RuntimeError, match="inconsistent"):
+        im.find_homography(query, train, matches)
+
+
+def test_find_homography_rejects_too_few_recomputed_inliers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A well-formed, finite homography that doesn't actually fit most of the
+    # supplied correspondences well -- the independently recomputed inlier
+    # count should fall below 4 even though OpenCV's raw result "looked"
+    # valid, and that must raise rather than return a barely-supported result.
+    query, train, matches = _query_train_matches_with_outliers(n_inliers=2, n_outliers=10)
+    fake_homography = np.eye(3, dtype=np.float64)
+    fake_mask = np.ones((len(matches), 1), dtype=np.uint8)
+    monkeypatch.setattr(cv2, "findHomography", _FakeHomographyMatcher(fake_homography, fake_mask))
+
+    with pytest.raises(RuntimeError, match="fewer than 4 inliers"):
+        im.find_homography(query, train, matches)
