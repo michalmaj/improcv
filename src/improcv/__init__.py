@@ -91,6 +91,7 @@ from improcv.regions import (
     distance_transform,
     flood_fill,
 )
+from improcv.segmentation import watershed
 from improcv.transforms import (
     center_crop,
     crop,
@@ -186,4 +187,5 @@ __all__ = [
     "translate",
     "warp_affine",
     "warp_perspective",
+    "watershed",
 ]
