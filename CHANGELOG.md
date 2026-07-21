@@ -44,6 +44,8 @@ carries a working `0.1.0a1` version number for local development.
   isolating a genuine `cv2.calcHist` shape difference between OpenCV 4.x and 5.x.
 - Segmentation and restoration: `watershed`, `grabcut_rect`, `inpaint`.
 - `improcv.restoration`: `InpaintMethod` type.
+- Feature detection and description: `detect_and_compute` (ORB, SIFT).
+- `improcv.features`: `FeatureMethod`, `DescriptorNorm`, `Features` types.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 

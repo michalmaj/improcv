@@ -86,6 +86,20 @@ foreground_mask = im.grabcut_rect(image, im.BoundingBox(x=20, y=20, width=200, h
 restored = im.inpaint(image, damage_mask, radius=3.0, method="telea")
 ```
 
+Feature detection and description:
+
+```python
+import cv2
+import improcv as im
+
+features = im.detect_and_compute(im.ensure_gray(image), method="orb")
+print(len(features.keypoints), features.descriptors.shape, features.norm)
+
+# features.keypoints are real cv2.KeyPoint objects -- pass them straight
+# into any cv2.* function that expects them, no conversion needed.
+annotated = cv2.drawKeypoints(image, features.keypoints, None)
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor
