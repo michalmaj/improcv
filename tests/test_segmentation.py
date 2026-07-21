@@ -253,3 +253,9 @@ def test_grabcut_rect_accepts_constant_color_image() -> None:
     mask = im.grabcut_rect(image, im.BoundingBox(5, 5, 10, 10))
 
     assert mask.shape == (20, 20)
+
+
+def test_segmentation_public_names_are_reexported_from_improcv() -> None:
+    for name in ("watershed", "grabcut_rect"):
+        assert name in im.__all__
+        assert hasattr(im, name)

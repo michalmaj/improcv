@@ -183,3 +183,16 @@ def test_inpaint_result_does_not_share_memory_with_input() -> None:
     result = im.inpaint(image, mask, radius=3.0)
 
     assert not np.shares_memory(result, image)
+
+
+def test_restoration_types_are_in_module_all() -> None:
+    import improcv.restoration as restoration_module
+
+    assert "InpaintMethod" in restoration_module.__all__
+    assert hasattr(restoration_module, "InpaintMethod")
+
+
+def test_restoration_public_names_are_reexported_from_improcv() -> None:
+    for name in ("inpaint", "InpaintMethod"):
+        assert name in im.__all__
+        assert hasattr(im, name)
