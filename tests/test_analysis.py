@@ -1,0 +1,105 @@
+import numpy as np
+import pytest
+
+import improcv as im
+
+
+def test_histogram_counts_pixel_values_into_bins() -> None:
+    image = np.array([[0, 0, 100, 200]], dtype=np.uint8)
+
+    hist = im.histogram(image, channel=0, bins=2, value_range=(0.0, 200.0))
+
+    assert hist.shape == (2,)
+    assert hist.dtype == np.float32
+    # bin 0 is [0, 100): catches the two 0s. bin 1 is [100, 200): catches
+    # the 100. The 200 falls exactly on the whole range's exclusive upper
+    # bound, so it is not counted anywhere.
+    np.testing.assert_array_equal(hist, [2.0, 1.0])
+
+
+def test_histogram_upper_bound_is_exclusive() -> None:
+    image = np.array([[200]], dtype=np.uint8)
+
+    hist = im.histogram(image, channel=0, bins=1, value_range=(0.0, 200.0))
+
+    assert hist[0] == 0.0
+
+
+def test_histogram_selects_one_channel_of_a_multichannel_image() -> None:
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+    image[:, :, 1] = 200  # only the green channel is nonzero, and >= the bin midpoint (128)
+
+    hist_channel_0 = im.histogram(image, channel=0, bins=2, value_range=(0.0, 256.0))
+    hist_channel_1 = im.histogram(image, channel=1, bins=2, value_range=(0.0, 256.0))
+
+    assert hist_channel_0[0] == 16.0  # all 16 pixels (value 0) fall in the low bin [0, 128)
+    assert hist_channel_1[1] == 16.0  # all 16 pixels (value 200) fall in the high bin [128, 256)
+
+
+def test_histogram_applies_mask() -> None:
+    image = np.array([[10, 20, 30, 40]], dtype=np.uint8)
+    mask = np.array([[1, 1, 0, 0]], dtype=np.uint8)
+
+    hist = im.histogram(image, channel=0, bins=1, value_range=(0.0, 256.0), mask=mask)
+
+    assert hist[0] == 2.0  # only the two masked-in pixels counted
+
+
+def test_histogram_uses_default_parameters() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    hist = im.histogram(image)
+
+    assert hist.shape == (256,)
+
+
+def test_histogram_rejects_unsupported_dtype() -> None:
+    image = np.zeros((4, 4), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.histogram(image)  # type: ignore[arg-type]
+
+
+def test_histogram_rejects_out_of_range_channel() -> None:
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="channel"):
+        im.histogram(image, channel=3)
+
+
+def test_histogram_rejects_non_integer_channel() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(TypeError, match="integer"):
+        im.histogram(image, channel=0.0)  # type: ignore[arg-type]
+
+
+def test_histogram_rejects_zero_bins() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="positive"):
+        im.histogram(image, bins=0)
+
+
+def test_histogram_rejects_non_positive_range() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="value_range"):
+        im.histogram(image, value_range=(200.0, 0.0))
+
+
+def test_histogram_rejects_non_uint8_mask() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+    mask = np.zeros((4, 4), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.histogram(image, mask=mask)  # type: ignore[arg-type]
+
+
+def test_histogram_does_not_mutate_input() -> None:
+    image = np.array([[10, 20, 30]], dtype=np.uint8)
+    original = image.copy()
+
+    im.histogram(image)
+
+    np.testing.assert_array_equal(image, original)
