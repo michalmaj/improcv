@@ -196,3 +196,77 @@ def test_moments_rejects_malformed_contour_shape() -> None:
 
     with pytest.raises(ValueError, match="shape"):
         im.moments(bad_contour)
+
+
+def test_match_template_finds_exact_match_location() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+    image[5:10, 8:14] = np.arange(1, 31).reshape(5, 6)  # unique, non-constant patch
+    template = image[5:10, 8:14].copy()
+
+    result = im.match_template(image, template, "sqdiff")
+
+    assert result.shape == (16, 15)
+    assert result.dtype == np.float32
+    min_loc = np.unravel_index(np.argmin(result), result.shape)
+    assert min_loc == (5, 8)
+
+
+def test_match_template_rejects_template_larger_than_image() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    template = np.zeros((11, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="fit"):
+        im.match_template(image, template, "ccorr")
+
+
+def test_match_template_rejects_mismatched_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    template = np.zeros((5, 5), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.match_template(image, template, "ccorr")  # type: ignore[arg-type]
+
+
+def test_match_template_rejects_unsupported_dtype() -> None:
+    image = np.zeros((10, 10), dtype=np.int32)
+    template = np.zeros((5, 5), dtype=np.int32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.match_template(image, template, "ccorr")  # type: ignore[arg-type]
+
+
+def test_match_template_rejects_mismatched_channel_count() -> None:
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+    template = np.zeros((5, 5), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="channel"):
+        im.match_template(image, template, "ccorr")
+
+
+def test_match_template_rejects_more_than_four_channels() -> None:
+    image = np.zeros((10, 10, 5), dtype=np.uint8)
+    template = np.zeros((5, 5, 5), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="channel"):
+        im.match_template(image, template, "ccorr")
+
+
+def test_match_template_rejects_invalid_method() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    template = np.zeros((5, 5), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="method"):
+        im.match_template(image, template, "invalid")  # type: ignore[arg-type]
+
+
+def test_match_template_does_not_mutate_input() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    image[2:5, 2:5] = np.arange(1, 10).reshape(3, 3)
+    template = image[2:5, 2:5].copy()
+    original_image = image.copy()
+    original_template = template.copy()
+
+    im.match_template(image, template, "sqdiff")
+
+    np.testing.assert_array_equal(image, original_image)
+    np.testing.assert_array_equal(template, original_template)

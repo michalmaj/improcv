@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Literal, NamedTuple, cast
 
 import cv2
 import numpy as np
@@ -15,6 +15,7 @@ from improcv._validation import (
     require_finite,
     require_image_ndim,
     require_integral,
+    require_one_of,
     require_positive_integral,
     require_spatial_mask,
 )
@@ -24,7 +25,9 @@ from improcv.types import Image, Mask
 __all__ = [
     "histogram",
     "moments",
+    "match_template",
     "Moments",
+    "TemplateMatchMethod",
 ]
 
 _HISTOGRAM_DTYPES = (np.uint8, np.uint16, np.float32)
@@ -194,3 +197,94 @@ def moments(image_or_contour: Image | Contour, binary_image: bool = False) -> Mo
     require_dtype(image_or_contour, _MOMENTS_RASTER_DTYPES)
     raw = cv2.moments(image_or_contour, binary_image)
     return Moments(**raw)
+
+
+TemplateMatchMethod = Literal[
+    "ccoeff", "ccoeff_normed", "ccorr", "ccorr_normed", "sqdiff", "sqdiff_normed"
+]
+_TEMPLATE_MATCH_METHODS: dict[TemplateMatchMethod, int] = {
+    "ccoeff": cv2.TM_CCOEFF,
+    "ccoeff_normed": cv2.TM_CCOEFF_NORMED,
+    "ccorr": cv2.TM_CCORR,
+    "ccorr_normed": cv2.TM_CCORR_NORMED,
+    "sqdiff": cv2.TM_SQDIFF,
+    "sqdiff_normed": cv2.TM_SQDIFF_NORMED,
+}
+
+_MATCH_TEMPLATE_DTYPES = (np.uint8, np.float32)
+
+
+def match_template(
+    image: Image, template: Image, method: TemplateMatchMethod
+) -> npt.NDArray[np.float32]:
+    """Locate a template within an image by sliding-window comparison.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``, dtype ``uint8``
+        or ``float32``, 1-4 channels.
+    template : np.ndarray
+        Template to search for, same dtype and channel count as `image`.
+        Both spatial dimensions must be ``<=`` `image`'s. Some OpenCV
+        implementation paths may accept swapped image/template roles when
+        one array is larger than the other; improcv always enforces this
+        documented size contract regardless of what OpenCV would otherwise
+        tolerate.
+    method : {"ccoeff", "ccoeff_normed", "ccorr", "ccorr_normed", "sqdiff", "sqdiff_normed"}
+        Comparison method, matching ``cv2.TM_*``. For ``"sqdiff"``/
+        ``"sqdiff_normed"``, the best match is the **minimum** of the
+        result map; for every other method, the best match is the
+        **maximum**.
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(image.height - template.height + 1, image.width -
+        template.width + 1)``, dtype ``float32``. A new array; `image`/
+        `template` are never modified.
+
+    Raises
+    ------
+    ValueError
+        If `image`/`template` is not 2D/3D or is empty, `template` does not
+        fit within `image` spatially, `image`/`template` does not have 1-4
+        channels or their channel counts differ, or `method` is not one of
+        the accepted values.
+    TypeError
+        If `image`/`template` does not have dtype ``uint8``/``float32``, or
+        their dtypes differ.
+    """
+    require_one_of(method, tuple(_TEMPLATE_MATCH_METHODS), "method")
+    require_image_ndim(image, ndims=(2, 3))
+    require_image_ndim(template, ndims=(2, 3))
+    require_dtype(image, _MATCH_TEMPLATE_DTYPES)
+    require_dtype(template, _MATCH_TEMPLATE_DTYPES, "template")
+    if image.dtype != template.dtype:
+        raise TypeError(
+            f"image and template must have the same dtype, got {image.dtype} and {template.dtype}"
+        )
+    image_channels = 1 if image.ndim == 2 else image.shape[2]
+    template_channels = 1 if template.ndim == 2 else template.shape[2]
+    if image_channels not in (1, 2, 3, 4):
+        raise ValueError(f"image must have 1-4 channels, got {image_channels}")
+    if template_channels not in (1, 2, 3, 4):
+        raise ValueError(f"template must have 1-4 channels, got {template_channels}")
+    if image_channels != template_channels:
+        raise ValueError(
+            f"image and template must have the same channel count, got "
+            f"{image_channels} and {template_channels}"
+        )
+    image_height, image_width = image.shape[:2]
+    template_height, template_width = template.shape[:2]
+    if template_height > image_height or template_width > image_width:
+        raise ValueError(
+            f"template ({template_height}x{template_width}) must fit within image "
+            f"({image_height}x{image_width})"
+        )
+
+    result = cv2.matchTemplate(image, template, _TEMPLATE_MATCH_METHODS[method])
+    # cv2's stubs type matchTemplate's result as the loose MatLike; it always
+    # produces float32 in practice, verified directly for both uint8 and
+    # float32 input.
+    return cast(npt.NDArray[np.float32], result)

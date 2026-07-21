@@ -22,7 +22,7 @@ except ModuleNotFoundError as _exc:
         "or install one of the four `opencv-*` packages yourself."
     ) from _exc
 
-from improcv.analysis import Moments, histogram, moments
+from improcv.analysis import Moments, TemplateMatchMethod, histogram, match_template, moments
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
 from improcv.contours import (
     ApproxMethod,
@@ -115,6 +115,7 @@ __all__ = [
     "RetrievalMode",
     "RotatedRect",
     "SortOrder",
+    "TemplateMatchMethod",
     "TransformMatrix",
     "adjust_brightness",
     "adjust_contrast",
@@ -149,6 +150,7 @@ __all__ = [
     "in_range",
     "invert",
     "laplacian_edge",
+    "match_template",
     "median_blur",
     "min_area_rect",
     "moments",
