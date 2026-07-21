@@ -54,6 +54,14 @@ carries a working `0.1.0a1` version number for local development.
   `match_features`'s `Features`-contract validation and L2-magnitude guard. Same raw
   `list[cv2.DMatch]`, sorted-by-distance return contract. Still no FLANN, RANSAC, homography, or
   match drawing.
+- `find_homography`: RANSAC homography estimation from two `Features` values and a
+  `list[cv2.DMatch]`. Rejects non-finite matched keypoint coordinates explicitly (verified OpenCV
+  does not safely handle these itself at the 4-correspondence minimum) and independently recomputes
+  `inlier_mask` from the final homography and reprojection threshold rather than trusting OpenCV's
+  own raw mask (which has a documented historical correctness bug in versions near this project's
+  `4.9` floor). `homography` is `None` for legitimately degenerate (but finite) geometry, not an
+  error. `improcv.features`: `HomographyResult` type. Still RANSAC-only, no FLANN, perspective-warp
+  helper, or match drawing.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 

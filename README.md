@@ -116,6 +116,11 @@ annotated = cv2.drawMatches(image1, query.keypoints, image2, train.keypoints, ma
 
 # Or filter with Lowe's ratio test instead of match_features' cross-check:
 ratio_matches = im.match_features_ratio(query, train, ratio=0.75)
+
+# Estimate a RANSAC homography from the matches:
+result = im.find_homography(query, train, ratio_matches)
+if result.homography is not None:
+    print(result.homography, result.inlier_mask.sum(), "inliers")
 ```
 
 ## Status

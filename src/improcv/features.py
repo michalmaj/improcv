@@ -7,6 +7,7 @@ from typing import Literal, NamedTuple, cast
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 from improcv._validation import (
     require_bool,
@@ -21,11 +22,13 @@ from improcv.types import Image, Mask
 
 __all__ = [
     "detect_and_compute",
+    "find_homography",
     "match_features",
     "match_features_ratio",
-    "FeatureMethod",
     "DescriptorNorm",
+    "FeatureMethod",
     "Features",
+    "HomographyResult",
 ]
 
 FeatureMethod = Literal["orb", "sift"]
@@ -576,3 +579,193 @@ def match_features_ratio(
 
     kept.sort(key=lambda match: match.distance)
     return kept
+
+
+class HomographyResult(NamedTuple):
+    """Result of `find_homography`.
+
+    `homography` is `None` when OpenCV cannot estimate a valid transformation from the
+    given, finite correspondences (degenerate geometry, e.g. collinear or identical
+    points) -- an expected outcome, not an error. `inlier_mask` is independently
+    recomputed by `find_homography` from the final homography and reprojection
+    threshold, not OpenCV's own raw mask (see `find_homography`'s docstring).
+    """
+
+    homography: npt.NDArray[np.float64] | None
+    inlier_mask: npt.NDArray[np.bool_]
+
+
+_MIN_HOMOGRAPHY_CORRESPONDENCES = 4
+_MAX_INT32 = int(np.iinfo(np.int32).max)
+
+
+def find_homography(
+    query: Features,
+    train: Features,
+    matches: list[cv2.DMatch],
+    ransac_reproj_threshold: float = 3.0,
+    max_iters: int = 2000,
+    confidence: float = 0.995,
+) -> HomographyResult:
+    """Estimate a perspective transformation from `query` to `train` using RANSAC.
+
+    Fits the 3x3 homography matrix mapping `query`'s keypoint coordinates onto
+    `train`'s, using RANSAC to identify and discount outlier correspondences in
+    `matches` (typically produced by `match_features`/`match_features_ratio`). Only
+    RANSAC is supported -- there is no `method` parameter, since OpenCV's plain
+    least-squares method (`method=0`) always reports every correspondence as an
+    inlier, which is incompatible with `inlier_mask`'s purpose.
+
+    Parameters
+    ----------
+    query : Features
+        `queryIdx` on each element of `matches` indexes into `query.keypoints`.
+        `query.method`/`query.norm`/`query.descriptors` are not used -- homography
+        fitting only uses keypoint pixel coordinates, so `query` and `train` may use
+        different detection methods (e.g. ORB vs. SIFT), unlike `match_features`.
+    train : Features
+        `trainIdx` on each element of `matches` indexes into `train.keypoints`.
+    matches : list of cv2.DMatch
+        Must contain at least 4 correspondences (OpenCV's own hard floor for fitting
+        a homography). Every `queryIdx`/`trainIdx` must be in range for `query`/
+        `train`. The matched keypoint coordinates must be finite -- verified directly
+        that OpenCV does not reliably handle `NaN`/`Inf` coordinates itself at the
+        4-correspondence minimum (a non-`None`, `NaN`-filled homography is possible).
+    ransac_reproj_threshold : float, default 3.0
+        The maximum reprojection error, in pixels, for a correspondence to be treated
+        as an inlier (OpenCV's own default). Must be strictly positive -- verified
+        directly that a non-positive value is not used literally by OpenCV; it
+        silently falls back to an internal default instead of erroring, which this
+        function avoids by validating first.
+    max_iters : int, default 2000
+        The maximum number of RANSAC iterations (OpenCV's own default). Must be a
+        positive integer within the signed `int32` range -- verified directly that a
+        non-positive value silently under-runs RANSAC rather than erroring, and a
+        value above ``2**31 - 1`` raises a raw `cv2.error` from OpenCV.
+    confidence : float, default 0.995
+        The desired RANSAC confidence level (OpenCV's own default), strictly between
+        ``0.0`` and ``1.0``.
+
+    Returns
+    -------
+    HomographyResult
+        `homography` is `None` when OpenCV cannot estimate a valid transformation
+        from the given correspondences (degenerate geometry, e.g. collinear or
+        identical points) -- an expected outcome, not an error; callers should check
+        for it. `inlier_mask` is a `bool` array of length `len(matches)`,
+        independently recomputed from the final homography and
+        `ransac_reproj_threshold` -- not OpenCV's own raw mask, which this function
+        does not trust as its public contract (OpenCV has a documented historical
+        mask-correctness bug in versions at or near this project's minimum supported
+        `4.9`). `inlier_mask[i]` says whether `matches[i]`'s reprojection error is
+        within `ransac_reproj_threshold` under the final homography; all `False` when
+        `homography` is `None`.
+
+    Raises
+    ------
+    ValueError
+        If `ransac_reproj_threshold`/`confidence` is not finite or out of its valid
+        range, `max_iters` is not positive or exceeds ``2**31 - 1``, `query`/`train`
+        fails its own internal `Features` contract, `len(matches)` is below 4, any
+        `match.queryIdx`/`match.trainIdx` is out of range for `query`/`train`, or the
+        matched keypoint coordinates are not finite.
+    TypeError
+        If `ransac_reproj_threshold`/`confidence` is not a real number, `max_iters` is
+        not `numbers.Integral` (rejecting `bool`/`float`), `query`/`train` is not a
+        `Features` (or fails its structural contract), `matches` is not a `list`, or
+        an element of `matches` is not a `cv2.DMatch`.
+    RuntimeError
+        If `cv2.findHomography` returns a non-`None` result that isn't a well-formed,
+        finite, ``(3, 3)``, ``float64`` matrix, or whose independently recomputed
+        inlier count falls below 4 -- OpenCV producing an internally inconsistent
+        result rather than a valid homography.
+    """
+    require_finite(ransac_reproj_threshold, "ransac_reproj_threshold")
+    threshold_float = float(ransac_reproj_threshold)
+    if not threshold_float > 0.0:
+        raise ValueError(f"ransac_reproj_threshold must be positive, got {ransac_reproj_threshold}")
+
+    require_positive_integral(max_iters, "max_iters")
+    max_iters_int = int(max_iters)
+    if max_iters_int > _MAX_INT32:
+        raise ValueError(
+            f"max_iters must fit within the range of int32 ([1, {_MAX_INT32}]), got {max_iters}"
+        )
+
+    require_finite(confidence, "confidence")
+    confidence_float = float(confidence)
+    if not (0.0 < confidence_float < 1.0):
+        raise ValueError(f"confidence must be strictly between 0.0 and 1.0, got {confidence}")
+
+    _require_valid_features(query, "query")
+    _require_valid_features(train, "train")
+
+    if not isinstance(matches, list):
+        raise TypeError(f"matches must be a list, got {type(matches).__name__}")
+    if not all(isinstance(m, cv2.DMatch) for m in matches):
+        raise TypeError("matches must contain only cv2.DMatch objects")
+    if len(matches) < _MIN_HOMOGRAPHY_CORRESPONDENCES:
+        raise ValueError(
+            f"matches must contain at least {_MIN_HOMOGRAPHY_CORRESPONDENCES} correspondences, "
+            f"got {len(matches)}"
+        )
+
+    num_query_keypoints = len(query.keypoints)
+    num_train_keypoints = len(train.keypoints)
+    for m in matches:
+        if not (0 <= m.queryIdx < num_query_keypoints):
+            raise ValueError(f"match.queryIdx {m.queryIdx} is out of range for query.keypoints")
+        if not (0 <= m.trainIdx < num_train_keypoints):
+            raise ValueError(f"match.trainIdx {m.trainIdx} is out of range for train.keypoints")
+
+    src_points = np.asarray([query.keypoints[m.queryIdx].pt for m in matches], dtype=np.float64)
+    dst_points = np.asarray([train.keypoints[m.trainIdx].pt for m in matches], dtype=np.float64)
+
+    if not np.all(np.isfinite(src_points)):
+        raise ValueError("matched query keypoint coordinates must be finite")
+    if not np.all(np.isfinite(dst_points)):
+        raise ValueError("matched train keypoint coordinates must be finite")
+
+    _raw_homography, _raw_mask = cv2.findHomography(
+        src_points.astype(np.float32),
+        dst_points.astype(np.float32),
+        cv2.RANSAC,
+        threshold_float,
+        maxIters=max_iters_int,
+        confidence=confidence_float,
+    )
+
+    if _raw_homography is None:
+        return HomographyResult(
+            homography=None,
+            inlier_mask=np.zeros(len(matches), dtype=np.bool_),
+        )
+
+    if (
+        not isinstance(_raw_homography, np.ndarray)
+        or _raw_homography.shape != (3, 3)
+        or _raw_homography.dtype != np.float64
+        or not np.all(np.isfinite(_raw_homography))
+    ):
+        raise RuntimeError(
+            "cv2.findHomography returned an internally inconsistent homography matrix"
+        )
+
+    projected = cv2.perspectiveTransform(src_points.reshape(-1, 1, 2), _raw_homography).reshape(
+        -1, 2
+    )
+    errors = np.linalg.norm(projected - dst_points, axis=1)
+    inlier_mask = (
+        np.all(np.isfinite(projected), axis=1) & np.isfinite(errors) & (errors <= threshold_float)
+    )
+
+    if int(inlier_mask.sum()) < _MIN_HOMOGRAPHY_CORRESPONDENCES:
+        raise RuntimeError(
+            "cv2.findHomography returned a homography with fewer than "
+            f"{_MIN_HOMOGRAPHY_CORRESPONDENCES} inliers under the requested reprojection "
+            "threshold -- an internally inconsistent result"
+        )
+
+    return HomographyResult(
+        homography=cast(npt.NDArray[np.float64], _raw_homography), inlier_mask=inlier_mask
+    )
