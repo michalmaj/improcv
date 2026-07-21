@@ -91,7 +91,7 @@ from improcv.regions import (
     distance_transform,
     flood_fill,
 )
-from improcv.segmentation import watershed
+from improcv.segmentation import grabcut_rect, watershed
 from improcv.transforms import (
     center_crop,
     crop,
@@ -157,6 +157,7 @@ __all__ = [
     "flood_fill",
     "gamma_correction",
     "gaussian_blur",
+    "grabcut_rect",
     "harris_corner",
     "histogram",
     "histogram_equalization",
