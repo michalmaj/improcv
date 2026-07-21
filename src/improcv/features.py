@@ -1,13 +1,15 @@
-"""Feature detection and description: ORB and SIFT keypoints/descriptors."""
+"""Feature detection and description: ORB and SIFT keypoints/descriptors and matching."""
 
 from __future__ import annotations
 
+import math
 from typing import Literal, NamedTuple, cast
 
 import cv2
 import numpy as np
 
 from improcv._validation import (
+    require_bool,
     require_dtype,
     require_image_ndim,
     require_one_of,
@@ -18,6 +20,7 @@ from improcv.types import Image, Mask
 
 __all__ = [
     "detect_and_compute",
+    "match_features",
     "FeatureMethod",
     "DescriptorNorm",
     "Features",
@@ -185,3 +188,202 @@ def detect_and_compute(
         )
 
     return Features(method=method, norm=norm, keypoints=keypoints, descriptors=descriptors)
+
+
+_METHOD_DESCRIPTOR_CONTRACTS: dict[FeatureMethod, tuple[DescriptorNorm, np.dtype, int]] = {
+    "orb": ("hamming", np.dtype(np.uint8), 32),
+    "sift": ("l2", np.dtype(np.float32), 128),
+}
+_NORM_CV_TYPES: dict[DescriptorNorm, int] = {"hamming": cv2.NORM_HAMMING, "l2": cv2.NORM_L2}
+
+
+def _require_valid_features(value: Features, name: str) -> None:
+    """Validate `value` against `Features`' full public contract, not just its labels.
+
+    `Features` is a public `NamedTuple`, so a caller can construct one by
+    hand or hand-edit an existing one's fields -- a value that passes every
+    shape/dtype check below could still hold non-`cv2.KeyPoint` objects in
+    `keypoints`, silently breaking the promised `cv2.drawMatches` interop.
+    Structural type checks run first, before any method/norm/shape/dtype
+    check.
+    """
+    if not isinstance(value, Features):
+        raise TypeError(f"{name} must be a Features, got {type(value).__name__}")
+    if not isinstance(value.keypoints, list):
+        raise TypeError(f"{name}.keypoints must be a list, got {type(value.keypoints).__name__}")
+    if not isinstance(value.descriptors, np.ndarray):
+        raise TypeError(
+            f"{name}.descriptors must be a numpy.ndarray, got {type(value.descriptors).__name__}"
+        )
+    if not all(isinstance(kp, cv2.KeyPoint) for kp in value.keypoints):
+        raise TypeError(f"{name}.keypoints must contain only cv2.KeyPoint objects")
+
+    contract = _METHOD_DESCRIPTOR_CONTRACTS.get(value.method)
+    if contract is None:
+        raise ValueError(
+            f"{name}.method must be one of {tuple(_METHOD_DESCRIPTOR_CONTRACTS)}, "
+            f"got {value.method!r}"
+        )
+    expected_norm, expected_dtype, expected_width = contract
+
+    if value.descriptors.ndim != 2:
+        raise ValueError(
+            f"{name}.descriptors must have exactly 2 dimensions, got {value.descriptors.ndim}"
+        )
+    if value.descriptors.shape[0] != len(value.keypoints):
+        raise ValueError(
+            f"{name}.descriptors must have one row per keypoint, got "
+            f"{value.descriptors.shape[0]} rows for {len(value.keypoints)} keypoints"
+        )
+    if value.descriptors.dtype != expected_dtype:
+        raise TypeError(
+            f"{name}.descriptors must have dtype {expected_dtype} for method {value.method!r}, "
+            f"got {value.descriptors.dtype}"
+        )
+    if value.descriptors.shape[1] != expected_width:
+        raise ValueError(
+            f"{name}.descriptors must have width {expected_width} for method {value.method!r}, "
+            f"got {value.descriptors.shape[1]}"
+        )
+    if value.norm != expected_norm:
+        raise ValueError(
+            f"{name}.norm must be {expected_norm!r} for method {value.method!r}, got {value.norm!r}"
+        )
+    if expected_dtype == np.float32 and not np.all(np.isfinite(value.descriptors)):
+        raise ValueError(f"{name}.descriptors must contain only finite values")
+
+
+def match_features(
+    query: Features,
+    train: Features,
+    cross_check: bool = True,
+) -> list[cv2.DMatch]:
+    """Match `query`'s descriptors against `train`'s using brute-force nearest-neighbor.
+
+    A single best match per query descriptor -- no ratio test, no KNN, no
+    FLANN, no RANSAC, and no geometric filtering. `query`/`train` are
+    typically produced by `detect_and_compute`.
+
+    Parameters
+    ----------
+    query : Features
+        The descriptors to find matches for. `queryIdx` on each returned
+        `cv2.DMatch` indexes into `query.keypoints`/`query.descriptors`.
+    train : Features
+        The descriptors to search within. `trainIdx` on each returned
+        `cv2.DMatch` indexes into `train.keypoints`/`train.descriptors`.
+        Must use the same `method`/`norm` as `query` -- matching descriptors
+        from different methods is not supported in this function.
+    cross_check : bool, default True
+        If ``True``, keeps only mutually-best matches: a match `(i, j)` is
+        kept only if `train`'s `j`-th descriptor is also `query`'s `i`-th
+        descriptor's best match and vice versa -- fewer, higher-confidence
+        matches. If ``False``, every query descriptor is matched to its
+        single nearest `train` descriptor regardless of whether that
+        train descriptor's own nearest match points back (raw
+        one-directional nearest-neighbor).
+
+    Returns
+    -------
+    list of cv2.DMatch
+        Sorted by ``distance`` ascending (best match first) -- verified
+        directly that `cv2.BFMatcher.match()`'s raw output is not sorted.
+        Lower ``distance`` means a better match. Python's sort is stable,
+        but `match_features` intentionally guarantees only non-decreasing
+        distance order; the relative order of equal-distance matches is
+        not part of the public API. Empty if either `query` or `train` has
+        no descriptors.
+
+    Raises
+    ------
+    ValueError
+        If `query`/`train` fails its own internal contract (unrecognized
+        `method`, wrong `descriptors` dimensionality, a row count not
+        matching its keypoint count, the wrong width for its `method`, or
+        a `norm` inconsistent with its `method`), `query`/`train` are not
+        pairwise compatible (different `method`, `norm`, dtype, or
+        descriptor width), or (for ``"l2"``/SIFT descriptors) any
+        descriptor value is too large for safe ``float32`` L2 distance
+        computation.
+    TypeError
+        If `query`/`train` is not a `Features`, its `keypoints` is not a
+        `list`, any element of `keypoints` is not a `cv2.KeyPoint`, its
+        `descriptors` is not an `np.ndarray`, `query`/`train` have
+        mismatched descriptor dtypes, or `cross_check` is not an actual
+        `bool`.
+    RuntimeError
+        If a returned `cv2.DMatch` has a non-finite `distance` or an
+        out-of-range `queryIdx`/`trainIdx` -- OpenCV producing an
+        internally inconsistent result rather than a valid match.
+    """
+    require_bool(cross_check, "cross_check")
+    _require_valid_features(query, "query")
+    _require_valid_features(train, "train")
+
+    if query.method != train.method:
+        raise ValueError(
+            f"query and train must use the same method, got {query.method!r} and {train.method!r}"
+        )
+    if query.norm != train.norm:
+        raise ValueError(
+            f"query and train must use the same norm, got {query.norm!r} and {train.norm!r}"
+        )
+    if query.descriptors.dtype != train.descriptors.dtype:
+        raise TypeError(
+            f"query and train descriptors must have the same dtype, got "
+            f"{query.descriptors.dtype} and {train.descriptors.dtype}"
+        )
+    if query.descriptors.shape[1] != train.descriptors.shape[1]:
+        raise ValueError(
+            f"query and train descriptors must have the same width, got "
+            f"{query.descriptors.shape[1]} and {train.descriptors.shape[1]}"
+        )
+
+    if query.norm == "l2":
+        descriptor_width = query.descriptors.shape[1]
+        max_abs_value = float(
+            max(
+                np.abs(query.descriptors).max(initial=0.0),
+                np.abs(train.descriptors).max(initial=0.0),
+            )
+        )
+        safe_abs_limit = math.sqrt(float(np.finfo(np.float32).max) / (4.0 * descriptor_width))
+        if max_abs_value >= safe_abs_limit:
+            raise ValueError(
+                "SIFT descriptor values are too large for safe float32 L2 distance computation"
+            )
+
+    if query.descriptors.shape[0] == 0 or train.descriptors.shape[0] == 0:
+        return []
+
+    matcher = cv2.BFMatcher(_NORM_CV_TYPES[query.norm], crossCheck=cross_check)
+    matches = list(matcher.match(query.descriptors, train.descriptors))
+    matches.sort(key=lambda match: match.distance)
+
+    num_query = query.descriptors.shape[0]
+    num_train = train.descriptors.shape[0]
+    for match in matches:
+        if not math.isfinite(match.distance):
+            raise RuntimeError(f"BFMatcher produced a non-finite distance: {match.distance}")
+        if not (0 <= match.queryIdx < num_query):
+            raise RuntimeError(f"BFMatcher produced an out-of-range queryIdx: {match.queryIdx}")
+        if not (0 <= match.trainIdx < num_train):
+            raise RuntimeError(f"BFMatcher produced an out-of-range trainIdx: {match.trainIdx}")
+
+    query_indices = [match.queryIdx for match in matches]
+    if not cross_check and num_train > 0:
+        if len(matches) != num_query:
+            raise RuntimeError(
+                f"BFMatcher produced {len(matches)} matches, expected exactly {num_query} "
+                "(one per query descriptor) for cross_check=False"
+            )
+        if len(set(query_indices)) != len(query_indices):
+            raise RuntimeError("BFMatcher produced a duplicate queryIdx for cross_check=False")
+    elif cross_check:
+        train_indices = [match.trainIdx for match in matches]
+        if len(set(query_indices)) != len(query_indices):
+            raise RuntimeError("BFMatcher produced a duplicate queryIdx for cross_check=True")
+        if len(set(train_indices)) != len(train_indices):
+            raise RuntimeError("BFMatcher produced a duplicate trainIdx for cross_check=True")
+
+    return matches

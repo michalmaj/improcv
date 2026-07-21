@@ -50,7 +50,13 @@ from improcv.contours import (
     sort_contours,
 )
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
-from improcv.features import DescriptorNorm, FeatureMethod, Features, detect_and_compute
+from improcv.features import (
+    DescriptorNorm,
+    FeatureMethod,
+    Features,
+    detect_and_compute,
+    match_features,
+)
 from improcv.filters import (
     bilateral_filter,
     clahe,
@@ -172,6 +178,7 @@ __all__ = [
     "inpaint",
     "invert",
     "laplacian_edge",
+    "match_features",
     "match_template",
     "mean_stddev",
     "median_blur",

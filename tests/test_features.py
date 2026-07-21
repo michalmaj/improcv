@@ -237,3 +237,239 @@ def test_detect_and_compute_raises_when_sift_unavailable(monkeypatch: pytest.Mon
 
     with pytest.raises(RuntimeError, match="SIFT"):
         im.detect_and_compute(image, method="sift")
+
+
+def _two_textured_images() -> tuple[np.ndarray, np.ndarray]:
+    image1 = np.random.default_rng(0).integers(0, 255, (100, 100), dtype=np.uint8)
+    image2 = np.random.default_rng(1).integers(0, 255, (100, 100), dtype=np.uint8)
+    return image1, image2
+
+
+def _empty_features(method: im.FeatureMethod) -> im.Features:
+    image1, image2 = _two_textured_images()
+    blank = np.full((50, 50), 128, dtype=np.uint8)
+    query = im.detect_and_compute(blank, method=method)
+    assert query.keypoints == []  # sanity check the fixture is actually empty
+    return query
+
+
+@pytest.mark.parametrize("method", ["orb", "sift"])
+def test_match_features_matches_real_features(method: str) -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method=method)  # type: ignore[arg-type]
+    train = im.detect_and_compute(image2, method=method)  # type: ignore[arg-type]
+
+    matches = im.match_features(query, train)
+
+    assert len(matches) > 0
+    for match in matches:
+        assert 0 <= match.queryIdx < len(query.keypoints)
+        assert 0 <= match.trainIdx < len(train.keypoints)
+
+
+def test_match_features_result_is_sorted_by_distance() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb", nfeatures=2000)
+    train = im.detect_and_compute(image2, method="orb", nfeatures=2000)
+
+    matches = im.match_features(query, train, cross_check=False)
+
+    distances = [m.distance for m in matches]
+    assert distances == sorted(distances)
+
+
+def test_match_features_result_works_directly_with_cv2_drawMatches() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+
+    matches = im.match_features(query, train)
+    output = cv2.drawMatches(
+        image1,
+        query.keypoints,
+        image2,
+        train.keypoints,
+        matches,
+        None,  # type: ignore[call-overload]
+    )
+
+    assert output.ndim == 3
+
+
+@pytest.mark.parametrize("cross_check", [True, False])
+@pytest.mark.parametrize("query_empty", [True, False])
+@pytest.mark.parametrize("train_empty", [True, False])
+def test_match_features_empty_combinations_return_empty_list(
+    train_empty: bool, query_empty: bool, cross_check: bool
+) -> None:
+    if not query_empty and not train_empty:
+        pytest.skip("both-populated case is covered by other tests")
+    image1, image2 = _two_textured_images()
+    query = _empty_features("orb") if query_empty else im.detect_and_compute(image1, method="orb")
+    train = _empty_features("orb") if train_empty else im.detect_and_compute(image2, method="orb")
+
+    matches = im.match_features(query, train, cross_check=cross_check)
+
+    assert matches == []
+
+
+def test_match_features_rejects_empty_but_incompatible_pair() -> None:
+    query = _empty_features("orb")
+    train = _empty_features("sift")
+
+    with pytest.raises(ValueError, match="method"):
+        im.match_features(query, train)
+
+
+def test_match_features_rejects_mismatched_method() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="sift")
+
+    with pytest.raises(ValueError, match="method"):
+        im.match_features(query, train)
+
+
+def test_match_features_rejects_mismatched_dtype() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+    bad_train = train._replace(descriptors=train.descriptors.astype(np.int16))
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.match_features(query, bad_train)
+
+
+def test_match_features_rejects_mismatched_width() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+    bad_train = train._replace(descriptors=train.descriptors[:, :16])
+
+    with pytest.raises(ValueError, match="width"):
+        im.match_features(query, bad_train)
+
+
+def test_match_features_rejects_row_count_not_matching_keypoints() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+    bad_query = query._replace(descriptors=query.descriptors[:-1])
+
+    with pytest.raises(ValueError, match="keypoint"):
+        im.match_features(bad_query, train)
+
+
+def test_match_features_rejects_nan_sift_descriptors() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="sift")
+    train = im.detect_and_compute(image2, method="sift")
+    bad_descriptors = query.descriptors.copy()
+    bad_descriptors[0, 0] = np.nan
+    bad_query = query._replace(descriptors=bad_descriptors)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.match_features(bad_query, train)
+
+
+def test_match_features_rejects_infinite_sift_descriptors() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="sift")
+    train = im.detect_and_compute(image2, method="sift")
+    bad_descriptors = query.descriptors.copy()
+    bad_descriptors[0, 0] = np.inf
+    bad_query = query._replace(descriptors=bad_descriptors)
+
+    with pytest.raises(ValueError, match="finite"):
+        im.match_features(bad_query, train)
+
+
+def test_match_features_rejects_excessively_large_sift_descriptors() -> None:
+    # Verified directly, identically on both OpenCV versions: these values
+    # are finite, but overflow float32 during BFMatcher's internal L2
+    # distance computation, silently producing zero matches instead of an
+    # error -- rejected explicitly instead.
+    query_descriptors = np.full((1, 128), 1e18, dtype=np.float32)
+    train_descriptors = np.full((1, 128), -1e18, dtype=np.float32)
+    query = im.Features(
+        method="sift", norm="l2", keypoints=[cv2.KeyPoint(0, 0, 1)], descriptors=query_descriptors
+    )
+    train = im.Features(
+        method="sift", norm="l2", keypoints=[cv2.KeyPoint(0, 0, 1)], descriptors=train_descriptors
+    )
+
+    with pytest.raises(ValueError, match="large"):
+        im.match_features(query, train)
+
+
+@pytest.mark.parametrize("cross_check", [1, 0, 1.0, "true"])
+def test_match_features_rejects_non_bool_cross_check(cross_check: object) -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+
+    with pytest.raises(TypeError, match="bool"):
+        im.match_features(query, train, cross_check=cross_check)  # type: ignore[arg-type]
+
+
+def test_match_features_rejects_non_features_argument() -> None:
+    image1, image2 = _two_textured_images()
+    train = im.detect_and_compute(image2, method="orb")
+
+    with pytest.raises(TypeError, match="Features"):
+        im.match_features("not features", train)  # type: ignore[arg-type]
+
+
+def test_match_features_rejects_non_list_keypoints() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+    bad_query = query._replace(keypoints=tuple(query.keypoints))
+
+    with pytest.raises(TypeError, match="list"):
+        im.match_features(bad_query, train)  # type: ignore[arg-type]
+
+
+def test_match_features_rejects_non_keypoint_element() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+    bad_query = query._replace(keypoints=[object() for _ in query.keypoints])
+
+    with pytest.raises(TypeError, match="KeyPoint"):
+        im.match_features(bad_query, train)  # type: ignore[arg-type]
+
+
+def test_match_features_rejects_non_ndarray_descriptors() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+    bad_query = query._replace(descriptors=query.descriptors.tolist())
+
+    with pytest.raises(TypeError, match="ndarray"):
+        im.match_features(bad_query, train)  # type: ignore[arg-type]
+
+
+def test_match_features_no_cross_check_matches_every_query_descriptor_once() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+
+    matches = im.match_features(query, train, cross_check=False)
+
+    assert len(matches) == query.descriptors.shape[0]
+    query_indices = [m.queryIdx for m in matches]
+    assert len(set(query_indices)) == len(query_indices)
+
+
+def test_match_features_cross_check_has_unique_indices() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb")
+    train = im.detect_and_compute(image2, method="orb")
+
+    matches = im.match_features(query, train, cross_check=True)
+
+    query_indices = [m.queryIdx for m in matches]
+    train_indices = [m.trainIdx for m in matches]
+    assert len(set(query_indices)) == len(query_indices)
+    assert len(set(train_indices)) == len(train_indices)

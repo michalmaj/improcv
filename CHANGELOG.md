@@ -46,6 +46,10 @@ carries a working `0.1.0a1` version number for local development.
 - `improcv.restoration`: `InpaintMethod` type.
 - Feature detection and description: `detect_and_compute` (ORB, SIFT).
 - `improcv.features`: `FeatureMethod`, `DescriptorNorm`, `Features` types.
+- Feature matching: `match_features` (brute-force nearest-neighbor, with or without cross-check),
+  accepting two `Features` values so a caller can never pass a norm mismatched to the descriptor
+  type. Raw `list[cv2.DMatch]`, sorted by distance ascending; no ratio test, KNN, FLANN, RANSAC, or
+  match drawing in this slice.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 

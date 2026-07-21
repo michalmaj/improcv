@@ -100,6 +100,21 @@ print(len(features.keypoints), features.descriptors.shape, features.norm)
 annotated = cv2.drawKeypoints(image, features.keypoints, None)
 ```
 
+Matching features between two images:
+
+```python
+import cv2
+import improcv as im
+
+query = im.detect_and_compute(im.ensure_gray(image1), method="orb")
+train = im.detect_and_compute(im.ensure_gray(image2), method="orb")
+
+matches = im.match_features(query, train)
+# matches is a plain list[cv2.DMatch], sorted by distance (best match
+# first) -- pass it straight into cv2.drawMatches, no conversion needed.
+annotated = cv2.drawMatches(image1, query.keypoints, image2, train.keypoints, matches, None)
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor
