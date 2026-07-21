@@ -11,10 +11,10 @@ import numpy as np
 from improcv._validation import (
     require_bool,
     require_dtype,
+    require_finite,
     require_image_ndim,
     require_one_of,
     require_positive_integral,
-    require_real_number,
     require_spatial_mask,
 )
 from improcv.types import Image, Mask
@@ -469,14 +469,16 @@ def match_features_ratio(
     Raises
     ------
     ValueError
-        If `ratio` is not strictly between ``0.0`` and ``1.0``, `query`/
-        `train` fails its own internal contract (unrecognized `method`,
-        wrong `descriptors` dimensionality, a row count not matching its
-        keypoint count, the wrong width for its `method`, or a `norm`
-        inconsistent with its `method`), `query`/`train` are not pairwise
-        compatible (different `method`, `norm`, or descriptor width), or
-        (for ``"l2"``/SIFT descriptors) any descriptor value is too large
-        for safe ``float32`` L2 distance computation.
+        If `ratio` is not finite (including a Python `int` magnitude too
+        large to represent as `float`) or not strictly between ``0.0`` and
+        ``1.0``, `query`/`train` fails its own internal contract
+        (unrecognized `method`, wrong `descriptors` dimensionality, a row
+        count not matching its keypoint count, the wrong width for its
+        `method`, or a `norm` inconsistent with its `method`), `query`/
+        `train` are not pairwise compatible (different `method`, `norm`,
+        or descriptor width), or (for ``"l2"``/SIFT descriptors) any
+        descriptor value is too large for safe ``float32`` L2 distance
+        computation.
     TypeError
         If `ratio` is not a real number, `query`/`train` is not a
         `Features`, its `keypoints` is not a `list`, any element of
@@ -493,8 +495,9 @@ def match_features_ratio(
         distance, or both neighbors of one query sharing the same
         `trainIdx`.
     """
-    require_real_number(ratio, "ratio")
-    if not (0.0 < float(ratio) < 1.0):
+    require_finite(ratio, "ratio")
+    ratio_float = float(ratio)
+    if not (0.0 < ratio_float < 1.0):
         raise ValueError(f"ratio must be strictly between 0.0 and 1.0, got {ratio}")
 
     _require_valid_features(query, "query")
@@ -568,7 +571,7 @@ def match_features_ratio(
                 f"query descriptor {query_index}"
             )
 
-        if best.distance < ratio * second_best.distance:
+        if best.distance < ratio_float * second_best.distance:
             kept.append(best)
 
     kept.sort(key=lambda match: match.distance)
