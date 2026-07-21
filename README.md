@@ -90,7 +90,8 @@ restored = im.inpaint(image, damage_mask, radius=3.0, method="telea")
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor
 releases. See [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for
-what's been added so far.
+what's been added so far, and [ROADMAP.md](https://github.com/michalmaj/improcv/blob/main/ROADMAP.md)
+for the planned phases toward `1.0.0`.
 
 ## License
 
