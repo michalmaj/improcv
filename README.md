@@ -78,7 +78,8 @@ Segmentation and inpainting:
 ```python
 import improcv as im
 
-markers = im.watershed(image, seed_markers)  # -1 = boundary, 0 = unknown, N = region
+markers = im.watershed(image, seed_markers)
+# Positive values = regions, -1 = boundaries; 0 may remain unassigned.
 
 foreground_mask = im.grabcut_rect(image, im.BoundingBox(x=20, y=20, width=200, height=150))
 
