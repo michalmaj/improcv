@@ -270,3 +270,89 @@ def test_match_template_does_not_mutate_input() -> None:
 
     np.testing.assert_array_equal(image, original_image)
     np.testing.assert_array_equal(template, original_template)
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+@pytest.mark.parametrize("size", [5, 10])
+def test_match_template_rejects_constant_grayscale_template_for_ccoeff_normed(
+    dtype: type, size: int
+) -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20)).astype(dtype)
+    template = np.full((size, size), 50, dtype=dtype)
+
+    with pytest.raises(ValueError, match="constant"):
+        im.match_template(image, template, "ccoeff_normed")
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+@pytest.mark.parametrize("size", [5, 10])
+def test_match_template_rejects_constant_grayscale_template_for_sqdiff_normed(
+    dtype: type, size: int
+) -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20)).astype(dtype)
+    template = np.full((size, size), 50, dtype=dtype)
+
+    with pytest.raises(ValueError, match="constant"):
+        im.match_template(image, template, "sqdiff_normed")
+
+
+def test_match_template_allows_constant_nonzero_grayscale_template_for_ccorr_normed() -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20)).astype(np.uint8)
+    template = np.full((5, 5), 50, dtype=np.uint8)
+
+    result = im.match_template(image, template, "ccorr_normed")  # must not raise
+
+    assert result.shape == (16, 16)
+
+
+def test_match_template_rejects_constant_bgr_template_for_ccoeff_normed() -> None:
+    # Per-channel constant (0, 128, 255) -- global std is nonzero, but each
+    # channel individually has zero spatial variance. A naive
+    # template.std() == 0 check would wrongly accept this.
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20, 3)).astype(np.uint8)
+    template = np.zeros((5, 5, 3), dtype=np.uint8)
+    template[:, :, 0] = 0
+    template[:, :, 1] = 128
+    template[:, :, 2] = 255
+
+    with pytest.raises(ValueError, match="constant"):
+        im.match_template(image, template, "ccoeff_normed")
+
+
+def test_match_template_allows_one_constant_channel_with_one_varying_channel() -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20, 3)).astype(np.uint8)
+    template = np.zeros((5, 5, 3), dtype=np.uint8)
+    template[:, :, 0] = 100  # constant
+    template[:, :, 1] = image[3:8, 3:8, 1]  # varying
+    template[:, :, 2] = 50  # constant
+
+    for method in ("ccoeff_normed", "sqdiff_normed", "ccorr_normed"):
+        result = im.match_template(image, template, method)  # must not raise
+        assert result.shape == (16, 16)
+
+
+@pytest.mark.parametrize("method", ["ccoeff_normed", "sqdiff_normed", "ccorr_normed"])
+def test_match_template_rejects_all_zero_template_for_every_normalized_method(
+    method: str,
+) -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20, 3)).astype(np.uint8)
+    template = np.zeros((5, 5, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError):
+        im.match_template(image, template, method)  # type: ignore[arg-type]
+
+
+def test_match_template_allows_constant_template_for_unnormalized_methods() -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20)).astype(np.uint8)
+    template = np.full((5, 5), 50, dtype=np.uint8)
+
+    for method in ("ccoeff", "ccorr", "sqdiff"):
+        result = im.match_template(image, template, method)  # must not raise
+        assert result.shape == (16, 16)

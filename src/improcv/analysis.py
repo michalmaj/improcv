@@ -214,6 +214,21 @@ _TEMPLATE_MATCH_METHODS: dict[TemplateMatchMethod, int] = {
 _MATCH_TEMPLATE_DTYPES = (np.uint8, np.float32)
 
 
+def _is_spatially_constant(template: np.ndarray) -> bool:
+    """Return True if every channel of `template` is spatially constant.
+
+    Checked per-channel, not globally: a per-channel-constant color
+    template (e.g. BGR (0, 128, 255)) has nonzero *global* std but zero
+    variance *within* each channel -- verified directly that a plain
+    `template.std() == 0` check misses this case.
+    """
+    if template.ndim == 2:
+        return bool(template.min() == template.max())
+    channel_min = template.min(axis=(0, 1))
+    channel_max = template.max(axis=(0, 1))
+    return bool(np.all(channel_min == channel_max))
+
+
 def match_template(
     image: Image, template: Image, method: TemplateMatchMethod
 ) -> npt.NDArray[np.float32]:
@@ -282,6 +297,27 @@ def match_template(
             f"template ({template_height}x{template_width}) must fit within image "
             f"({image_height}x{image_width})"
         )
+    if method in ("ccoeff_normed", "sqdiff_normed") and _is_spatially_constant(template):
+        # A deliberate, conservative improcv choice -- not a claim that the
+        # formula is mathematically undefined for a constant, nonzero
+        # template (it isn't for sqdiff_normed; the energy is well-defined).
+        # Verified directly, on both OpenCV 4.13 and 5.0: a spatially
+        # constant template's normalized result can degenerate to a
+        # uniform 1.0 map depending on template size and pixel intensity in
+        # a way that isn't safely predictable (e.g. a mid-gray value is
+        # non-degenerate at 3x3 but fully degenerate at 10x10), so improcv
+        # rejects the whole spatially-constant category rather than trying
+        # to carve out a "safe" subset. This does not catch every possible
+        # degenerate case (a verified non-constant, very-low-energy
+        # template can still produce a uniform result) -- it is a narrow,
+        # deliberately limited guard against the clearest, most common one.
+        raise ValueError(
+            f"template must not be spatially constant (per channel) for method "
+            f"{method!r} -- verified to potentially produce a uniform, uninformative "
+            "result"
+        )
+    if method == "ccorr_normed" and not np.any(template):
+        raise ValueError("template must not be all-zero (zero energy) for method 'ccorr_normed'")
 
     result = cv2.matchTemplate(image, template, _TEMPLATE_MATCH_METHODS[method])
     # cv2's stubs type matchTemplate's result as the loose MatLike; it always
