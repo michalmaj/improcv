@@ -67,6 +67,22 @@ def test_histogram_rejects_out_of_range_channel() -> None:
         im.histogram(image, channel=3)
 
 
+def test_histogram_accepts_channel_127_of_128_channel_image() -> None:
+    image = np.zeros((4, 4, 128), dtype=np.uint8)
+    image[:, :, 127] = 200
+
+    hist = im.histogram(image, channel=127, bins=2, value_range=(0.0, 256.0))
+
+    assert hist[1] == 16.0
+
+
+def test_histogram_rejects_129_channel_image() -> None:
+    image = np.zeros((4, 4, 129), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="channels"):
+        im.histogram(image, channel=0)
+
+
 def test_histogram_rejects_non_integer_channel() -> None:
     image = np.zeros((4, 4), dtype=np.uint8)
 
@@ -86,6 +102,20 @@ def test_histogram_rejects_non_positive_range() -> None:
 
     with pytest.raises(ValueError, match="value_range"):
         im.histogram(image, value_range=(200.0, 0.0))
+
+
+def test_histogram_rejects_non_tuple_value_range() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="value_range"):
+        im.histogram(image, value_range=[0.0, 256.0])  # type: ignore[arg-type]
+
+
+def test_histogram_rejects_wrong_length_value_range() -> None:
+    image = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="value_range"):
+        im.histogram(image, value_range=(0.0, 100.0, 200.0))  # type: ignore[arg-type]
 
 
 def test_histogram_rejects_non_uint8_mask() -> None:
@@ -348,6 +378,24 @@ def test_match_template_rejects_all_zero_template_for_every_normalized_method(
         im.match_template(image, template, method)  # type: ignore[arg-type]
 
 
+def test_match_template_accepts_four_channel_image_for_every_method() -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20, 4)).astype(np.uint8)
+    template = image[3:8, 3:8, :].copy()  # non-constant, real 4-channel patch
+
+    for method in (
+        "ccoeff",
+        "ccoeff_normed",
+        "ccorr",
+        "ccorr_normed",
+        "sqdiff",
+        "sqdiff_normed",
+    ):
+        result = im.match_template(image, template, method)  # must not raise
+        assert result.shape == (16, 16)
+        assert result.dtype == np.float32
+
+
 def test_match_template_allows_constant_template_for_unnormalized_methods() -> None:
     rng = np.random.default_rng(0)
     image = rng.uniform(0, 255, size=(20, 20)).astype(np.uint8)
@@ -431,6 +479,42 @@ def test_mean_stddev_returns_one_value_per_channel() -> None:
 
     assert result.mean == (10.0, 20.0, 30.0)
     assert result.stddev == (0.0, 0.0, 0.0)
+
+
+def test_mean_stddev_accepts_single_channel() -> None:
+    image = np.full((3, 3), 42, dtype=np.uint8)
+
+    result = im.mean_stddev(image)
+
+    assert result.mean == (42.0,)
+
+
+def test_mean_stddev_accepts_128_channels_with_distinct_values() -> None:
+    image = np.zeros((2, 2, 128), dtype=np.float32)
+    for c in range(128):
+        image[:, :, c] = c + 1
+
+    result = im.mean_stddev(image)
+
+    assert len(result.mean) == 128
+    assert result.mean == tuple(float(c + 1) for c in range(128))
+    assert result.stddev == tuple(0.0 for _ in range(128))
+
+
+def test_mean_stddev_rejects_129_channels() -> None:
+    image = np.zeros((2, 2, 129), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="channels"):
+        im.mean_stddev(image)
+
+
+def test_mean_stddev_rejects_zero_channels() -> None:
+    # Caught by the empty-image check (a (H, W, 0) array is empty), before
+    # ever reaching the channel-count-range check.
+    image = np.zeros((2, 2, 0), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="empty"):
+        im.mean_stddev(image)
 
 
 def test_mean_stddev_applies_mask() -> None:

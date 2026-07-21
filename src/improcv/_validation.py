@@ -17,12 +17,16 @@ def require_image_ndim(image: np.ndarray, ndims: tuple[int, ...] = (2, 3)) -> No
 
     Every public function calls this (directly or via a narrower `ndims`),
     so the empty-image check here is the single, global place that rejects
-    a zero-height or zero-width image for the whole library.
+    an empty image for the whole library. Checks `image.size == 0` rather
+    than just height/width: a zero-channel `(H, W, 0)` array has nonzero
+    height and width but is still empty, and verified directly to produce
+    uninitialized-memory garbage from at least one OpenCV call rather than
+    a clear error.
     """
     if image.ndim not in ndims:
         allowed = " or ".join(str(n) for n in ndims)
         raise ValueError(f"image must have {allowed} dimensions, got {image.ndim}")
-    if image.shape[0] == 0 or image.shape[1] == 0:
+    if image.size == 0:
         raise ValueError(f"image must not be empty, got shape {image.shape}")
 
 
@@ -246,6 +250,28 @@ def require_channels(image: np.ndarray, channels: int) -> None:
         )
     if image.shape[0] == 0 or image.shape[1] == 0:
         raise ValueError(f"image must not be empty, got shape {image.shape}")
+
+
+def require_channel_count(
+    image: np.ndarray, min_channels: int, max_channels: int, name: str = "image"
+) -> int:
+    """Raise ValueError unless `image`'s channel count is within [min_channels, max_channels].
+
+    Returns the channel count (1 for a 2D image) for convenience. Several
+    ``cv2.*`` calls that accept an arbitrary channel count in principle
+    silently misinterpret the array once the channel count exceeds an
+    OpenCV-build-specific limit (e.g. ``cv2.meanStdDev`` verified to
+    silently collapse to a single aggregate channel above 128 channels on
+    OpenCV 5.x but not until above 512 on OpenCV 4.x) -- this makes that
+    limit an explicit, checked contract instead of silent, version-dependent
+    data corruption.
+    """
+    channels = 1 if image.ndim == 2 else image.shape[2]
+    if not min_channels <= channels <= max_channels:
+        raise ValueError(
+            f"{name} must have between {min_channels} and {max_channels} channels, got {channels}"
+        )
+    return channels
 
 
 def require_odd(value: int, name: str) -> None:

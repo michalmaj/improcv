@@ -38,6 +38,10 @@ carries a working `0.1.0a1` version number for local development.
   `distance_transform`, `flood_fill`.
 - `improcv.regions`: `Connectivity`, `Labels`, `ComponentStats`, `Centroids`, `DistanceType`,
   `DistanceMaskSize`, `FloodFillResult` types.
+- Image analysis: `histogram`, `moments`, `match_template`, `min_max_loc`, `mean_stddev`.
+- `improcv.analysis`: `Moments`, `TemplateMatchMethod`, `MinMaxResult`, `MeanStdDevResult` types.
+- `improcv._compat.opencv`: the project's first compat-layer helper, `_normalize_calc_hist_output`,
+  isolating a genuine `cv2.calcHist` shape difference between OpenCV 4.x and 5.x.
 
 ### Changed
 - `BoundingBox` moved from `improcv.contours` to `improcv.types` (still importable from both
@@ -65,3 +69,10 @@ carries a working `0.1.0a1` version number for local development.
   unsupported dtype instead of a raw `cv2.error`.
 - `pip install improcv` alone no longer fails on `import improcv` with a bare
   `ModuleNotFoundError` when no OpenCV distribution is installed.
+- `require_image_ndim` (used across the whole library) now rejects a zero-channel `(H, W, 0)`
+  array, not only a zero-height/zero-width one — verified directly that at least one `cv2.*` call
+  returned uninitialized-memory garbage for that shape instead of raising.
+- `mean_stddev`/`histogram` now reject an image with more than 128 channels: `cv2.meanStdDev`/
+  `cv2.calcHist` silently misinterpret channel counts above 128 on OpenCV 5.x (correct up to 512 on
+  OpenCV 4.x), so 128 is enforced as the common, cross-version-safe limit instead of silently
+  returning wrong statistics on one OpenCV line.

@@ -60,6 +60,19 @@ result = im.flood_fill(image, seed_point=(10, 10), new_value=(0, 255, 0))
 print(result.filled_count, result.bounding_box)
 ```
 
+Histogram and template matching:
+
+```python
+import improcv as im
+
+gray = im.ensure_gray(image)
+hist = im.histogram(gray)  # channel=0, bins=256, value_range=(0.0, 256.0) by default
+
+result = im.match_template(gray, template, method="ccoeff_normed")
+match = im.min_max_loc(result)
+print(match.max_loc)  # (x, y) of the best match
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor

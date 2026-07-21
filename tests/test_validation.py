@@ -3,6 +3,7 @@ import pytest
 
 from improcv._validation import (
     require_bool,
+    require_channel_count,
     require_channels,
     require_dtype,
     require_finite,
@@ -47,6 +48,14 @@ def test_require_image_ndim_rejects_empty_image() -> None:
         require_image_ndim(np.zeros((0, 10)))
     with pytest.raises(ValueError, match="empty"):
         require_image_ndim(np.zeros((10, 0)))
+
+
+def test_require_image_ndim_rejects_zero_channel_image() -> None:
+    # (H, W, 0) has nonzero height/width but is still empty -- verified
+    # directly that at least one cv2.* call returns uninitialized-memory
+    # garbage for this shape rather than raising.
+    with pytest.raises(ValueError, match="empty"):
+        require_image_ndim(np.zeros((10, 10, 0)), ndims=(2, 3))
 
 
 def test_require_real_number_accepts_python_and_numpy_numbers() -> None:
@@ -514,3 +523,25 @@ def test_require_positive_integral_rejects_zero_and_negative() -> None:
         require_positive_integral(0, "bins")
     with pytest.raises(ValueError, match="positive"):
         require_positive_integral(-3, "bins")
+
+
+def test_require_channel_count_accepts_2d_image_as_one_channel() -> None:
+    channels = require_channel_count(np.zeros((5, 5)), 1, 128)
+
+    assert channels == 1
+
+
+def test_require_channel_count_accepts_within_range() -> None:
+    channels = require_channel_count(np.zeros((5, 5, 128)), 1, 128)
+
+    assert channels == 128
+
+
+def test_require_channel_count_rejects_above_max() -> None:
+    with pytest.raises(ValueError, match="channels"):
+        require_channel_count(np.zeros((5, 5, 129)), 1, 128)
+
+
+def test_require_channel_count_rejects_below_min() -> None:
+    with pytest.raises(ValueError, match="channels"):
+        require_channel_count(np.zeros((5, 5, 0)), 1, 128)
