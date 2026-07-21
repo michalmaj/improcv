@@ -396,14 +396,57 @@ def test_match_template_accepts_four_channel_image_for_every_method() -> None:
         assert result.dtype == np.float32
 
 
-def test_match_template_allows_constant_template_for_unnormalized_methods() -> None:
+def test_match_template_rejects_constant_template_for_ccoeff() -> None:
+    # ccoeff subtracts the template's own mean before correlating; for a
+    # spatially constant template the mean-centered template is
+    # deterministically all zero, so the result is meaningless numerical
+    # noise, not a real signal -- verified directly (e.g. min=-0.0625,
+    # max=0.0625 for a mid-gray constant template, never a genuine match).
     rng = np.random.default_rng(0)
     image = rng.uniform(0, 255, size=(20, 20)).astype(np.uint8)
     template = np.full((5, 5), 50, dtype=np.uint8)
 
-    for method in ("ccoeff", "ccorr", "sqdiff"):
-        result = im.match_template(image, template, method)  # must not raise
-        assert result.shape == (16, 16)
+    with pytest.raises(ValueError, match="constant"):
+        im.match_template(image, template, "ccoeff")
+
+
+def test_match_template_rejects_zero_template_for_ccorr() -> None:
+    # ccorr is unnormalized cross-correlation: sum(I * T). An all-zero
+    # template makes this exactly zero at every position -- verified
+    # directly, a real, deterministic degeneracy.
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20)).astype(np.uint8)
+    template = np.zeros((5, 5), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="zero"):
+        im.match_template(image, template, "ccorr")
+
+
+def test_match_template_allows_nonzero_constant_template_for_ccorr() -> None:
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20)).astype(np.uint8)
+    template = np.full((5, 5), 50, dtype=np.uint8)
+
+    result = im.match_template(image, template, "ccorr")  # must not raise
+
+    assert result.shape == (16, 16)
+    assert result.min() != result.max()  # a real, non-degenerate signal
+
+
+def test_match_template_allows_constant_and_zero_template_for_sqdiff() -> None:
+    # sqdiff (unnormalized) has no rejection: verified directly, both a
+    # constant and an all-zero template still produce a genuine,
+    # non-uniform result map for a varying image.
+    rng = np.random.default_rng(0)
+    image = rng.uniform(0, 255, size=(20, 20)).astype(np.uint8)
+
+    const_template = np.full((5, 5), 100, dtype=np.uint8)
+    result_const = im.match_template(image, const_template, "sqdiff")
+    assert result_const.min() != result_const.max()
+
+    zero_template = np.zeros((5, 5), dtype=np.uint8)
+    result_zero = im.match_template(image, zero_template, "sqdiff")
+    assert result_zero.min() != result_zero.max()
 
 
 def test_min_max_loc_finds_unique_min_and_max() -> None:
