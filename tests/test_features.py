@@ -25,7 +25,7 @@ def test_detect_and_compute_finds_keypoints_and_descriptors(method: str) -> None
 
 def test_detect_and_compute_orb_descriptor_contract() -> None:
     image = _textured_image()
-    reference = cv2.ORB.create()
+    reference = cv2.ORB_create()  # type: ignore[attr-defined]
 
     features = im.detect_and_compute(image, method="orb")
 
@@ -36,7 +36,7 @@ def test_detect_and_compute_orb_descriptor_contract() -> None:
 
 def test_detect_and_compute_sift_descriptor_contract() -> None:
     image = _textured_image()
-    reference = cv2.SIFT.create()
+    reference = cv2.SIFT_create()  # type: ignore[attr-defined]
 
     features = im.detect_and_compute(image, method="sift")
 
@@ -51,7 +51,11 @@ def test_detect_and_compute_normalizes_empty_result(method: str) -> None:
     # find zero keypoints -- verified directly. cv2 itself returns
     # descriptors=None in this case; detect_and_compute must not.
     image = np.full((50, 50), 128, dtype=np.uint8)
-    reference = cv2.ORB.create() if method == "orb" else cv2.SIFT.create()
+    reference = (
+        cv2.ORB_create()  # type: ignore[attr-defined]
+        if method == "orb"
+        else cv2.SIFT_create()  # type: ignore[attr-defined]
+    )
     expected_width = reference.descriptorSize()
     expected_dtype = np.uint8 if method == "orb" else np.float32
 
@@ -122,6 +126,48 @@ def test_detect_and_compute_rejects_float_nfeatures() -> None:
 
     with pytest.raises(TypeError, match="integer"):
         im.detect_and_compute(image, method="orb", nfeatures=10.0)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("method", ["orb", "sift"])
+def test_detect_and_compute_accepts_a_large_nfeatures_value(method: str) -> None:
+    # Deliberately not the literal int32 boundary (2**31 - 1): verified
+    # directly that ORB's internal allocation at that exact value succeeds
+    # on some platforms (e.g. macOS, which overcommits memory) but fails
+    # with a genuine std::bad_alloc on memory-constrained Linux CI runners
+    # -- even for this same tiny 10x10 image. That is a real resource
+    # question (OpenCV correctly reporting it cannot allocate that much
+    # memory), not a validation-contract question -- the rejection tests
+    # below already pin the exact boundary (2**31 is rejected, so
+    # 2**31 - 1 is the largest value our own validation permits). A large
+    # but unextreme value here exercises "a large nfeatures is accepted"
+    # without depending on how much memory the environment happens to have.
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    features = im.detect_and_compute(image, method=method, nfeatures=100_000)  # type: ignore[arg-type]
+
+    assert features.descriptors.shape[0] == len(features.keypoints)
+
+
+@pytest.mark.parametrize("method", ["orb", "sift"])
+@pytest.mark.parametrize("nfeatures", [2**31, 2**63])
+def test_detect_and_compute_rejects_nfeatures_above_int32_range(
+    nfeatures: int, method: str
+) -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="int32"):
+        im.detect_and_compute(image, method=method, nfeatures=nfeatures)  # type: ignore[arg-type]
+
+
+def test_detect_and_compute_rejects_numpy_uint64_max_nfeatures() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="int32"):
+        im.detect_and_compute(
+            image,
+            method="orb",
+            nfeatures=np.uint64(2**64 - 1),  # type: ignore[arg-type]
+        )
 
 
 def test_detect_and_compute_rejects_three_channel_image() -> None:
