@@ -321,9 +321,9 @@ def match_template(
         fit within `image` spatially, `image`/`template` does not have 1-4
         channels or their channel counts differ, `method` is not one of
         the accepted values, `template` is spatially constant (per channel)
-        and `method` is ``"ccoeff_normed"`` or ``"sqdiff_normed"``, or
-        `template` is all-zero (zero energy) and `method` is
-        ``"ccorr_normed"``.
+        and `method` is ``"ccoeff"``, ``"ccoeff_normed"``, or
+        ``"sqdiff_normed"``, or `template` is all-zero (zero energy) and
+        `method` is ``"ccorr"`` or ``"ccorr_normed"``.
     TypeError
         If `image`/`template` does not have dtype ``uint8``/``float32``, or
         their dtypes differ.
@@ -355,27 +355,41 @@ def match_template(
             f"template ({template_height}x{template_width}) must fit within image "
             f"({image_height}x{image_width})"
         )
-    if method in ("ccoeff_normed", "sqdiff_normed") and _is_spatially_constant(template):
-        # A deliberate, conservative improcv choice -- not a claim that the
-        # formula is mathematically undefined for a constant, nonzero
-        # template (it isn't for sqdiff_normed; the energy is well-defined).
-        # Verified directly, on both OpenCV 4.13 and 5.0: a spatially
-        # constant template's normalized result can degenerate to a
-        # uniform 1.0 map depending on template size and pixel intensity in
-        # a way that isn't safely predictable (e.g. a mid-gray value is
-        # non-degenerate at 3x3 but fully degenerate at 10x10), so improcv
-        # rejects the whole spatially-constant category rather than trying
-        # to carve out a "safe" subset. This does not catch every possible
-        # degenerate case (a verified non-constant, very-low-energy
-        # template can still produce a uniform result) -- it is a narrow,
-        # deliberately limited guard against the clearest, most common one.
+    if method in ("ccoeff", "ccoeff_normed", "sqdiff_normed") and _is_spatially_constant(template):
+        # Two distinct reasons share this one check:
+        #
+        # - "ccoeff"/"ccoeff_normed" subtract the template's own mean before
+        #   correlating. For a spatially constant template, the mean-centered
+        #   template is deterministically all zero, so the numerator is zero
+        #   at every position -- verified directly (a supposedly-exact-zero
+        #   result shows only floating-point noise, e.g. min=-0.0625,
+        #   max=0.0625 for a mid-gray template, never a real signal). Picking
+        #   a max/min out of that noise is meaningless, not just unreliable.
+        # - "sqdiff_normed" is a deliberate, conservative improcv choice, not
+        #   a mathematical necessity: the formula is well-defined for a
+        #   constant, nonzero template (its energy is well-defined). Verified
+        #   directly, on both OpenCV 4.13 and 5.0, that the normalized result
+        #   can still degenerate to a uniform 1.0 map depending on template
+        #   size and pixel intensity in a way that isn't safely predictable
+        #   (e.g. a mid-gray value is non-degenerate at 3x3 but fully
+        #   degenerate at 10x10), so improcv rejects the whole
+        #   spatially-constant category rather than trying to carve out a
+        #   "safe" subset. This does not catch every possible degenerate case
+        #   (a verified non-constant, very-low-energy template can still
+        #   produce a uniform result) -- it is a narrow, deliberately limited
+        #   guard against the clearest, most common one.
         raise ValueError(
             f"template must not be spatially constant (per channel) for method "
-            f"{method!r} -- verified to potentially produce a uniform, uninformative "
-            "result"
+            f"{method!r} -- verified to produce a meaningless (mean-centered-to-zero "
+            "or potentially uniform) result"
         )
-    if method == "ccorr_normed" and not np.any(template):
-        raise ValueError("template must not be all-zero (zero energy) for method 'ccorr_normed'")
+    if method in ("ccorr", "ccorr_normed") and not np.any(template):
+        # "ccorr" (unnormalized cross-correlation): numerator = sum(I * T);
+        # an all-zero template makes this exactly zero at every position --
+        # verified directly, a real, deterministic degeneracy, not numerical
+        # noise. "ccorr_normed" hits the same zero-energy 0/0 case, resolved
+        # by OpenCV to a clean 0.0 rather than NaN -- still uninformative.
+        raise ValueError(f"template must not be all-zero (zero energy) for method {method!r}")
 
     result = cv2.matchTemplate(image, template, _TEMPLATE_MATCH_METHODS[method])
     # cv2's stubs type matchTemplate's result as the loose MatLike; it always
