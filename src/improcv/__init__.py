@@ -56,6 +56,7 @@ from improcv.features import (
     Features,
     detect_and_compute,
     match_features,
+    match_features_ratio,
 )
 from improcv.filters import (
     bilateral_filter,
@@ -179,6 +180,7 @@ __all__ = [
     "invert",
     "laplacian_edge",
     "match_features",
+    "match_features_ratio",
     "match_template",
     "mean_stddev",
     "median_blur",

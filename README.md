@@ -113,6 +113,9 @@ matches = im.match_features(query, train)
 # matches is a plain list[cv2.DMatch], sorted by distance (best match
 # first) -- pass it straight into cv2.drawMatches, no conversion needed.
 annotated = cv2.drawMatches(image1, query.keypoints, image2, train.keypoints, matches, None)
+
+# Or filter with Lowe's ratio test instead of match_features' cross-check:
+ratio_matches = im.match_features_ratio(query, train, ratio=0.75)
 ```
 
 ## Status
