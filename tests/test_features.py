@@ -741,6 +741,24 @@ def test_match_features_ratio_empty_query_returns_empty() -> None:
     assert matches == []
 
 
+def test_match_features_ratio_empty_query_and_empty_train_returns_empty() -> None:
+    query = _empty_features("orb")
+    train = _empty_features("orb")
+
+    matches = im.match_features_ratio(query, train)
+
+    assert matches == []
+
+
+def test_match_features_ratio_empty_query_and_single_descriptor_train_returns_empty() -> None:
+    query = _empty_features("orb")
+    train = _orb_features_with_n_descriptors(1)
+
+    matches = im.match_features_ratio(query, train)
+
+    assert matches == []
+
+
 def test_match_features_ratio_rejects_empty_but_incompatible_pair() -> None:
     query = _empty_features("orb")
     train = _empty_features("sift")
@@ -755,6 +773,19 @@ def test_match_features_ratio_rejects_out_of_range_ratio(ratio: float) -> None:
 
     with pytest.raises(ValueError, match="ratio"):
         im.match_features_ratio(query, train, ratio=ratio)
+
+
+@pytest.mark.parametrize("ratio", [10**400, -(10**400)])
+def test_match_features_ratio_rejects_huge_python_int_ratio(ratio: int) -> None:
+    # A Python int magnitude too large to represent as float raises a raw
+    # OverflowError from a naive float(ratio) call -- verified directly.
+    # require_finite handles this internally (its _safe_float treats an
+    # unconvertible magnitude as infinity), so this must surface as a
+    # controlled ValueError, never OverflowError.
+    query, train = _orb_query_and_train()
+
+    with pytest.raises(ValueError, match="finite"):
+        im.match_features_ratio(query, train, ratio=ratio)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("ratio", [True, "0.75", None])
@@ -898,6 +929,23 @@ def test_match_features_ratio_rejects_non_finite_distance_from_matcher(
     query, train = _orb_query_and_train_ratio(2)
     fake_knn_matches = [
         [cv2.DMatch(0, 0, float("nan")), cv2.DMatch(0, 1, 2.0)],
+        [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
+    ]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
+
+    with pytest.raises(RuntimeError, match="non-finite"):
+        im.match_features_ratio(query, train)
+
+
+def test_match_features_ratio_rejects_non_finite_second_best_distance_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A malformed second-best candidate must not simply fail the ratio
+    # comparison and vanish silently -- every neighbor is validated before
+    # the ratio decision, not only the ones that end up kept.
+    query, train = _orb_query_and_train_ratio(2)
+    fake_knn_matches = [
+        [cv2.DMatch(0, 0, 1.0), cv2.DMatch(0, 1, float("nan"))],
         [cv2.DMatch(1, 0, 1.0), cv2.DMatch(1, 1, 2.0)],
     ]
     monkeypatch.setattr(cv2, "BFMatcher", _FakeKnnBFMatcher(fake_knn_matches))
