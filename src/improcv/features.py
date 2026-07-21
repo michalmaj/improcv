@@ -218,13 +218,16 @@ def _require_valid_features(value: Features, name: str) -> None:
     if not all(isinstance(kp, cv2.KeyPoint) for kp in value.keypoints):
         raise TypeError(f"{name}.keypoints must contain only cv2.KeyPoint objects")
 
-    contract = _METHOD_DESCRIPTOR_CONTRACTS.get(value.method)
-    if contract is None:
+    if not isinstance(value.method, str):
+        raise TypeError(f"{name}.method must be a str, got {type(value.method).__name__}")
+    if value.method not in _METHOD_DESCRIPTOR_CONTRACTS:
         raise ValueError(
             f"{name}.method must be one of {tuple(_METHOD_DESCRIPTOR_CONTRACTS)}, "
             f"got {value.method!r}"
         )
-    expected_norm, expected_dtype, expected_width = contract
+    expected_norm, expected_dtype, expected_width = _METHOD_DESCRIPTOR_CONTRACTS[
+        cast(FeatureMethod, value.method)
+    ]
 
     if value.descriptors.ndim != 2:
         raise ValueError(
@@ -308,9 +311,9 @@ def match_features(
     TypeError
         If `query`/`train` is not a `Features`, its `keypoints` is not a
         `list`, any element of `keypoints` is not a `cv2.KeyPoint`, its
-        `descriptors` is not an `np.ndarray`, `query`/`train` have
-        mismatched descriptor dtypes, or `cross_check` is not an actual
-        `bool`.
+        `descriptors` is not an `np.ndarray`, its `method` is not a `str`,
+        `query`/`train` have mismatched descriptor dtypes, or `cross_check`
+        is not an actual `bool`.
     RuntimeError
         If a returned `cv2.DMatch` has a non-finite `distance` or an
         out-of-range `queryIdx`/`trainIdx` -- OpenCV producing an

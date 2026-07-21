@@ -473,3 +473,127 @@ def test_match_features_cross_check_has_unique_indices() -> None:
     train_indices = [m.trainIdx for m in matches]
     assert len(set(query_indices)) == len(query_indices)
     assert len(set(train_indices)) == len(train_indices)
+
+
+@pytest.mark.parametrize("bad_method", [[], {}, np.array(["orb"])])
+def test_match_features_rejects_non_str_method(bad_method: object) -> None:
+    bad_query = im.Features(
+        method=bad_method,  # type: ignore[arg-type]
+        norm="hamming",
+        keypoints=[],
+        descriptors=np.empty((0, 32), dtype=np.uint8),
+    )
+    image1, image2 = _two_textured_images()
+    train = im.detect_and_compute(image2, method="orb")
+
+    with pytest.raises(TypeError, match="str"):
+        im.match_features(bad_query, train)
+
+
+def test_match_features_rejects_norm_inconsistent_with_method() -> None:
+    image1, image2 = _two_textured_images()
+    query = im.Features(
+        method="orb",
+        norm="l2",
+        keypoints=[cv2.KeyPoint(0, 0, 1)],
+        descriptors=np.zeros((1, 32), dtype=np.uint8),
+    )
+    train = im.detect_and_compute(image2, method="orb")
+
+    with pytest.raises(ValueError, match="norm"):
+        im.match_features(query, train)
+
+
+class _FakeBFMatcher:
+    """Stand-in for cv2.BFMatcher returning a fixed, possibly-broken match list.
+
+    Used to exercise match_features' postcondition checks on the raw
+    BFMatcher result, which real BFMatcher output never violates and so
+    can't otherwise be reached from real descriptors.
+    """
+
+    def __init__(self, fake_matches: list[cv2.DMatch]) -> None:
+        self._fake_matches = fake_matches
+
+    def __call__(self, norm_type: int, crossCheck: bool) -> "_FakeBFMatcher":
+        return self
+
+    def match(
+        self, query_descriptors: np.ndarray, train_descriptors: np.ndarray
+    ) -> list[cv2.DMatch]:
+        return self._fake_matches
+
+
+def _orb_query_and_train() -> tuple[im.Features, im.Features]:
+    image1, image2 = _two_textured_images()
+    query = im.detect_and_compute(image1, method="orb", nfeatures=10)
+    train = im.detect_and_compute(image2, method="orb", nfeatures=10)
+    return query, train
+
+
+def test_match_features_rejects_non_finite_distance_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train()
+    fake_matches = [cv2.DMatch(0, 0, float("nan"))]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeBFMatcher(fake_matches))
+
+    with pytest.raises(RuntimeError, match="distance"):
+        im.match_features(query, train)
+
+
+def test_match_features_rejects_out_of_range_query_idx_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train()
+    fake_matches = [cv2.DMatch(query.descriptors.shape[0], 0, 1.0)]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeBFMatcher(fake_matches))
+
+    with pytest.raises(RuntimeError, match="queryIdx"):
+        im.match_features(query, train)
+
+
+def test_match_features_rejects_out_of_range_train_idx_from_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train()
+    fake_matches = [cv2.DMatch(0, train.descriptors.shape[0], 1.0)]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeBFMatcher(fake_matches))
+
+    with pytest.raises(RuntimeError, match="trainIdx"):
+        im.match_features(query, train)
+
+
+def test_match_features_rejects_too_few_matches_without_cross_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train()
+    fake_matches = [cv2.DMatch(0, 0, 1.0)]  # fewer than query.descriptors.shape[0]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeBFMatcher(fake_matches))
+
+    with pytest.raises(RuntimeError, match="expected exactly"):
+        im.match_features(query, train, cross_check=False)
+
+
+def test_match_features_rejects_duplicate_query_idx_without_cross_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train()
+    num_query = query.descriptors.shape[0]
+    fake_matches = [cv2.DMatch(0, i, 1.0) for i in range(num_query)]
+    fake_matches[-1] = cv2.DMatch(0, num_query - 1, 1.0)  # duplicate queryIdx 0
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeBFMatcher(fake_matches))
+
+    with pytest.raises(RuntimeError, match="duplicate queryIdx"):
+        im.match_features(query, train, cross_check=False)
+
+
+def test_match_features_rejects_duplicate_train_idx_with_cross_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train = _orb_query_and_train()
+    fake_matches = [cv2.DMatch(0, 0, 1.0), cv2.DMatch(1, 0, 2.0)]
+    monkeypatch.setattr(cv2, "BFMatcher", _FakeBFMatcher(fake_matches))
+
+    with pytest.raises(RuntimeError, match="duplicate trainIdx"):
+        im.match_features(query, train, cross_check=True)
