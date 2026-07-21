@@ -91,6 +91,7 @@ from improcv.regions import (
     distance_transform,
     flood_fill,
 )
+from improcv.restoration import InpaintMethod, inpaint
 from improcv.segmentation import grabcut_rect, watershed
 from improcv.transforms import (
     center_crop,
@@ -120,6 +121,7 @@ __all__ = [
     "Image",
     "ImageFloat32",
     "ImageU8",
+    "InpaintMethod",
     "Labels",
     "Mask",
     "MeanStdDevResult",
@@ -162,6 +164,7 @@ __all__ = [
     "histogram",
     "histogram_equalization",
     "in_range",
+    "inpaint",
     "invert",
     "laplacian_edge",
     "match_template",
