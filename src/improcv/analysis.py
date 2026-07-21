@@ -11,6 +11,7 @@ import numpy.typing as npt
 from improcv._compat.opencv import _normalize_calc_hist_output
 from improcv._validation import (
     require_bool,
+    require_channel_count,
     require_dtype,
     require_finite,
     require_image_ndim,
@@ -35,6 +36,19 @@ __all__ = [
 ]
 
 _HISTOGRAM_DTYPES = (np.uint8, np.uint16, np.float32)
+_HISTOGRAM_MAX_CHANNELS = 128
+
+
+def _require_value_range(value: object, name: str = "value_range") -> tuple[float, float]:
+    """Raise ValueError unless `value` is a 2-tuple of finite reals with low < high."""
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise ValueError(f"{name} must be a 2-tuple, got {value!r}")
+    low, high = value
+    require_finite(low, f"{name}[0]")
+    require_finite(high, f"{name}[1]")
+    if not low < high:
+        raise ValueError(f"{name} must have low < high, got ({low}, {high})")
+    return (float(low), float(high))
 
 
 def histogram(
@@ -54,7 +68,12 @@ def histogram(
     ----------
     image : np.ndarray
         Input image with shape ``(H, W)`` or ``(H, W, C)``, dtype ``uint8``,
-        ``uint16``, or ``float32``.
+        ``uint16``, or ``float32``, 1-128 channels. The 128-channel ceiling
+        is a common, cross-version-safe limit: verified directly that
+        selecting a channel index near the top of a very-high-channel-count
+        image works on OpenCV 4.13 well beyond 128 channels, but raises a
+        raw ``cv2.error`` on OpenCV 5.0 above 128 -- so 128 is the largest
+        count both bindings handle identically.
     channel : int, default 0
         Index of the channel to compute the histogram over, in
         ``[0, image_channel_count)``. Accepts any `numbers.Integral`
@@ -82,10 +101,10 @@ def histogram(
     Raises
     ------
     ValueError
-        If `image` is not 2D/3D or is empty, `channel` is out of range,
-        `bins` is not positive, `value_range` does not have `low < high` or
-        contains a non-finite value, or `mask` does not match `image`'s
-        spatial size.
+        If `image` is not 2D/3D or is empty, does not have 1-128 channels,
+        `channel` is out of range, `bins` is not positive, `value_range`
+        is not a 2-tuple, does not have `low < high`, or contains a
+        non-finite value, or `mask` does not match `image`'s spatial size.
     TypeError
         If `image` does not have dtype ``uint8``/``uint16``/``float32``,
         `channel`/`bins` is not `numbers.Integral` (rejecting `bool` and
@@ -93,18 +112,14 @@ def histogram(
     """
     require_image_ndim(image, ndims=(2, 3))
     require_dtype(image, _HISTOGRAM_DTYPES)
+    num_channels = require_channel_count(image, 1, _HISTOGRAM_MAX_CHANNELS)
     require_integral(channel, "channel")
     channel_int = int(channel)
-    num_channels = 1 if image.ndim == 2 else image.shape[2]
     if not (0 <= channel_int < num_channels):
         raise ValueError(f"channel must be in [0, {num_channels}), got {channel_int}")
     require_positive_integral(bins, "bins")
     bins_int = int(bins)
-    low, high = value_range
-    require_finite(low, "value_range[0]")
-    require_finite(high, "value_range[1]")
-    if not low < high:
-        raise ValueError(f"value_range must have low < high, got ({low}, {high})")
+    low, high = _require_value_range(value_range)
     if mask is not None:
         require_spatial_mask(mask, image)
 
@@ -142,6 +157,42 @@ class Moments(NamedTuple):
 
 
 _MOMENTS_RASTER_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
+
+
+def _moments_from_dict(raw: dict[str, float]) -> Moments:
+    """Build a `Moments` from `cv2.moments()`'s raw dict, by explicit key name.
+
+    Never `Moments(*raw.values())` or `Moments(**raw)`: dict key/value order
+    is not a documented guarantee, and this keeps the 24-field contract
+    closed -- a future OpenCV adding an extra key would otherwise pass
+    through silently instead of being explicitly ignored here.
+    """
+    return Moments(
+        m00=raw["m00"],
+        m10=raw["m10"],
+        m01=raw["m01"],
+        m20=raw["m20"],
+        m11=raw["m11"],
+        m02=raw["m02"],
+        m30=raw["m30"],
+        m21=raw["m21"],
+        m12=raw["m12"],
+        m03=raw["m03"],
+        mu20=raw["mu20"],
+        mu11=raw["mu11"],
+        mu02=raw["mu02"],
+        mu30=raw["mu30"],
+        mu21=raw["mu21"],
+        mu12=raw["mu12"],
+        mu03=raw["mu03"],
+        nu20=raw["nu20"],
+        nu11=raw["nu11"],
+        nu02=raw["nu02"],
+        nu30=raw["nu30"],
+        nu21=raw["nu21"],
+        nu12=raw["nu12"],
+        nu03=raw["nu03"],
+    )
 
 
 def moments(image_or_contour: Image | Contour, binary_image: bool = False) -> Moments:
@@ -196,11 +247,11 @@ def moments(image_or_contour: Image | Contour, binary_image: bool = False) -> Mo
                 "a parameter that has no effect"
             )
         raw = cv2.moments(image_or_contour)
-        return Moments(**raw)
+        return _moments_from_dict(raw)
     require_image_ndim(image_or_contour, ndims=(2,))
     require_dtype(image_or_contour, _MOMENTS_RASTER_DTYPES)
     raw = cv2.moments(image_or_contour, binary_image)
-    return Moments(**raw)
+    return _moments_from_dict(raw)
 
 
 TemplateMatchMethod = Literal[
@@ -268,8 +319,11 @@ def match_template(
     ValueError
         If `image`/`template` is not 2D/3D or is empty, `template` does not
         fit within `image` spatially, `image`/`template` does not have 1-4
-        channels or their channel counts differ, or `method` is not one of
-        the accepted values.
+        channels or their channel counts differ, `method` is not one of
+        the accepted values, `template` is spatially constant (per channel)
+        and `method` is ``"ccoeff_normed"`` or ``"sqdiff_normed"``, or
+        `template` is all-zero (zero energy) and `method` is
+        ``"ccorr_normed"``.
     TypeError
         If `image`/`template` does not have dtype ``uint8``/``float32``, or
         their dtypes differ.
@@ -404,6 +458,7 @@ class MeanStdDevResult(NamedTuple):
 
 
 _MEAN_STDDEV_DTYPES = (np.uint8, np.uint16, np.int16, np.int32, np.float32, np.float64)
+_MEAN_STDDEV_MAX_CHANNELS = 128
 
 
 def mean_stddev(image: Image, mask: Mask | None = None) -> MeanStdDevResult:
@@ -414,9 +469,14 @@ def mean_stddev(image: Image, mask: Mask | None = None) -> MeanStdDevResult:
     image : np.ndarray
         Input image with shape ``(H, W)`` or ``(H, W, C)``, dtype one of
         ``uint8``, ``uint16``, ``int16``, ``int32``, ``float32``,
-        ``float64``. No channel-count ceiling is imposed -- verified
-        directly that ``cv2.meanStdDev`` handles at least 128 channels
-        correctly.
+        ``float64``, 1-128 channels. The 128-channel ceiling is a common,
+        cross-version-safe limit, not an OpenCV 5.x-specific one: verified
+        directly that ``cv2.meanStdDev`` handles up to 512 channels
+        correctly on OpenCV 4.13, but silently collapses to a single
+        aggregate mean/stddev above 128 channels on OpenCV 5.0 -- so 128 is
+        the largest count both bindings compute correctly, and improcv
+        rejects anything above it rather than silently corrupting the
+        result depending on which OpenCV happens to be installed.
     mask : np.ndarray or None, default None
         Optional ``uint8`` mask, shape ``(H, W)`` matching `image`'s
         spatial size, applied identically to every channel. For an
@@ -435,14 +495,15 @@ def mean_stddev(image: Image, mask: Mask | None = None) -> MeanStdDevResult:
     Raises
     ------
     ValueError
-        If `image` is not 2D/3D or is empty, or `mask` does not match
-        `image`'s spatial size.
+        If `image` is not 2D/3D or is empty, does not have 1-128 channels,
+        or `mask` does not match `image`'s spatial size.
     TypeError
         If `image` does not have one of the accepted dtypes, or `mask`
         does not have dtype ``uint8``.
     """
     require_image_ndim(image, ndims=(2, 3))
     require_dtype(image, _MEAN_STDDEV_DTYPES)
+    require_channel_count(image, 1, _MEAN_STDDEV_MAX_CHANNELS)
     if mask is not None:
         require_spatial_mask(mask, image)
     mean, stddev = cv2.meanStdDev(image, mask=mask)
