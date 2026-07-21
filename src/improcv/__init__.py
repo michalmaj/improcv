@@ -50,6 +50,7 @@ from improcv.contours import (
     sort_contours,
 )
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
+from improcv.features import DescriptorNorm, FeatureMethod, Features, detect_and_compute
 from improcv.filters import (
     bilateral_filter,
     clahe,
@@ -114,8 +115,11 @@ __all__ = [
     "ComponentStats",
     "Connectivity",
     "Contour",
+    "DescriptorNorm",
     "DistanceMaskSize",
     "DistanceType",
+    "FeatureMethod",
+    "Features",
     "FloodFillResult",
     "Hierarchy",
     "Image",
@@ -150,6 +154,7 @@ __all__ = [
     "connected_components_with_stats",
     "convex_hull",
     "crop",
+    "detect_and_compute",
     "dilate",
     "distance_transform",
     "ensure_gray",
