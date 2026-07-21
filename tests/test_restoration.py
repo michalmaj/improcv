@@ -198,16 +198,33 @@ def test_restoration_public_names_are_reexported_from_improcv() -> None:
         assert hasattr(im, name)
 
 
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.float32])
 @pytest.mark.parametrize("method", ["ns", "telea"])
 @pytest.mark.parametrize("shape", [(1, 20), (20, 1), (1, 1)])
-def test_inpaint_rejects_single_row_or_column_image(shape: tuple[int, int], method: str) -> None:
+def test_inpaint_rejects_single_row_or_column_image(
+    shape: tuple[int, int], method: str, dtype: type
+) -> None:
     # Verified directly, repeatedly, across separate processes: a (1, N)
     # float32 image produces nondeterministic output for the exact same
     # input -- including NaN -- on both OpenCV 4.13 and 5.0. Rejected
     # uniformly for every dtype, not only where the corruption is visible
-    # as NaN.
-    image = np.ones(shape, dtype=np.float32)
+    # as NaN -- a (1, N) uint8/uint16 image was also verified to produce
+    # non-reproducible output across runs, just not NaN-capable.
+    image = np.ones(shape, dtype=dtype)
     mask = np.zeros(shape, dtype=np.uint8)
+    mask[0, 0] = 255
+
+    with pytest.raises(ValueError, match="at least 2 pixels"):
+        im.inpaint(image, mask, radius=3.0, method=method)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("method", ["ns", "telea"])
+@pytest.mark.parametrize("shape", [(1, 20, 3), (20, 1, 3), (1, 1, 3)])
+def test_inpaint_rejects_single_row_or_column_bgr_image(
+    shape: tuple[int, int, int], method: str
+) -> None:
+    image = np.ones(shape, dtype=np.uint8)
+    mask = np.zeros(shape[:2], dtype=np.uint8)
     mask[0, 0] = 255
 
     with pytest.raises(ValueError, match="at least 2 pixels"):
