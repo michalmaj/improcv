@@ -162,3 +162,37 @@ def test_moments_does_not_mutate_raster_input() -> None:
     im.moments(image)
 
     np.testing.assert_array_equal(image, original)
+
+
+def test_moments_computes_moments_for_a_contour() -> None:
+    # A square contour (corners only, matching cv2.findContours' "simple"
+    # approximation output) spanning coordinates 0..9 -- a 9x9 span, so the
+    # shoelace-formula area (m00) is 9*9 = 81, not 10*10.
+    contour = np.array([[[0, 0]], [[9, 0]], [[9, 9]], [[0, 9]]], dtype=np.int32)
+
+    result = im.moments(contour)
+
+    assert result.m00 == 81.0
+
+
+def test_moments_ignores_binary_image_is_rejected_for_contour() -> None:
+    contour = np.array([[[0, 0]], [[9, 0]], [[9, 9]], [[0, 9]]], dtype=np.int32)
+
+    with pytest.raises(ValueError, match="binary_image"):
+        im.moments(contour, binary_image=True)
+
+
+def test_moments_rejects_empty_contour() -> None:
+    empty_contour = np.empty((0, 1, 2), dtype=np.int32)
+
+    with pytest.raises(ValueError, match="point"):
+        im.moments(empty_contour)
+
+
+def test_moments_rejects_malformed_contour_shape() -> None:
+    # ndim == 3 (so it dispatches to the contour path, not the raster path),
+    # but the last dimension is 3 instead of 2 -- not a valid (N, 1, 2) Contour.
+    bad_contour = np.zeros((5, 1, 3), dtype=np.int32)
+
+    with pytest.raises(ValueError, match="shape"):
+        im.moments(bad_contour)

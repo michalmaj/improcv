@@ -18,6 +18,7 @@ from improcv._validation import (
     require_positive_integral,
     require_spatial_mask,
 )
+from improcv.contours import Contour, _require_contour
 from improcv.types import Image, Mask
 
 __all__ = [
@@ -136,17 +137,27 @@ class Moments(NamedTuple):
 _MOMENTS_RASTER_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
 
 
-def moments(image_or_contour: Image, binary_image: bool = False) -> Moments:
-    """Compute image or spatial moments from a raster image/mask.
+def moments(image_or_contour: Image | Contour, binary_image: bool = False) -> Moments:
+    """Compute image or spatial moments from a raster image/mask or a contour.
 
     Parameters
     ----------
     image_or_contour : np.ndarray
-        A 2D, single-channel, non-empty raster image, dtype one of
-        ``uint8``, ``uint16``, ``int16``, ``float32``, ``float64``.
+        Either a 2D, single-channel, non-empty raster image (dtype one of
+        ``uint8``, ``uint16``, ``int16``, ``float32``, ``float64``), or a
+        `Contour` -- shape ``(N, 1, 2)``, dtype ``int32``, at least 1 point.
+        Dispatched on ``ndim`` and ``dtype``: 3D, ``int32`` input is treated
+        as a contour attempt; everything else goes through the 2D-only
+        raster path (so a 3-channel raster image, also 3D but not
+        ``int32``, still gets the clear "must have 2 dimensions" raster
+        error instead of a confusing contour-shaped one).
     binary_image : bool, default False
-        If ``True``, nonzero pixels are treated as ``1`` (not ``255``) when
-        computing raw moments -- verified directly.
+        Raster input only: if ``True``, nonzero pixels are treated as ``1``
+        (not ``255``) when computing raw moments -- verified directly.
+        Combining ``binary_image=True`` with contour input raises
+        `ValueError`: OpenCV silently ignores `binary_image` for contour
+        input (verified directly), so accepting it here would misleadingly
+        suggest it has an effect.
 
     Returns
     -------
@@ -156,13 +167,29 @@ def moments(image_or_contour: Image, binary_image: bool = False) -> Moments:
     Raises
     ------
     ValueError
-        If `image_or_contour` does not have exactly 2 dimensions or is
-        empty.
+        For raster input: if it does not have exactly 2 dimensions or is
+        empty. For contour input: if it does not have shape ``(N, 1, 2)``
+        with at least 1 point, or if `binary_image` is ``True``.
     TypeError
-        If `image_or_contour` does not have one of the accepted dtypes, or
-        `binary_image` is not an actual `bool`.
+        For raster input: if it does not have one of the accepted dtypes.
+        For contour input: if it is not an `np.ndarray` of dtype ``int32``.
+        In both cases, if `binary_image` is not an actual `bool`.
     """
     require_bool(binary_image, "binary_image")
+    if (
+        isinstance(image_or_contour, np.ndarray)
+        and image_or_contour.ndim == 3
+        and image_or_contour.dtype == np.int32
+    ):
+        _require_contour(image_or_contour, min_points=1)
+        if binary_image:
+            raise ValueError(
+                "binary_image is not supported for contour input -- OpenCV silently "
+                "ignores it, so improcv rejects the combination instead of accepting "
+                "a parameter that has no effect"
+            )
+        raw = cv2.moments(image_or_contour)
+        return Moments(**raw)
     require_image_ndim(image_or_contour, ndims=(2,))
     require_dtype(image_or_contour, _MOMENTS_RASTER_DTYPES)
     raw = cv2.moments(image_or_contour, binary_image)
