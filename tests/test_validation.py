@@ -149,6 +149,25 @@ def test_require_finite_rejects_non_numeric() -> None:
         require_finite("nan", "delta")
 
 
+def test_numeric_validators_reject_huge_int_without_raw_overflowerror() -> None:
+    # float(10**400) raises a raw OverflowError ("int too large to convert
+    # to float") -- verified directly against Python itself. Every
+    # validator that internally converts a numbers.Real to float must catch
+    # that and surface a clear ValueError instead, shared root cause
+    # (float() overflow), not specific to any one caller.
+    huge = 10**400
+    with pytest.raises(ValueError, match="finite"):
+        require_finite(huge, "x")
+    with pytest.raises(ValueError, match="finite"):
+        require_positive(huge, "x")
+    with pytest.raises(ValueError, match="finite"):
+        require_non_negative(huge, "x")
+    with pytest.raises(ValueError, match="between"):
+        require_range(huge, 0.0, 1.0, "x")
+    with pytest.raises(ValueError, match="fit within the range"):
+        require_fits_dtype(huge, np.uint8, "x")
+
+
 def test_require_dtype_accepts_allowed_dtype() -> None:
     require_dtype(np.zeros((4, 4), dtype=np.uint8), (np.uint8,))
 

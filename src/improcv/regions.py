@@ -226,11 +226,13 @@ def distance_transform(
     Raises
     ------
     ValueError
-        If `mask` does not have exactly 2 dimensions or is empty,
+        If `mask` does not have exactly 2 dimensions or is empty, `mask`
+        does not contain at least one zero-valued (background) pixel,
         `distance_type` is not one of the accepted values, or `mask_size`
         (explicit or defaulted) is not valid for the chosen `distance_type`.
     TypeError
-        If `mask` does not have dtype ``uint8``.
+        If `mask` does not have dtype ``uint8``, or an explicit `mask_size`
+        is not `numbers.Integral` (rejecting `bool`).
     """
     require_image_ndim(mask, ndims=(2,))
     require_dtype(mask, (np.uint8,))
@@ -397,14 +399,15 @@ def flood_fill(
     ------
     ValueError
         If `image` is not 2D/3D or is empty, does not have 1 or 3 channels,
-        `seed_point` is out of bounds, `new_value`/`lo_diff`/`up_diff` has
-        the wrong element count for `image`'s channels or contains a
+        `seed_point` is not a 2-tuple (wrong type or length) or is not
+        within `image`'s bounds, `new_value`/`lo_diff`/`up_diff` has the
+        wrong element count for `image`'s channels or contains a
         non-finite value, `lo_diff`/`up_diff` contains a negative value, or
         (for a ``uint8`` `image`) `new_value` contains a value outside
         ``[0, 255]``.
     TypeError
         If `image` does not have dtype ``uint8`` or ``float32``,
-        `seed_point` is not a 2-tuple of `numbers.Integral` (rejecting
+        `seed_point`'s elements are not `numbers.Integral` (rejecting
         `bool`), or `new_value`/`lo_diff`/`up_diff` is not a real number or
         a sequence of real numbers.
     """
