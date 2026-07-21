@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, cast
 
 import cv2
 import numpy as np
@@ -65,11 +65,18 @@ def detect_and_compute(
     Parameters
     ----------
     image : np.ndarray
-        Input image with shape ``(H, W)``, dtype ``uint8``. Multi-channel
-        input is rejected explicitly (call `ensure_gray` first) -- verified
-        directly that OpenCV itself accepts 3-/4-channel input and silently
-        converts it to grayscale internally, but this project never hides
-        a color-to-grayscale conversion.
+        Input image with shape ``(H, W)``, dtype ``uint8``, height and
+        width each at least 2 pixels. Multi-channel input is rejected
+        explicitly (call `ensure_gray` first) -- verified directly that
+        OpenCV itself accepts 3-/4-channel input and silently converts it
+        to grayscale internally, but this project never hides a
+        color-to-grayscale conversion. The height/width-2 floor exists
+        because ORB raises a raw `cv2.error` (from an internal `cv2.resize`
+        call, `inv_scale_x > 0`) for a `(1, N)`/`(N, 1)`/`(1, 1)` image on
+        both OpenCV versions, while SIFT accepts the same shapes and
+        returns an empty result -- rather than a method-dependent geometry
+        contract for one shared function, both methods reject it the same
+        way; a `(2, 2)` image works for both.
     method : {"orb", "sift"}, default "orb"
         Detector/descriptor algorithm.
     nfeatures : int, default 500
@@ -101,15 +108,16 @@ def detect_and_compute(
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions or is empty, `method`
-        is not one of the accepted values, `nfeatures` is not positive, or
-        `mask` does not match `image`'s spatial size.
+        If `image` does not have exactly 2 dimensions or is empty, `image`
+        has a height or width below 2 pixels, `method` is not one of the
+        accepted values, `nfeatures` is not positive, or `mask` does not
+        match `image`'s spatial size.
     TypeError
         If `image` does not have dtype ``uint8``, `nfeatures` is not
         `numbers.Integral` (rejecting `bool`/`float`), or `mask` does not
         have dtype ``uint8``.
     RuntimeError
-        If `method` is ``"sift"`` but `cv2.SIFT` is unavailable in
+        If `method` is ``"sift"`` but `cv2.SIFT_create` is unavailable in
         the installed OpenCV build, or OpenCV reports a descriptor type or
         default norm this function does not recognize, or the detector's
         output is internally inconsistent (wrong descriptor shape/dtype
@@ -118,17 +126,24 @@ def detect_and_compute(
     require_one_of(method, ("orb", "sift"), "method")
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8,))
+    height, width = image.shape
+    if height < 2 or width < 2:
+        raise ValueError(
+            "image height and width must each be at least 2 pixels for feature detection"
+        )
     require_positive_integral(nfeatures, "nfeatures")
     nfeatures_int = int(nfeatures)
     if mask is not None:
         require_spatial_mask(mask, image)
 
+    detector: cv2.Feature2D
     if method == "sift":
-        if not hasattr(cv2, "SIFT"):
+        sift_create = getattr(cv2, "SIFT_create", None)
+        if not callable(sift_create):
             raise RuntimeError("SIFT is not available in this OpenCV build")
-        detector = cv2.SIFT.create(nfeatures=nfeatures_int)
+        detector = cast(cv2.Feature2D, sift_create(nfeatures=nfeatures_int))
     else:
-        detector = cv2.ORB.create(nfeatures=nfeatures_int)
+        detector = cv2.ORB_create(nfeatures=nfeatures_int)  # type: ignore[attr-defined]
 
     keypoints, descriptors = detector.detectAndCompute(image, mask)
     keypoints = list(keypoints)

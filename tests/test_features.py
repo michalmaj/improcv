@@ -145,11 +145,28 @@ def test_detect_and_compute_rejects_invalid_method() -> None:
         im.detect_and_compute(image, method="invalid")  # type: ignore[arg-type]
 
 
-def test_detect_and_compute_does_not_mutate_input() -> None:
+@pytest.mark.parametrize("method", ["orb", "sift"])
+@pytest.mark.parametrize("shape", [(1, 20), (20, 1), (1, 1)])
+def test_detect_and_compute_rejects_single_row_or_column_image(
+    shape: tuple[int, int], method: str
+) -> None:
+    # ORB raises a raw cv2.error (from an internal cv2.resize call,
+    # "inv_scale_x > 0") for these shapes on both OpenCV versions, while
+    # SIFT accepts them and returns an empty result -- verified directly.
+    # detect_and_compute rejects them uniformly for both methods with its
+    # own ValueError, instead of a method-dependent geometry contract.
+    image = np.zeros(shape, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="at least 2 pixels"):
+        im.detect_and_compute(image, method=method)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("method", ["orb", "sift"])
+def test_detect_and_compute_does_not_mutate_input(method: str) -> None:
     image = _textured_image()
     original = image.copy()
 
-    im.detect_and_compute(image, method="orb")
+    im.detect_and_compute(image, method=method)  # type: ignore[arg-type]
 
     np.testing.assert_array_equal(image, original)
 
@@ -164,11 +181,12 @@ def test_detect_and_compute_keypoints_work_directly_with_cv2_drawKeypoints() -> 
 
 
 def test_detect_and_compute_raises_when_sift_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Both verification environments actually have cv2.SIFT, so this
+    # Both verification environments actually have cv2.SIFT_create, so this
     # simulates its absence directly rather than depending on a specific
     # OpenCV build lacking it -- exercises the capability-detection branch
-    # itself.
-    monkeypatch.delattr(cv2, "SIFT")
+    # itself. Deletes the actual factory function detect_and_compute calls,
+    # not merely the related but distinct cv2.SIFT class.
+    monkeypatch.delattr(cv2, "SIFT_create")
     image = _textured_image()
 
     with pytest.raises(RuntimeError, match="SIFT"):
