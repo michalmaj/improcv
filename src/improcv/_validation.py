@@ -254,6 +254,39 @@ def require_odd(value: int, name: str) -> None:
         raise ValueError(f"{name} must be odd, got {value}")
 
 
+def require_spatial_mask(mask: np.ndarray, image: np.ndarray, name: str = "mask") -> None:
+    """Raise ValueError/TypeError unless `mask` is a valid spatial mask for `image`.
+
+    `mask` must be uint8, 2D, and match `image`'s spatial size (H, W) --
+    regardless of `image`'s channel count or dtype, since a mask selects
+    pixel positions, not per-channel values. Unlike
+    `require_same_shape_and_dtype`, which wrongly demands full shape+dtype
+    equality between two same-kind images.
+    """
+    require_dtype(mask, (np.uint8,), name)
+    require_image_ndim(mask, ndims=(2,))
+    spatial_shape = image.shape[:2]
+    if mask.shape != spatial_shape:
+        raise ValueError(
+            f"{name} must have shape {spatial_shape} (matching image's spatial size), "
+            f"got {mask.shape}"
+        )
+
+
+def require_positive_integral(value: object, name: str) -> None:
+    """Raise TypeError unless `value` is an integral number, then ValueError unless it's positive.
+
+    Unlike `require_positive_int`, which only accepts a plain Python `int`,
+    this accepts any `numbers.Integral` (including NumPy integer scalars) --
+    for parameters like a histogram bin count that may legitimately arrive
+    as `np.int32`.
+    """
+    require_integral(value, name)
+    assert isinstance(value, numbers.Integral)  # narrows for the type checker
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+
+
 def require_range(value: object, low: float, high: float, name: str) -> None:
     """Raise TypeError unless `value` is a real number, then ValueError unless
     `low <= value <= high`."""

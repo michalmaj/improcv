@@ -17,10 +17,12 @@ from improcv._validation import (
     require_point_2d,
     require_positive,
     require_positive_int,
+    require_positive_integral,
     require_range,
     require_real_number,
     require_same_shape_and_dtype,
     require_size_2d,
+    require_spatial_mask,
     require_transform_matrix,
 )
 
@@ -449,3 +451,66 @@ def test_require_point_2d_rejects_non_numeric_element() -> None:
         require_point_2d(("a", 2.0), "center")
     with pytest.raises(TypeError, match="real number"):
         require_point_2d((1.0, True), "center")
+
+
+def test_require_spatial_mask_accepts_matching_uint8_2d_mask() -> None:
+    image = np.zeros((10, 12, 3), dtype=np.float32)
+    mask = np.zeros((10, 12), dtype=np.uint8)
+
+    require_spatial_mask(mask, image)  # must not raise
+
+
+def test_require_spatial_mask_rejects_non_uint8_dtype() -> None:
+    image = np.zeros((10, 12), dtype=np.uint8)
+    mask = np.zeros((10, 12), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        require_spatial_mask(mask, image)  # type: ignore[arg-type]
+
+
+def test_require_spatial_mask_rejects_3d_mask() -> None:
+    image = np.zeros((10, 12), dtype=np.uint8)
+    mask = np.zeros((10, 12, 1), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 dimensions"):
+        require_spatial_mask(mask, image)
+
+
+def test_require_spatial_mask_rejects_mismatched_spatial_shape() -> None:
+    image = np.zeros((10, 12, 3), dtype=np.float32)
+    mask = np.zeros((10, 13), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="shape"):
+        require_spatial_mask(mask, image)
+
+
+def test_require_spatial_mask_ignores_image_channel_count_and_dtype() -> None:
+    # A BGR float32 image with a plain uint8 2D mask must be accepted --
+    # the mask only constrains spatial size, never the image's own
+    # channel count or dtype.
+    image = np.zeros((5, 5, 3), dtype=np.float32)
+    mask = np.zeros((5, 5), dtype=np.uint8)
+
+    require_spatial_mask(mask, image)  # must not raise
+
+
+def test_require_positive_integral_accepts_int_and_numpy_integer() -> None:
+    require_positive_integral(5, "bins")
+    require_positive_integral(np.int32(5), "bins")
+
+
+def test_require_positive_integral_rejects_bool() -> None:
+    with pytest.raises(TypeError, match="integer"):
+        require_positive_integral(True, "bins")
+
+
+def test_require_positive_integral_rejects_float() -> None:
+    with pytest.raises(TypeError, match="integer"):
+        require_positive_integral(5.0, "bins")
+
+
+def test_require_positive_integral_rejects_zero_and_negative() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        require_positive_integral(0, "bins")
+    with pytest.raises(ValueError, match="positive"):
+        require_positive_integral(-3, "bins")
