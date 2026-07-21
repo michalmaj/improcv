@@ -356,3 +356,57 @@ def test_match_template_allows_constant_template_for_unnormalized_methods() -> N
     for method in ("ccoeff", "ccorr", "sqdiff"):
         result = im.match_template(image, template, method)  # must not raise
         assert result.shape == (16, 16)
+
+
+def test_min_max_loc_finds_unique_min_and_max() -> None:
+    image = np.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]], dtype=np.uint8)
+
+    result = im.min_max_loc(image)
+
+    assert result.min_val == 10.0
+    assert result.max_val == 90.0
+    assert result.min_loc == (0, 0)  # (x, y)
+    assert result.max_loc == (2, 2)
+
+
+def test_min_max_loc_applies_mask() -> None:
+    image = np.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]], dtype=np.uint8)
+    mask = np.zeros((3, 3), dtype=np.uint8)
+    mask[0, 0] = 1
+    mask[2, 2] = 1
+
+    result = im.min_max_loc(image, mask)
+
+    assert result.min_val == 10.0
+    assert result.max_val == 90.0
+
+
+def test_min_max_loc_rejects_all_zero_mask() -> None:
+    image = np.array([[10, 20], [30, 40]], dtype=np.uint8)
+    mask = np.zeros((2, 2), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="mask"):
+        im.min_max_loc(image, mask)
+
+
+def test_min_max_loc_rejects_multichannel_image() -> None:
+    image = np.zeros((3, 3, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="dimensions"):
+        im.min_max_loc(image)
+
+
+def test_min_max_loc_rejects_unsupported_dtype() -> None:
+    image = np.zeros((3, 3), dtype=bool)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.min_max_loc(image)  # type: ignore[arg-type]
+
+
+def test_min_max_loc_does_not_mutate_input() -> None:
+    image = np.array([[10, 20], [30, 40]], dtype=np.uint8)
+    original = image.copy()
+
+    im.min_max_loc(image)
+
+    np.testing.assert_array_equal(image, original)

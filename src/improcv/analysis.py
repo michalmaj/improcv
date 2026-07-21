@@ -26,8 +26,10 @@ __all__ = [
     "histogram",
     "moments",
     "match_template",
+    "min_max_loc",
     "Moments",
     "TemplateMatchMethod",
+    "MinMaxResult",
 ]
 
 _HISTOGRAM_DTYPES = (np.uint8, np.uint16, np.float32)
@@ -324,3 +326,69 @@ def match_template(
     # produces float32 in practice, verified directly for both uint8 and
     # float32 input.
     return cast(npt.NDArray[np.float32], result)
+
+
+class MinMaxResult(NamedTuple):
+    """Result of `min_max_loc`.
+
+    `min_loc`/`max_loc` are ``(x, y)`` -- column, row -- matching
+    ``cv2.minMaxLoc``'s own convention, not ``(row, column)``.
+    """
+
+    min_val: float
+    max_val: float
+    min_loc: tuple[int, int]
+    max_loc: tuple[int, int]
+
+
+_MIN_MAX_LOC_DTYPES = (np.uint8, np.uint16, np.int16, np.int32, np.float32, np.float64)
+
+
+def min_max_loc(image: Image, mask: Mask | None = None) -> MinMaxResult:
+    """Find the global minimum and maximum value and location in a single-channel image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)``, dtype one of ``uint8``,
+        ``uint16``, ``int16``, ``int32``, ``float32``, ``float64``.
+    mask : np.ndarray or None, default None
+        Optional ``uint8`` mask, shape ``(H, W)`` matching `image`. Must
+        contain at least one nonzero pixel -- verified directly that
+        ``cv2.minMaxLoc`` returns the sentinel result
+        ``(0.0, 0.0, (-1, -1), (-1, -1))`` for an all-zero mask, which would
+        otherwise look like a valid (if coincidentally zero) result.
+
+    Returns
+    -------
+    MinMaxResult
+        ``min_val``, ``max_val``, ``min_loc`` ``(x, y)``, ``max_loc``
+        ``(x, y)``.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have exactly 2 dimensions or is empty, or
+        `mask` does not match `image`'s spatial size or contains no
+        nonzero pixel.
+    TypeError
+        If `image` does not have one of the accepted dtypes, or `mask`
+        does not have dtype ``uint8``.
+
+    Notes
+    -----
+    OpenCV's tie-breaking location when multiple pixels share the extreme
+    value is unspecified -- do not rely on a particular one among ties.
+    """
+    require_image_ndim(image, ndims=(2,))
+    require_dtype(image, _MIN_MAX_LOC_DTYPES)
+    if mask is not None:
+        require_spatial_mask(mask, image)
+        if not np.any(mask):
+            raise ValueError("mask must contain at least one nonzero pixel")
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(image, mask)
+    # cv2's stubs type minMaxLoc's locations as the loose Point (Sequence[int]);
+    # they are always a 2-tuple (x, y) in practice.
+    return MinMaxResult(
+        min_val, max_val, cast(tuple[int, int], min_loc), cast(tuple[int, int], max_loc)
+    )
