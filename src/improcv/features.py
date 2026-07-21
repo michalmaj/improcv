@@ -751,9 +751,16 @@ def find_homography(
             "cv2.findHomography returned an internally inconsistent homography matrix"
         )
 
-    projected = cv2.perspectiveTransform(src_points.reshape(-1, 1, 2), _raw_homography).reshape(
-        -1, 2
-    )
+    homography_scale = float(np.max(np.abs(_raw_homography)))
+    if homography_scale == 0.0:
+        raise RuntimeError("cv2.findHomography returned a zero homography matrix")
+    normalized_homography = _raw_homography / homography_scale
+
+    src_homogeneous = np.column_stack([src_points, np.ones(len(src_points), dtype=np.float64)])
+    projected_homogeneous = (normalized_homography @ src_homogeneous.T).T
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        projected = projected_homogeneous[:, :2] / projected_homogeneous[:, 2, None]
+
     errors = np.linalg.norm(projected - dst_points, axis=1)
     inlier_mask = (
         np.all(np.isfinite(projected), axis=1) & np.isfinite(errors) & (errors <= threshold_float)

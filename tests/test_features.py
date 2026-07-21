@@ -1410,3 +1410,48 @@ def test_find_homography_rejects_too_few_recomputed_inliers(
 
     with pytest.raises(RuntimeError, match="fewer than 4 inliers"):
         im.find_homography(query, train, matches)
+
+
+def test_find_homography_rejects_non_ndarray_homography_from_opencv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query, train, matches = _query_train_matches_with_outliers()
+    fake_mask = np.ones((len(matches), 1), dtype=np.uint8)
+    monkeypatch.setattr(cv2, "findHomography", _FakeHomographyMatcher(object(), fake_mask))
+
+    with pytest.raises(RuntimeError, match="inconsistent"):
+        im.find_homography(query, train, matches)
+
+
+def test_find_homography_never_marks_a_horizon_point_as_inlier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression pin: verified directly against a *real* cv2.findHomography
+    # RANSAC fit (not just this monkeypatch) that cv2.perspectiveTransform
+    # silently returns (0, 0) -- not Inf/NaN -- for a point lying exactly on
+    # the homography's horizon (homogeneous denominator w == 0), which let a
+    # coincidentally-(0, 0) false target be miscounted as an inlier. This
+    # fixed homography has w = x - 1, so src points with x == 1 have w == 0
+    # and must never become inliers, no matter their (even coincidentally
+    # exact) target -- points with x == 2 have w == 1 and are genuine
+    # identity-mapped inliers under this same matrix, used here as filler to
+    # stay above the 4-inlier RuntimeError floor.
+    horizon_homography = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, -1.0]], dtype=np.float64
+    )
+    src_points = np.array([[2.0, 0.0], [2.0, 100.0], [2.0, 200.0], [2.0, 300.0], [1.0, 50.0]])
+    dst_points = np.array(
+        [[2.0, 0.0], [2.0, 100.0], [2.0, 200.0], [2.0, 300.0], [0.0, 0.0]]
+    )  # last row: false target coincidentally at the origin
+    query = _homography_features("orb", src_points)
+    train = _homography_features("orb", dst_points)
+    matches = _identity_dmatches(5)
+    fake_mask = np.ones((5, 1), dtype=np.uint8)
+    monkeypatch.setattr(
+        cv2, "findHomography", _FakeHomographyMatcher(horizon_homography, fake_mask)
+    )
+
+    result = im.find_homography(query, train, matches)
+
+    assert result.homography is not None
+    assert list(result.inlier_mask) == [True, True, True, True, False]
