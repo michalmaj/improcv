@@ -23,11 +23,13 @@ except ModuleNotFoundError as _exc:
     ) from _exc
 
 from improcv.analysis import (
+    MeanStdDevResult,
     MinMaxResult,
     Moments,
     TemplateMatchMethod,
     histogram,
     match_template,
+    mean_stddev,
     min_max_loc,
     moments,
 )
@@ -119,6 +121,7 @@ __all__ = [
     "ImageU8",
     "Labels",
     "Mask",
+    "MeanStdDevResult",
     "MinMaxResult",
     "Moments",
     "RetrievalMode",
@@ -160,6 +163,7 @@ __all__ = [
     "invert",
     "laplacian_edge",
     "match_template",
+    "mean_stddev",
     "median_blur",
     "min_area_rect",
     "min_max_loc",

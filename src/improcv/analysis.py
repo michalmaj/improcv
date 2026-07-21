@@ -27,9 +27,11 @@ __all__ = [
     "moments",
     "match_template",
     "min_max_loc",
+    "mean_stddev",
     "Moments",
     "TemplateMatchMethod",
     "MinMaxResult",
+    "MeanStdDevResult",
 ]
 
 _HISTOGRAM_DTYPES = (np.uint8, np.uint16, np.float32)
@@ -392,3 +394,56 @@ def min_max_loc(image: Image, mask: Mask | None = None) -> MinMaxResult:
     return MinMaxResult(
         min_val, max_val, cast(tuple[int, int], min_loc), cast(tuple[int, int], max_loc)
     )
+
+
+class MeanStdDevResult(NamedTuple):
+    """Result of `mean_stddev`. One element per channel, not a covariance matrix."""
+
+    mean: tuple[float, ...]
+    stddev: tuple[float, ...]
+
+
+_MEAN_STDDEV_DTYPES = (np.uint8, np.uint16, np.int16, np.int32, np.float32, np.float64)
+
+
+def mean_stddev(image: Image, mask: Mask | None = None) -> MeanStdDevResult:
+    """Compute the per-channel mean and population standard deviation of an image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input image with shape ``(H, W)`` or ``(H, W, C)``, dtype one of
+        ``uint8``, ``uint16``, ``int16``, ``int32``, ``float32``,
+        ``float64``. No channel-count ceiling is imposed -- verified
+        directly that ``cv2.meanStdDev`` handles at least 128 channels
+        correctly.
+    mask : np.ndarray or None, default None
+        Optional ``uint8`` mask, shape ``(H, W)`` matching `image`'s
+        spatial size, applied identically to every channel. For an
+        all-zero mask, the result is all-zeros for both `mean` and
+        `stddev` (verified directly) -- this is accepted and returned
+        as-is, not rejected.
+
+    Returns
+    -------
+    MeanStdDevResult
+        ``mean``/``stddev``, one element per channel. `stddev` is the
+        **population** standard deviation (divided by ``N``, not
+        ``N-1``). Channels are treated independently -- this is not a
+        covariance matrix.
+
+    Raises
+    ------
+    ValueError
+        If `image` is not 2D/3D or is empty, or `mask` does not match
+        `image`'s spatial size.
+    TypeError
+        If `image` does not have one of the accepted dtypes, or `mask`
+        does not have dtype ``uint8``.
+    """
+    require_image_ndim(image, ndims=(2, 3))
+    require_dtype(image, _MEAN_STDDEV_DTYPES)
+    if mask is not None:
+        require_spatial_mask(mask, image)
+    mean, stddev = cv2.meanStdDev(image, mask=mask)
+    return MeanStdDevResult(tuple(mean.ravel().tolist()), tuple(stddev.ravel().tolist()))

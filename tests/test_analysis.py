@@ -410,3 +410,67 @@ def test_min_max_loc_does_not_mutate_input() -> None:
     im.min_max_loc(image)
 
     np.testing.assert_array_equal(image, original)
+
+
+def test_mean_stddev_computes_per_channel_mean_and_population_stddev() -> None:
+    image = np.array([[2, 4], [4, 6]], dtype=np.uint8)  # mean=4, population std=sqrt(2)
+
+    result = im.mean_stddev(image)
+
+    assert result.mean == (4.0,)
+    assert result.stddev[0] == pytest.approx(np.sqrt(2.0))
+
+
+def test_mean_stddev_returns_one_value_per_channel() -> None:
+    image = np.zeros((2, 2, 3), dtype=np.uint8)
+    image[:, :, 0] = 10
+    image[:, :, 1] = 20
+    image[:, :, 2] = 30
+
+    result = im.mean_stddev(image)
+
+    assert result.mean == (10.0, 20.0, 30.0)
+    assert result.stddev == (0.0, 0.0, 0.0)
+
+
+def test_mean_stddev_applies_mask() -> None:
+    image = np.array([[10, 20], [30, 40]], dtype=np.uint8)
+    mask = np.array([[1, 1], [0, 0]], dtype=np.uint8)
+
+    result = im.mean_stddev(image, mask)
+
+    assert result.mean == (15.0,)  # mean of 10, 20 only
+
+
+def test_mean_stddev_all_zero_mask_gives_zeros() -> None:
+    image = np.array([[10, 20], [30, 40]], dtype=np.uint8)
+    mask = np.zeros((2, 2), dtype=np.uint8)
+
+    result = im.mean_stddev(image, mask)
+
+    assert result.mean == (0.0,)
+    assert result.stddev == (0.0,)
+
+
+def test_mean_stddev_rejects_unsupported_dtype() -> None:
+    image = np.zeros((3, 3), dtype=bool)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.mean_stddev(image)  # type: ignore[arg-type]
+
+
+def test_mean_stddev_rejects_non_uint8_mask() -> None:
+    image = np.zeros((3, 3), dtype=np.uint8)
+    mask = np.zeros((3, 3), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.mean_stddev(image, mask)  # type: ignore[arg-type]
+
+
+def test_mean_stddev_does_not_mutate_input() -> None:
+    image = np.array([[10, 20], [30, 40]], dtype=np.uint8)
+    original = image.copy()
+
+    im.mean_stddev(image)
+
+    np.testing.assert_array_equal(image, original)
