@@ -73,6 +73,18 @@ match = im.min_max_loc(result)
 print(match.max_loc)  # (x, y) of the best match
 ```
 
+Segmentation and inpainting:
+
+```python
+import improcv as im
+
+markers = im.watershed(image, seed_markers)  # -1 = boundary, 0 = unknown, N = region
+
+foreground_mask = im.grabcut_rect(image, im.BoundingBox(x=20, y=20, width=200, height=150))
+
+restored = im.inpaint(image, damage_mask, radius=3.0, method="telea")
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor

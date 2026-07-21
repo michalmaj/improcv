@@ -42,6 +42,10 @@ carries a working `0.1.0a1` version number for local development.
 - `improcv.analysis`: `Moments`, `TemplateMatchMethod`, `MinMaxResult`, `MeanStdDevResult` types.
 - `improcv._compat.opencv`: the project's first compat-layer helper, `_normalize_calc_hist_output`,
   isolating a genuine `cv2.calcHist` shape difference between OpenCV 4.x and 5.x.
+- Segmentation and restoration: `watershed`, `grabcut_rect`, `inpaint`.
+- `improcv.restoration`: `InpaintMethod` type.
+- This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
+  restoration) — remaining pre-1.0.0 work moves to Phase 3.
 
 ### Changed
 - `BoundingBox` moved from `improcv.contours` to `improcv.types` (still importable from both

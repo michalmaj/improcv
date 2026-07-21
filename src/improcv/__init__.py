@@ -91,6 +91,8 @@ from improcv.regions import (
     distance_transform,
     flood_fill,
 )
+from improcv.restoration import InpaintMethod, inpaint
+from improcv.segmentation import grabcut_rect, watershed
 from improcv.transforms import (
     center_crop,
     crop,
@@ -119,6 +121,7 @@ __all__ = [
     "Image",
     "ImageFloat32",
     "ImageU8",
+    "InpaintMethod",
     "Labels",
     "Mask",
     "MeanStdDevResult",
@@ -156,10 +159,12 @@ __all__ = [
     "flood_fill",
     "gamma_correction",
     "gaussian_blur",
+    "grabcut_rect",
     "harris_corner",
     "histogram",
     "histogram_equalization",
     "in_range",
+    "inpaint",
     "invert",
     "laplacian_edge",
     "match_template",
@@ -186,4 +191,5 @@ __all__ = [
     "translate",
     "warp_affine",
     "warp_perspective",
+    "watershed",
 ]
