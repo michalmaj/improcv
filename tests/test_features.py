@@ -161,3 +161,15 @@ def test_detect_and_compute_keypoints_work_directly_with_cv2_drawKeypoints() -> 
     output = cv2.drawKeypoints(image, features.keypoints, None)  # type: ignore[call-overload]
 
     assert output.shape == (100, 100, 3)
+
+
+def test_detect_and_compute_raises_when_sift_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Both verification environments actually have cv2.SIFT, so this
+    # simulates its absence directly rather than depending on a specific
+    # OpenCV build lacking it -- exercises the capability-detection branch
+    # itself.
+    monkeypatch.delattr(cv2, "SIFT")
+    image = _textured_image()
+
+    with pytest.raises(RuntimeError, match="SIFT"):
+        im.detect_and_compute(image, method="sift")
