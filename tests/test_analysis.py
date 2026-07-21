@@ -474,3 +474,30 @@ def test_mean_stddev_does_not_mutate_input() -> None:
     im.mean_stddev(image)
 
     np.testing.assert_array_equal(image, original)
+
+
+def test_analysis_types_are_in_module_all() -> None:
+    # analysis.__all__ must list every public type, not just the five
+    # functions -- the same lesson already applied during the contours and
+    # regions slices.
+    import improcv.analysis as analysis_module
+
+    for name in ("Moments", "TemplateMatchMethod", "MinMaxResult", "MeanStdDevResult"):
+        assert name in analysis_module.__all__
+        assert hasattr(analysis_module, name)
+
+
+def test_analysis_public_names_are_reexported_from_improcv() -> None:
+    for name in (
+        "histogram",
+        "moments",
+        "match_template",
+        "min_max_loc",
+        "mean_stddev",
+        "Moments",
+        "TemplateMatchMethod",
+        "MinMaxResult",
+        "MeanStdDevResult",
+    ):
+        assert name in im.__all__
+        assert hasattr(im, name)
