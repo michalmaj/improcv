@@ -38,6 +38,7 @@ cv = ["opencv-python>=4.9,<6"]
 cv-headless = ["opencv-python-headless>=4.9,<6"]
 cv-contrib = ["opencv-contrib-python>=4.9,<6"]
 cv-contrib-headless = ["opencv-contrib-python-headless>=4.9,<6"]
+viz = ["matplotlib>=3.8"]
 
 [project.urls]
 Homepage = "https://github.com/michalmaj/improcv"
@@ -49,6 +50,7 @@ dev = [
     "ruff>=0.15",
     "pyright>=1.1",
     "opencv-python-headless>=4.9,<6",
+    "matplotlib>=3.8",
 ]
 
 [tool.ruff]
