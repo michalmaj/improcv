@@ -123,6 +123,22 @@ if result.homography is not None:
     print(result.homography, result.inlier_mask.sum(), "inliers")
 ```
 
+Hough transform shape detection:
+
+```python
+import improcv as im
+
+edges = im.auto_canny(im.ensure_gray(image))
+
+lines = im.hough_lines(edges, threshold=100)
+segments = im.hough_line_segments(edges, threshold=50, min_line_length=30, max_line_gap=10)
+
+# hough_circles takes a grayscale image directly, not a binary edge mask.
+circles = im.hough_circles(im.ensure_gray(image), min_dist=20, param2=30)
+for circle in circles:
+    print(circle.x, circle.y, circle.radius)
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor
