@@ -77,16 +77,19 @@ def _require_valid_qr_detection(
         )
     if detected:
         if not isinstance(points, np.ndarray) or points.dtype != np.float32 or points.ndim != 3:
-            valid_shape = False
-        elif expected_count is not None:
+            raise RuntimeError(
+                f"cv2.QRCodeDetector detection reported success but returned points of shape "
+                f"{getattr(points, 'shape', None)} dtype {getattr(points, 'dtype', None)} -- "
+                "unexpected OpenCV output"
+            )
+        if expected_count is not None:
             valid_shape = points.shape == (expected_count, 4, 2)
         else:
             valid_shape = points.shape[1:] == (4, 2) and points.shape[0] > 0
         if not valid_shape:
             raise RuntimeError(
                 f"cv2.QRCodeDetector detection reported success but returned points of shape "
-                f"{getattr(points, 'shape', None)} dtype {getattr(points, 'dtype', None)} -- "
-                "unexpected OpenCV output"
+                f"{points.shape} dtype {points.dtype} -- unexpected OpenCV output"
             )
         if not np.all(np.isfinite(points)):
             raise RuntimeError("cv2.QRCodeDetector detection returned non-finite points")
