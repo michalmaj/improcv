@@ -761,7 +761,8 @@ def find_homography(
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         projected = projected_homogeneous[:, :2] / projected_homogeneous[:, 2, None]
 
-    errors = np.linalg.norm(projected - dst_points, axis=1)
+    delta = projected - dst_points
+    errors = np.hypot(delta[:, 0], delta[:, 1])
     inlier_mask = (
         np.all(np.isfinite(projected), axis=1) & np.isfinite(errors) & (errors <= threshold_float)
     )

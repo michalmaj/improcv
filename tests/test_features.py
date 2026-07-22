@@ -1,3 +1,5 @@
+import warnings
+
 import cv2
 import numpy as np
 import pytest
@@ -1452,6 +1454,38 @@ def test_find_homography_never_marks_a_horizon_point_as_inlier(
     )
 
     result = im.find_homography(query, train, matches)
+
+    assert result.homography is not None
+    assert list(result.inlier_mask) == [True, True, True, True, False]
+
+
+def test_find_homography_near_horizon_point_does_not_overflow_or_warn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression pin: verified directly that np.linalg.norm can overflow
+    # (and emit a RuntimeWarning) computing the reprojection error for a
+    # point very close to -- but not exactly on -- the horizon (w very
+    # small but nonzero), since squaring an ~1e300 projected coordinate
+    # internally overflows float64 even though the final Euclidean distance
+    # itself is representable. np.hypot avoids the intermediate overflow.
+    near_horizon_homography = np.array(
+        [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1e-300]], dtype=np.float64
+    )
+    # 4 genuine inliers with y == 0, so w == x exactly (the 1e-300 * y term
+    # vanishes) and dst == (0, 1 / x) exactly under this homography.
+    src_points = np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0], [0.0, 1.0]])
+    dst_points = np.array([[0.0, 1.0], [0.0, 0.5], [0.0, 1.0 / 3.0], [0.0, 0.25], [0.0, 0.0]])
+    query = _homography_features("orb", src_points)
+    train = _homography_features("orb", dst_points)
+    matches = _identity_dmatches(5)
+    fake_mask = np.ones((5, 1), dtype=np.uint8)
+    monkeypatch.setattr(
+        cv2, "findHomography", _FakeHomographyMatcher(near_horizon_homography, fake_mask)
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        result = im.find_homography(query, train, matches)
 
     assert result.homography is not None
     assert list(result.inlier_mask) == [True, True, True, True, False]
