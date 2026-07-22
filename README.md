@@ -153,6 +153,23 @@ for code in im.decode_qr_codes(image):
     print(code.data, code.points)
 ```
 
+Annotation drawing:
+
+```python
+import improcv as im
+
+mask = im.threshold(im.ensure_gray(image), method="otsu")
+contours, _ = im.find_contours(mask)
+boxes = im.bounding_boxes(contours)
+
+annotated = im.draw_contours(image, contours, color=(0, 255, 0), thickness=2)
+annotated = im.draw_bounding_boxes(annotated, boxes, color=(255, 0, 0), thickness=2)
+# Both return a new array; `image` itself is never modified.
+
+# Tiling several images into one grid:
+grid = im.montage([image, annotated], tile_width=200, tile_height=200)
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor

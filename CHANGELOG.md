@@ -92,6 +92,27 @@ carries a working `0.1.0a1` version number for local development.
   any) is selected is not guaranteed -- use `decode_qr_codes` for images that may contain multiple
   codes. Each result represents one physical QR symbol; Structured Append sequences are not
   reassembled. `improcv.qrcode`: `QRCode` type.
+- New `improcv.drawing` module: `draw_contours`, `draw_bounding_boxes`, `montage` -- plain `cv2` +
+  `numpy` only, no new dependency. `draw_contours`/`draw_bounding_boxes` always draw onto a copy of
+  the input image, fixing `cv2.drawContours`/`cv2.rectangle`'s verified in-place-mutation behavior;
+  both require a 3-channel BGR `uint8` image (grayscale/BGRA rejected), since OpenCV silently uses
+  only a color tuple's first element as a grayscale value rather than raising. `color` and
+  `thickness` are validated and normalized (integral, no `bool`, `color` channels in `[0, 255]`,
+  `thickness` fitting signed `int32` and never `0` -- OpenCV silently treats `thickness=0` as a thin
+  outline rather than "draw nothing"). `draw_bounding_boxes` uses `cv2.rectangle`'s `Rect` overload
+  (`(x, y, width, height)`) rather than its two-point overload, which was verified to draw a filled
+  region one pixel wider and taller than intended. `draw_contours` documents that filling multiple
+  contours without hierarchy applies OpenCV's even-odd rule across the whole collection (verified:
+  nested-but-unrelated contours filled in one call can produce an unintended "hole"); hierarchy
+  support itself is out of scope. `montage` tiles same-`ndim`/channel-count images
+  (`(H,W)`/`(H,W,3)`/`(H,W,4)` only) into a grid via a hard (non-aspect-preserving) resize per tile,
+  picking `cv2.INTER_AREA` when shrinking and `cv2.INTER_LINEAR` when enlarging or mixed-scaling
+  (per OpenCV's own interpolation guidance), and rejects a requested output size above a
+  `512 MiB` safety cap with `ValueError` before any allocation or resize call -- the same
+  before-allocation-safety-check pattern as `hough_circles`'s accumulator/radius guards, applied
+  here to montage's own memory-exhaustion risk. `draw_keypoints`/`draw_matches` wrappers were
+  considered and rejected: `cv2.drawKeypoints`/`cv2.drawMatches` with `outImg=None` already return a
+  fresh, non-mutated array, so a wrapper would add no value.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 
