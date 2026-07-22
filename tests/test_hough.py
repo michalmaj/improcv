@@ -608,3 +608,222 @@ def test_hough_line_segments_rejects_excessive_accumulator_cell_count() -> None:
 
     with pytest.raises(ValueError, match="accumulator"):
         im.hough_line_segments(image, threshold=10, rho=1e-6, theta=1e-6)
+
+
+# --- rho/theta values that would overflow round(inf) --------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"rho": 1e-320},
+        {"theta": 1e-320},
+        {"rho": float(np.nextafter(0.0, 1.0))},
+        {"theta": float(np.nextafter(0.0, 1.0))},
+    ],
+)
+def test_hough_lines_rejects_tiny_rho_theta_without_overflow_error(kwargs: dict) -> None:
+    image = np.zeros((64, 64), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        im.hough_lines(image, threshold=10, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"rho": 1e-320},
+        {"theta": 1e-320},
+        {"rho": float(np.nextafter(0.0, 1.0))},
+        {"theta": float(np.nextafter(0.0, 1.0))},
+    ],
+)
+def test_hough_line_segments_rejects_tiny_rho_theta_without_overflow_error(kwargs: dict) -> None:
+    image = np.zeros((64, 64), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        im.hough_line_segments(image, threshold=10, **kwargs)
+
+
+# --- max_radius/min_radius bounded against image dimensions -------------
+
+
+def test_hough_circles_rejects_max_radius_exceeding_image_bound_for_gradient() -> None:
+    image = _circles_image()  # 200x200
+    limit = max(image.shape)
+
+    with pytest.raises(ValueError, match="max_radius"):
+        im.hough_circles(image, min_dist=20, method="gradient", param2=30, max_radius=limit + 1)
+
+
+def test_hough_circles_accepts_max_radius_at_image_bound_for_gradient() -> None:
+    image = _circles_image()
+    limit = max(image.shape)
+
+    circles = im.hough_circles(
+        image, min_dist=20, method="gradient", param2=30, min_radius=1, max_radius=limit
+    )
+
+    assert isinstance(circles, list)
+
+
+def test_hough_circles_rejects_max_radius_exceeding_image_bound_for_gradient_alt() -> None:
+    image = _circles_image()
+    limit = min(image.shape) // 2
+
+    with pytest.raises(ValueError, match="max_radius"):
+        im.hough_circles(
+            image,
+            min_dist=20,
+            method="gradient_alt",
+            dp=1.5,
+            param1=300,
+            max_radius=limit + 1,
+        )
+
+
+def test_hough_circles_accepts_max_radius_at_image_bound_for_gradient_alt() -> None:
+    image = _circles_image()
+    limit = min(image.shape) // 2
+
+    circles = im.hough_circles(
+        image,
+        min_dist=20,
+        method="gradient_alt",
+        dp=1.5,
+        param1=300,
+        min_radius=1,
+        max_radius=limit,
+    )
+
+    assert isinstance(circles, list)
+
+
+def test_hough_circles_rejects_auto_range_min_radius_too_large_for_gradient() -> None:
+    image = _circles_image()
+    limit = max(image.shape)
+
+    with pytest.raises(ValueError, match="min_radius"):
+        im.hough_circles(
+            image, min_dist=20, method="gradient", param2=30, min_radius=limit, max_radius=0
+        )
+
+
+def test_hough_circles_rejects_auto_range_min_radius_too_large_for_gradient_alt() -> None:
+    image = _circles_image()
+    limit = min(image.shape) // 2
+
+    with pytest.raises(ValueError, match="min_radius"):
+        im.hough_circles(
+            image,
+            min_dist=20,
+            method="gradient_alt",
+            dp=1.5,
+            param1=300,
+            min_radius=limit + 1,
+            max_radius=0,
+        )
+
+
+def test_hough_circles_accepts_auto_range_min_radius_within_bound() -> None:
+    image = _circles_image()
+
+    circles = im.hough_circles(
+        image, min_dist=20, method="gradient", param2=30, min_radius=10, max_radius=0
+    )
+
+    assert isinstance(circles, list)
+
+
+def _hough_circles_subprocess_script(max_radius: int) -> str:
+    return f"""
+import sys
+import numpy as np
+import improcv as im
+
+image = np.zeros((64, 64), dtype=np.uint8)
+try:
+    im.hough_circles(image, min_dist=10, param2=10, max_radius={max_radius})
+except ValueError:
+    sys.exit(0)
+except Exception as e:
+    print(type(e).__name__, e, file=sys.stderr)
+    sys.exit(2)
+sys.exit(3)
+"""
+
+
+@pytest.mark.parametrize("max_radius", [50_000_000, 2**31 - 1])
+def test_hough_circles_rejects_dangerous_max_radius_before_calling_opencv(max_radius: int) -> None:
+    # Verified directly that cv2.HoughCircles allocates memory
+    # proportional to max_radius itself: max_radius=50_000_000 on a
+    # 64x64 image measurably consumed gigabytes of memory and can be
+    # killed by the OS (SIGKILL) on a memory-constrained system, despite
+    # being a perfectly ordinary int32 value. Run in an isolated
+    # subprocess so a regression here can't take down the whole test run.
+    script = _hough_circles_subprocess_script(max_radius)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"expected a clean ValueError (returncode 0) for max_radius={max_radius}, "
+        f"got returncode={result.returncode}, stderr={result.stderr!r}"
+    )
+
+
+# --- param1/param2 int32 overflow for classic gradient -------------------
+
+
+@pytest.mark.parametrize("param1", [2**31, 1e100])
+def test_hough_circles_rejects_huge_param1_for_gradient(param1: float) -> None:
+    # Verified directly, identically on both OpenCV versions: cv2.HoughCircles
+    # rounds param1 to a C int for method="gradient" and silently wraps
+    # around beyond int32 instead of raising.
+    image = _circles_image()
+
+    with pytest.raises(ValueError, match="param1"):
+        im.hough_circles(image, min_dist=20, method="gradient", param1=param1, param2=30)
+
+
+def test_hough_circles_accepts_param1_at_int32_max_for_gradient() -> None:
+    image = _circles_image()
+
+    circles = im.hough_circles(
+        image, min_dist=20, method="gradient", param1=float(2**31 - 1), param2=30
+    )
+
+    assert isinstance(circles, list)
+
+
+@pytest.mark.parametrize("param2", [2**31, 1e100])
+def test_hough_circles_rejects_huge_param2_for_gradient(param2: float) -> None:
+    # Verified directly: param2=2**31-1 correctly finds 0 circles, but
+    # param2=2**31 or param2=1e100 silently wrap around and find many
+    # circles instead, as if the threshold barely mattered.
+    image = _circles_image()
+
+    with pytest.raises(ValueError, match="param2"):
+        im.hough_circles(image, min_dist=20, method="gradient", param2=param2)
+
+
+def test_hough_circles_accepts_param2_at_int32_max_for_gradient() -> None:
+    image = _circles_image()
+
+    circles = im.hough_circles(image, min_dist=20, method="gradient", param2=float(2**31 - 1))
+
+    assert circles == []  # verified directly this exact value finds no circles
+
+
+def test_hough_circles_param1_param2_int32_bound_does_not_apply_to_gradient_alt() -> None:
+    # gradient_alt does not exhibit the same cvRound wraparound -- large
+    # param1 there just means "no circles found", not a silent overflow.
+    image = _circles_image()
+
+    circles = im.hough_circles(
+        image, min_dist=20, method="gradient_alt", dp=1.5, param1=1e100, param2=0.9
+    )
+
+    assert circles == []
