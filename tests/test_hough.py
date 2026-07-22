@@ -101,3 +101,102 @@ def test_hough_lines_rejects_bad_raw_result_from_matcher(monkeypatch: pytest.Mon
 
     with pytest.raises(RuntimeError, match="unexpected"):
         im.hough_lines(image, threshold=80)
+
+
+def test_hough_line_segments_finds_real_segments() -> None:
+    image = _lines_image()
+
+    segments = im.hough_line_segments(image, threshold=50, min_line_length=30, max_line_gap=10)
+
+    assert len(segments) > 0
+    for segment in segments:
+        assert isinstance(segment.x1, int)
+        assert isinstance(segment.y1, int)
+        assert isinstance(segment.x2, int)
+        assert isinstance(segment.y2, int)
+
+
+def test_hough_line_segments_blank_image_returns_empty() -> None:
+    image = np.zeros((200, 200), dtype=np.uint8)
+
+    segments = im.hough_line_segments(image, threshold=50)
+
+    assert segments == []
+
+
+@pytest.mark.parametrize("rho", [0.0, -1.0])
+def test_hough_line_segments_rejects_non_positive_rho(rho: float) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="rho"):
+        im.hough_line_segments(image, threshold=50, rho=rho)
+
+
+@pytest.mark.parametrize("theta", [0.0, -np.pi / 180])
+def test_hough_line_segments_rejects_non_positive_theta(theta: float) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="theta"):
+        im.hough_line_segments(image, threshold=50, theta=theta)
+
+
+@pytest.mark.parametrize("threshold", [0, -5])
+def test_hough_line_segments_rejects_non_positive_threshold(threshold: int) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="positive"):
+        im.hough_line_segments(image, threshold=threshold)
+
+
+def test_hough_line_segments_rejects_float_threshold() -> None:
+    image = _lines_image()
+
+    with pytest.raises(TypeError, match="integer"):
+        im.hough_line_segments(image, threshold=50.0)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("threshold", [2**31, 2**63])
+def test_hough_line_segments_rejects_threshold_above_int32(threshold: int) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="int32"):
+        im.hough_line_segments(image, threshold=threshold)
+
+
+@pytest.mark.parametrize("min_line_length", [-1.0, -0.001])
+def test_hough_line_segments_rejects_negative_min_line_length(min_line_length: float) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="min_line_length"):
+        im.hough_line_segments(image, threshold=50, min_line_length=min_line_length)
+
+
+@pytest.mark.parametrize("max_line_gap", [-1.0, -0.001])
+def test_hough_line_segments_rejects_negative_max_line_gap(max_line_gap: float) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="max_line_gap"):
+        im.hough_line_segments(image, threshold=50, max_line_gap=max_line_gap)
+
+
+def test_hough_line_segments_rejects_non_uint8_dtype() -> None:
+    image = _lines_image().astype(np.float32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.hough_line_segments(image, threshold=50)  # type: ignore[arg-type]
+
+
+def test_hough_line_segments_rejects_three_channel_image() -> None:
+    image = cv2.cvtColor(_lines_image(), cv2.COLOR_GRAY2BGR)
+
+    with pytest.raises(ValueError, match="dimensions"):
+        im.hough_line_segments(image, threshold=50)  # type: ignore[arg-type]
+
+
+def test_hough_line_segments_does_not_mutate_input() -> None:
+    image = _lines_image()
+    before = image.copy()
+
+    im.hough_line_segments(image, threshold=50)
+
+    assert np.array_equal(image, before)

@@ -7,6 +7,7 @@ from typing import Literal, NamedTuple
 import cv2
 import numpy as np
 
+from improcv._compat.opencv import _normalize_hough_lines_p_output
 from improcv._validation import (
     require_dtype,
     require_finite,
@@ -16,6 +17,7 @@ from improcv._validation import (
 from improcv.types import Mask
 
 __all__ = [
+    "hough_line_segments",
     "hough_lines",
     "Circle",
     "HoughCircleMethod",
@@ -26,6 +28,20 @@ __all__ = [
 _MAX_INT32 = int(np.iinfo(np.int32).max)
 
 HoughCircleMethod = Literal["gradient", "gradient_alt"]
+
+
+def _require_strictly_positive(value: float, name: str) -> None:
+    """Raise TypeError/ValueError unless `value` is a finite, strictly positive real number."""
+    require_finite(value, name)
+    if not value > 0.0:
+        raise ValueError(f"{name} must be positive, got {value}")
+
+
+def _require_non_negative_real(value: float, name: str) -> None:
+    """Raise TypeError/ValueError unless `value` is a finite, non-negative real number."""
+    require_finite(value, name)
+    if value < 0.0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
 
 
 class Line(NamedTuple):
@@ -116,12 +132,8 @@ def hough_lines(
     """
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8,))
-    require_finite(rho, "rho")
-    if not rho > 0.0:
-        raise ValueError(f"rho must be positive, got {rho}")
-    require_finite(theta, "theta")
-    if not theta > 0.0:
-        raise ValueError(f"theta must be positive, got {theta}")
+    _require_strictly_positive(rho, "rho")
+    _require_strictly_positive(theta, "theta")
     require_positive_integral(threshold, "threshold")
     threshold_int = int(threshold)
     if threshold_int > _MAX_INT32:
@@ -144,3 +156,89 @@ def hough_lines(
         )
 
     return [Line(rho=float(r), theta=float(t)) for r, t in raw[:, 0, :]]
+
+
+def hough_line_segments(
+    image: Mask,
+    threshold: int,
+    rho: float = 1.0,
+    theta: float = np.pi / 180,
+    min_line_length: float = 0.0,
+    max_line_gap: float = 0.0,
+) -> list[LineSegment]:
+    """Detect line segments with the probabilistic Hough transform.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        A 2D uint8 edge image. Zero is background and every nonzero pixel
+        votes as an edge pixel. Typically produced by Canny or another
+        binary edge detector.
+    threshold : int
+        Minimum accumulator votes for a line to be reported. A positive
+        integer, at most ``2**31 - 1``. Has no default, for the same
+        reason as `hough_lines`'s `threshold`.
+    rho : float, default 1.0
+        Distance resolution of the accumulator, in pixels. Must be
+        positive. `improcv`'s own default, not a native OpenCV one -- see
+        `hough_lines`.
+    theta : float, default pi/180
+        Angle resolution of the accumulator, in radians. Must be
+        positive. `improcv`'s own default -- see `hough_lines`.
+    min_line_length : float, default 0.0
+        Minimum line length; shorter segments are rejected. Must be
+        non-negative. OpenCV's own default.
+    max_line_gap : float, default 0.0
+        Maximum allowed gap between points on the same line to link them
+        into one segment. Must be non-negative. OpenCV's own default.
+
+    Returns
+    -------
+    list of LineSegment
+        Empty if no segments are found.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have exactly 2 dimensions or is empty, `rho`
+        or `theta` is not finite or not strictly positive, `threshold` is
+        not positive or exceeds ``2**31 - 1``, or `min_line_length`/
+        `max_line_gap` is not finite or is negative.
+    TypeError
+        If `image` does not have dtype ``uint8``, or `threshold` is not
+        `numbers.Integral` (rejecting `bool`/`float`).
+    RuntimeError
+        If OpenCV's raw result is not an ``int32`` array with exactly 4
+        fields per segment -- an internally inconsistent result rather
+        than a valid segment list.
+    """
+    require_image_ndim(image, ndims=(2,))
+    require_dtype(image, (np.uint8,))
+    _require_strictly_positive(rho, "rho")
+    _require_strictly_positive(theta, "theta")
+    require_positive_integral(threshold, "threshold")
+    threshold_int = int(threshold)
+    if threshold_int > _MAX_INT32:
+        raise ValueError(
+            f"threshold must fit within the range of int32 ([1, {_MAX_INT32}]), got {threshold}"
+        )
+    _require_non_negative_real(min_line_length, "min_line_length")
+    _require_non_negative_real(max_line_gap, "max_line_gap")
+
+    # Same no-mutation rationale as hough_lines: OpenCV's own docs permit
+    # HoughLinesP to modify its input too.
+    raw = cv2.HoughLinesP(
+        image.copy(),
+        rho,
+        theta,
+        threshold_int,
+        minLineLength=min_line_length,
+        maxLineGap=max_line_gap,
+    )
+    if raw is None:
+        return []
+
+    normalized = _normalize_hough_lines_p_output(raw)
+    return [
+        LineSegment(x1=int(x1), y1=int(y1), x2=int(x2), y2=int(y2)) for x1, y1, x2, y2 in normalized
+    ]
