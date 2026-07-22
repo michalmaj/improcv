@@ -163,6 +163,16 @@ for code in im.decode_qr_codes(image):
     print(code.data, code.points)
 ```
 
+Barcode decoding (EAN-8, EAN-13, UPC-A):
+
+```python
+import improcv as im
+
+for barcode in im.decode_barcodes(image):
+    print(barcode.data, barcode.barcode_type, barcode.points)
+    # data/barcode_type are both None if detected but undecodable
+```
+
 Annotation drawing:
 
 ```python
