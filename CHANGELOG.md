@@ -62,6 +62,20 @@ carries a working `0.1.0a1` version number for local development.
   `4.9` floor). `homography` is `None` for legitimately degenerate (but finite) geometry, not an
   error. `improcv.features`: `HomographyResult` type. Still RANSAC-only, no FLANN, perspective-warp
   helper, or match drawing.
+- New `improcv.hough` module: `hough_lines` (standard Hough transform), `hough_line_segments`
+  (probabilistic Hough transform), `hough_circles` (`HOUGH_GRADIENT`/`HOUGH_GRADIENT_ALT`). `rho`/
+  `theta`/`dp`/`param1` defaults are `improcv`'s own choices matching OpenCV's own C++ defaults, not
+  something OpenCV itself defaults to -- all are required parameters in OpenCV's own signatures;
+  scale-dependent parameters (`threshold`, `min_dist`) have no default at all. `rho`/`theta` are
+  validated as strictly positive before ever calling OpenCV, since a non-positive value crashes
+  uncontrolled on both supported OpenCV versions rather than raising cleanly. `hough_circles`'s
+  `param2` resolves method-dependently when omitted, since OpenCV's own omitted-parameter default
+  violates `HOUGH_GRADIENT_ALT`'s own required range; `max_radius`'s "centers only" negative-value
+  semantics are `HOUGH_GRADIENT`-only, and an explicit `0 < max_radius <= min_radius` range is
+  rejected rather than silently widened or reordered by OpenCV. `improcv.hough`: `Line`,
+  `LineSegment`, `Circle`, `HoughCircleMethod` types.
+- `improcv._compat.opencv`: `_normalize_hough_lines_p_output`, isolating a genuine `cv2.HoughLinesP`
+  shape difference between OpenCV 4.x and 5.x.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 
