@@ -32,6 +32,13 @@ __all__ = [
 _MAX_INT32 = int(np.iinfo(np.int32).max)
 _MIN_INT32 = int(np.iinfo(np.int32).min)
 
+# Verified directly that without a cap, an individually "valid" (finite,
+# positive, within the geometric rho/theta range) combination can still
+# imply an accumulator large enough to be a practical denial-of-service
+# footgun. 50 million cells is comfortably above any legitimate use of
+# these functions while staying far short of causing memory pressure.
+_MAX_ACCUMULATOR_CELLS = 50_000_000
+
 HoughCircleMethod = Literal["gradient", "gradient_alt"]
 
 _HOUGH_CIRCLE_METHODS: dict[HoughCircleMethod, int] = {
@@ -44,18 +51,117 @@ _DEFAULT_PARAM2: dict[HoughCircleMethod, float] = {
 }
 
 
-def _require_strictly_positive(value: float, name: str) -> None:
-    """Raise TypeError/ValueError unless `value` is a finite, strictly positive real number."""
+def _require_strictly_positive(value: float, name: str) -> float:
+    """Raise TypeError/ValueError unless `value` is a finite, strictly positive real number.
+
+    Returns `value` normalized to a plain `float`. `require_finite`
+    accepts any `numbers.Real` (e.g. `fractions.Fraction`), but OpenCV's
+    own binding can't always accept those directly -- verified directly
+    that `rho=Fraction(1, 1)` passes this validation yet raises a raw,
+    confusing `cv2.error` ("Argument 'rho' can not be treated as a
+    double") if passed through unnormalized. Every real-valued OpenCV
+    parameter in this module is normalized to `float` before the call.
+    """
     require_finite(value, name)
-    if not value > 0.0:
+    value_float = float(value)
+    if not value_float > 0.0:
         raise ValueError(f"{name} must be positive, got {value}")
+    return value_float
 
 
-def _require_non_negative_real(value: float, name: str) -> None:
-    """Raise TypeError/ValueError unless `value` is a finite, non-negative real number."""
+def _require_non_negative_real(value: float, name: str) -> float:
+    """Raise TypeError/ValueError unless `value` is a finite, non-negative real number.
+
+    Returns `value` normalized to a plain `float` -- see
+    `_require_strictly_positive`.
+    """
     require_finite(value, name)
-    if value < 0.0:
+    value_float = float(value)
+    if value_float < 0.0:
         raise ValueError(f"{name} must be non-negative, got {value}")
+    return value_float
+
+
+def _require_safe_hough_line_params(
+    image: np.ndarray, rho: float, theta: float
+) -> tuple[float, float]:
+    """Validate and normalize rho/theta against the image's Hough accumulator size.
+
+    Returns `(rho, theta)` normalized to plain `float`.
+
+    Verified directly that extreme, individually finite and positive
+    rho/theta values can crash the process outright with a segmentation
+    fault (not a raised exception) on both OpenCV versions:
+    ``hough_line_segments(image, threshold=10, rho=1e6)`` and the same
+    call with both `rho` and `theta` extreme both segfault reliably.
+    OpenCV computes the accumulator's dimensions from `rho`/`theta` and
+    the image size, then allocates it, without validating that the
+    computed dimensions are sane.
+
+    Bounds `theta` to `(0, pi]` (a Hough line angle is periodic over a
+    half-turn; theta beyond that is geometrically meaningless) and `rho`
+    to `(0, 2 * (height + width) + 1]` (the same expression OpenCV's own
+    accumulator sizing uses for the image's diagonal-ish span) and
+    additionally caps the total predicted accumulator cell count
+    (`_MAX_ACCUMULATOR_CELLS`), so a combination that is individually
+    "valid" but would still produce a degenerate or absurdly large
+    accumulator is rejected before OpenCV ever sees it. The predicted
+    cell count closely mirrors, but isn't required to bit-match,
+    OpenCV's own internal `cvRound`-based accumulator sizing -- this is a
+    defensive upper bound, not a re-implementation of OpenCV's math.
+    """
+    require_finite(rho, "rho")
+    rho_float = float(rho)
+    require_finite(theta, "theta")
+    theta_float = float(theta)
+
+    if not (0.0 < theta_float <= math.pi):
+        raise ValueError(f"theta must be in (0, pi], got {theta}")
+
+    height, width = image.shape
+    max_rho = 2.0 * (height + width) + 1.0
+    if not (0.0 < rho_float <= max_rho):
+        raise ValueError(f"rho must be in (0, {max_rho}] for a {height}x{width} image, got {rho}")
+
+    num_angle = round(math.pi / theta_float)
+    num_rho = round(max_rho / rho_float)
+    if num_angle <= 0 or num_rho <= 0:
+        raise ValueError(
+            f"rho={rho}, theta={theta} produce a degenerate accumulator "
+            f"(numangle={num_angle}, numrho={num_rho}) for a {height}x{width} image"
+        )
+    if num_angle > _MAX_INT32 or num_rho > _MAX_INT32:
+        raise ValueError(
+            f"rho={rho}, theta={theta} produce an accumulator dimension exceeding int32 "
+            f"(numangle={num_angle}, numrho={num_rho})"
+        )
+    num_cells = num_angle * num_rho
+    if num_cells > _MAX_ACCUMULATOR_CELLS:
+        raise ValueError(
+            f"rho={rho}, theta={theta} would require an accumulator of {num_cells} cells "
+            f"for a {height}x{width} image, exceeding the safety limit of "
+            f"{_MAX_ACCUMULATOR_CELLS}"
+        )
+
+    return rho_float, theta_float
+
+
+def _require_dp_at_least_one(value: float, name: str = "dp") -> float:
+    """Raise TypeError/ValueError unless `value` is a finite real number >= 1.0.
+
+    Returns `value` normalized to a plain `float`. Verified directly,
+    identically for both `HOUGH_GRADIENT` and `HOUGH_GRADIENT_ALT`, that
+    OpenCV silently clamps `dp` to `max(dp, 1.0)` internally -- `dp`
+    values from `0.1` through `1.0` all produce identical results, only
+    `dp > 1.0` actually changes anything. This function rejects
+    `dp < 1.0` outright instead of silently accepting a value OpenCV
+    itself ignores.
+    """
+    require_finite(value, name)
+    value_float = float(value)
+    if not value_float >= 1.0:
+        raise ValueError(f"{name} must be at least 1.0, got {value}")
+    return value_float
 
 
 class Line(NamedTuple):
@@ -123,31 +229,34 @@ def hough_lines(
     Returns
     -------
     list of Line
-        Empty if no lines are found. Verified directly, identically on
-        both OpenCV versions: violating `rho > 0`/`theta > 0` is not
-        handled safely by OpenCV itself (some invalid values attempt an
-        ~18-exabyte allocation on one version, a raw assertion crash on
-        the other) -- this function never lets a non-positive `rho`/`theta`
-        reach OpenCV.
+        Empty if no lines are found. `rho`/`theta` are validated not only
+        for positivity but also against the image's predicted Hough
+        accumulator size before ever calling OpenCV -- verified directly
+        that an individually finite, positive but extreme value (e.g.
+        ``rho=1e6``) can segfault the process outright rather than raise
+        a catchable error.
 
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions or is empty, `rho`
-        or `theta` is not finite or not strictly positive, or `threshold`
-        is not positive or exceeds ``2**31 - 1``.
+        If `image` does not have exactly 2 dimensions or is empty,
+        `theta` is not in ``(0, pi]``, `rho` is not in
+        ``(0, 2 * (height + width) + 1]`` for `image`'s size, `rho`/
+        `theta` imply a degenerate or excessively large Hough
+        accumulator, or `threshold` is not positive or exceeds
+        ``2**31 - 1``.
     TypeError
-        If `image` does not have dtype ``uint8``, or `threshold` is not
-        `numbers.Integral` (rejecting `bool`/`float`).
+        If `image` does not have dtype ``uint8``, `rho`/`theta` is not a
+        real number, or `threshold` is not `numbers.Integral` (rejecting
+        `bool`/`float`).
     RuntimeError
-        If OpenCV's raw result is not a ``float32`` array with exactly 2
-        fields per line -- an internally inconsistent result rather than
-        a valid line list.
+        If OpenCV's raw result is not a ``float32`` `np.ndarray` with
+        exactly 2 finite fields per line -- an internally inconsistent
+        result rather than a valid line list.
     """
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8,))
-    _require_strictly_positive(rho, "rho")
-    _require_strictly_positive(theta, "theta")
+    rho_float, theta_float = _require_safe_hough_line_params(image, rho, theta)
     require_positive_integral(threshold, "threshold")
     threshold_int = int(threshold)
     if threshold_int > _MAX_INT32:
@@ -159,17 +268,31 @@ def hough_lines(
     # function -- verified directly that neither installed build actually
     # does, but that's an accident of implementation, not a promise, so a
     # copy is made to guarantee improcv's own no-mutation contract.
-    raw = cv2.HoughLines(image.copy(), rho, theta, threshold_int)
+    raw = cv2.HoughLines(image.copy(), rho_float, theta_float, threshold_int)
     if raw is None:
         return []
 
-    if raw.dtype != np.float32 or raw.ndim != 3 or raw.shape[1:] != (1, 2):
+    if (
+        not isinstance(raw, np.ndarray)
+        or raw.dtype != np.float32
+        or raw.ndim != 3
+        or raw.shape[1:] != (1, 2)
+    ):
         raise RuntimeError(
-            f"cv2.HoughLines returned an array of shape {raw.shape} dtype {raw.dtype} -- "
+            f"cv2.HoughLines returned an array of shape "
+            f"{getattr(raw, 'shape', None)} dtype {getattr(raw, 'dtype', None)} -- "
             "unexpected OpenCV output"
         )
 
-    return [Line(rho=float(r), theta=float(t)) for r, t in raw[:, 0, :]]
+    lines: list[Line] = []
+    for r, t in raw[:, 0, :]:
+        r_float, t_float = float(r), float(t)
+        if not (math.isfinite(r_float) and math.isfinite(t_float)):
+            raise RuntimeError(
+                f"cv2.HoughLines returned a non-finite line: rho={r_float}, theta={t_float}"
+            )
+        lines.append(Line(rho=r_float, theta=t_float))
+    return lines
 
 
 def hough_line_segments(
@@ -177,8 +300,8 @@ def hough_line_segments(
     threshold: int,
     rho: float = 1.0,
     theta: float = np.pi / 180,
-    min_line_length: float = 0.0,
-    max_line_gap: float = 0.0,
+    min_line_length: int = 0,
+    max_line_gap: int = 0,
 ) -> list[LineSegment]:
     """Detect line segments with the probabilistic Hough transform.
 
@@ -199,12 +322,18 @@ def hough_line_segments(
     theta : float, default pi/180
         Angle resolution of the accumulator, in radians. Must be
         positive. `improcv`'s own default -- see `hough_lines`.
-    min_line_length : float, default 0.0
-        Minimum line length; shorter segments are rejected. Must be
-        non-negative. OpenCV's own default.
-    max_line_gap : float, default 0.0
-        Maximum allowed gap between points on the same line to link them
-        into one segment. Must be non-negative. OpenCV's own default.
+    min_line_length : int, default 0
+        Minimum line length, in pixels; shorter segments are rejected.
+        Must be a non-negative integer within the signed `int32` range.
+        `improcv` accepts only an integer here even though OpenCV's own
+        binding accepts a `float`: OpenCV rounds this value internally
+        (``cvRound``) before use, so a fractional value promises a
+        precision the algorithm doesn't actually honor.
+    max_line_gap : int, default 0
+        Maximum allowed gap, in pixels, between points on the same line
+        to link them into one segment. Must be a non-negative integer
+        within the signed `int32` range, for the same reason as
+        `min_line_length`.
 
     Returns
     -------
@@ -214,40 +343,58 @@ def hough_line_segments(
     Raises
     ------
     ValueError
-        If `image` does not have exactly 2 dimensions or is empty, `rho`
-        or `theta` is not finite or not strictly positive, `threshold` is
-        not positive or exceeds ``2**31 - 1``, or `min_line_length`/
-        `max_line_gap` is not finite or is negative.
+        If `image` does not have exactly 2 dimensions or is empty,
+        `theta` is not in ``(0, pi]``, `rho` is not in
+        ``(0, 2 * (height + width) + 1]`` for `image`'s size, `rho`/
+        `theta` imply a degenerate or excessively large Hough
+        accumulator, `threshold` is not positive or exceeds
+        ``2**31 - 1``, or `min_line_length`/`max_line_gap` is negative or
+        exceeds ``2**31 - 1``.
     TypeError
-        If `image` does not have dtype ``uint8``, or `threshold` is not
+        If `image` does not have dtype ``uint8``, `rho`/`theta` is not a
+        real number, `threshold` is not `numbers.Integral` (rejecting
+        `bool`/`float`), or `min_line_length`/`max_line_gap` is not
         `numbers.Integral` (rejecting `bool`/`float`).
     RuntimeError
-        If OpenCV's raw result is not an ``int32`` array with exactly 4
-        fields per segment -- an internally inconsistent result rather
-        than a valid segment list.
+        If OpenCV's raw result is not an ``int32`` `np.ndarray` with
+        exactly 4 fields per segment -- an internally inconsistent
+        result rather than a valid segment list.
     """
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8,))
-    _require_strictly_positive(rho, "rho")
-    _require_strictly_positive(theta, "theta")
+    rho_float, theta_float = _require_safe_hough_line_params(image, rho, theta)
     require_positive_integral(threshold, "threshold")
     threshold_int = int(threshold)
     if threshold_int > _MAX_INT32:
         raise ValueError(
             f"threshold must fit within the range of int32 ([1, {_MAX_INT32}]), got {threshold}"
         )
-    _require_non_negative_real(min_line_length, "min_line_length")
-    _require_non_negative_real(max_line_gap, "max_line_gap")
+
+    require_integral(min_line_length, "min_line_length")
+    min_line_length_int = int(min_line_length)
+    if min_line_length_int < 0 or min_line_length_int > _MAX_INT32:
+        raise ValueError(
+            f"min_line_length must fit within the range of a non-negative int32 "
+            f"([0, {_MAX_INT32}]), got {min_line_length}"
+        )
+
+    require_integral(max_line_gap, "max_line_gap")
+    max_line_gap_int = int(max_line_gap)
+    if max_line_gap_int < 0 or max_line_gap_int > _MAX_INT32:
+        raise ValueError(
+            f"max_line_gap must fit within the range of a non-negative int32 "
+            f"([0, {_MAX_INT32}]), got {max_line_gap}"
+        )
 
     # Same no-mutation rationale as hough_lines: OpenCV's own docs permit
     # HoughLinesP to modify its input too.
     raw = cv2.HoughLinesP(
         image.copy(),
-        rho,
-        theta,
+        rho_float,
+        theta_float,
         threshold_int,
-        minLineLength=min_line_length,
-        maxLineGap=max_line_gap,
+        minLineLength=min_line_length_int,
+        maxLineGap=max_line_gap_int,
     )
     if raw is None:
         return []
@@ -289,9 +436,13 @@ def hough_circles(
         "centers only" support (see `max_radius`).
     dp : float, default 1.0
         Inverse ratio of the accumulator resolution to the image
-        resolution. Must be positive. `improcv`'s own default (matching
-        OpenCV's own C++ default) -- `1.5` is only a documented
-        *recommendation* for `"gradient_alt"`, not required.
+        resolution. Must be at least ``1.0`` -- verified directly,
+        identically for both methods, that OpenCV silently clamps `dp`
+        to ``max(dp, 1.0)`` internally, so a value below `1.0` would be
+        silently ignored rather than honored; this function rejects it
+        instead. `improcv`'s own default (matching OpenCV's own C++
+        default) -- `1.5` is only a documented *recommendation* for
+        `"gradient_alt"`, not required.
     param1 : float, default 100.0
         For both methods, the higher of the two Canny thresholds used
         internally. Must be positive. `improcv`'s own default (matching
@@ -343,43 +494,43 @@ def hough_circles(
     ------
     ValueError
         If `image` does not have exactly 2 dimensions or is empty,
-        `method` is not recognized, `dp`/`min_dist`/`param1` is not finite
-        or not strictly positive, `param2` (once resolved) is out of its
-        method-specific range, `min_radius`/`max_radius` is outside the
-        signed `int32` range, `min_radius` is negative, or `max_radius`'s
-        value is inconsistent with `method`/`min_radius` per the semantics
-        above.
+        `method` is not recognized, `dp` is not finite or below `1.0`,
+        `min_dist`/`param1` is not finite or not strictly positive,
+        `param2` (once resolved) is out of its method-specific range,
+        `min_radius`/`max_radius` is outside the signed `int32` range,
+        `min_radius` is negative, or `max_radius`'s value is inconsistent
+        with `method`/`min_radius` per the semantics above.
     TypeError
         If `image` does not have dtype ``uint8``, `dp`/`min_dist`/`param1`/
         `param2` is not a real number, or `min_radius`/`max_radius` is not
         `numbers.Integral` (rejecting `bool`/`float`).
     RuntimeError
-        If OpenCV's raw result is not a ``float32`` array with 3 or 4
-        fields per circle, or any returned `x`/`y`/`radius` is not finite
-        -- an internally inconsistent result rather than a valid circle
-        list.
+        If OpenCV's raw result is not a ``float32`` `np.ndarray` with 3 or
+        4 fields per circle, any returned `x`/`y`/`radius` is not finite,
+        or any returned `radius` is negative -- an internally inconsistent
+        result rather than a valid circle list.
     """
     require_image_ndim(image, ndims=(2,))
     require_dtype(image, (np.uint8,))
     require_one_of(method, ("gradient", "gradient_alt"), "method")
-    _require_strictly_positive(dp, "dp")
-    _require_strictly_positive(min_dist, "min_dist")
-    _require_strictly_positive(param1, "param1")
+    dp_float = _require_dp_at_least_one(dp, "dp")
+    min_dist_float = _require_strictly_positive(min_dist, "min_dist")
+    param1_float = _require_strictly_positive(param1, "param1")
 
     if param2 is None:
         param2_float = _DEFAULT_PARAM2[method]
     else:
         require_finite(param2, "param2")
+        param2_float = float(param2)
         if method == "gradient_alt":
-            if not (0.0 < param2 < 1.0):
+            if not (0.0 < param2_float < 1.0):
                 raise ValueError(
                     f"param2 must be strictly between 0.0 and 1.0 for method='gradient_alt', "
                     f"got {param2}"
                 )
         else:
-            if not param2 > 0.0:
+            if not param2_float > 0.0:
                 raise ValueError(f"param2 must be positive for method='gradient', got {param2}")
-        param2_float = float(param2)
 
     require_integral(min_radius, "min_radius")
     min_radius_int = int(min_radius)
@@ -411,9 +562,9 @@ def hough_circles(
     raw = cv2.HoughCircles(
         image,
         _HOUGH_CIRCLE_METHODS[method],
-        dp,
-        min_dist,
-        param1=param1,
+        dp_float,
+        min_dist_float,
+        param1=param1_float,
         param2=param2_float,
         minRadius=min_radius_int,
         maxRadius=max_radius_int,
@@ -421,9 +572,16 @@ def hough_circles(
     if raw is None:
         return []
 
-    if raw.dtype != np.float32 or raw.ndim != 3 or raw.shape[0] != 1 or raw.shape[2] not in (3, 4):
+    if (
+        not isinstance(raw, np.ndarray)
+        or raw.dtype != np.float32
+        or raw.ndim != 3
+        or raw.shape[0] != 1
+        or raw.shape[2] not in (3, 4)
+    ):
         raise RuntimeError(
-            f"cv2.HoughCircles returned an array of shape {raw.shape} dtype {raw.dtype} -- "
+            f"cv2.HoughCircles returned an array of shape "
+            f"{getattr(raw, 'shape', None)} dtype {getattr(raw, 'dtype', None)} -- "
             "unexpected OpenCV output"
         )
 
@@ -434,5 +592,7 @@ def hough_circles(
             raise RuntimeError(
                 f"cv2.HoughCircles returned a non-finite circle: x={x}, y={y}, radius={radius}"
             )
+        if radius < 0.0:
+            raise RuntimeError(f"cv2.HoughCircles returned a negative radius: {radius}")
         circles.append(Circle(x=x, y=y, radius=radius))
     return circles

@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import cv2
 import numpy as np
 import pytest
@@ -163,20 +166,73 @@ def test_hough_line_segments_rejects_threshold_above_int32(threshold: int) -> No
         im.hough_line_segments(image, threshold=threshold)
 
 
-@pytest.mark.parametrize("min_line_length", [-1.0, -0.001])
-def test_hough_line_segments_rejects_negative_min_line_length(min_line_length: float) -> None:
+@pytest.mark.parametrize("min_line_length", [-1, -100])
+def test_hough_line_segments_rejects_negative_min_line_length(min_line_length: int) -> None:
     image = _lines_image()
 
     with pytest.raises(ValueError, match="min_line_length"):
         im.hough_line_segments(image, threshold=50, min_line_length=min_line_length)
 
 
-@pytest.mark.parametrize("max_line_gap", [-1.0, -0.001])
-def test_hough_line_segments_rejects_negative_max_line_gap(max_line_gap: float) -> None:
+@pytest.mark.parametrize("max_line_gap", [-1, -100])
+def test_hough_line_segments_rejects_negative_max_line_gap(max_line_gap: int) -> None:
     image = _lines_image()
 
     with pytest.raises(ValueError, match="max_line_gap"):
         im.hough_line_segments(image, threshold=50, max_line_gap=max_line_gap)
+
+
+@pytest.mark.parametrize("min_line_length", [30.0, True])
+def test_hough_line_segments_rejects_non_integral_min_line_length(min_line_length: object) -> None:
+    image = _lines_image()
+
+    with pytest.raises(TypeError, match="min_line_length"):
+        im.hough_line_segments(
+            image,
+            threshold=50,
+            min_line_length=min_line_length,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("max_line_gap", [10.0, True])
+def test_hough_line_segments_rejects_non_integral_max_line_gap(max_line_gap: object) -> None:
+    image = _lines_image()
+
+    with pytest.raises(TypeError, match="max_line_gap"):
+        im.hough_line_segments(
+            image,
+            threshold=50,
+            max_line_gap=max_line_gap,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("min_line_length", [2**31, 2**63])
+def test_hough_line_segments_rejects_min_line_length_above_int32(min_line_length: int) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="int32"):
+        im.hough_line_segments(image, threshold=50, min_line_length=min_line_length)
+
+
+@pytest.mark.parametrize("max_line_gap", [2**31, 2**63])
+def test_hough_line_segments_rejects_max_line_gap_above_int32(max_line_gap: int) -> None:
+    image = _lines_image()
+
+    with pytest.raises(ValueError, match="int32"):
+        im.hough_line_segments(image, threshold=50, max_line_gap=max_line_gap)
+
+
+def test_hough_line_segments_accepts_numpy_integer_min_line_length_and_max_line_gap() -> None:
+    image = _lines_image()
+
+    segments = im.hough_line_segments(
+        image,
+        threshold=50,
+        min_line_length=np.int32(30),  # type: ignore[arg-type]
+        max_line_gap=np.int32(10),  # type: ignore[arg-type]
+    )
+
+    assert isinstance(segments, list)
 
 
 def test_hough_line_segments_rejects_non_uint8_dtype() -> None:
@@ -235,6 +291,24 @@ def test_hough_circles_rejects_non_positive_dp(dp: float) -> None:
 
     with pytest.raises(ValueError, match="dp"):
         im.hough_circles(image, min_dist=20, dp=dp)
+
+
+def test_hough_circles_rejects_dp_below_one() -> None:
+    # Distinct from the non-positive case: dp=0.5 is positive but still
+    # below the required 1.0 floor -- verified directly that OpenCV
+    # silently clamps any dp < 1.0 to 1.0 internally for both methods.
+    image = _circles_image()
+
+    with pytest.raises(ValueError, match="dp"):
+        im.hough_circles(image, min_dist=20, dp=0.5)
+
+
+def test_hough_circles_accepts_dp_of_exactly_one() -> None:
+    image = _circles_image()
+
+    circles = im.hough_circles(image, min_dist=20, param2=30, dp=1.0)
+
+    assert isinstance(circles, list)
 
 
 @pytest.mark.parametrize("min_dist", [0.0, -1.0])
@@ -443,3 +517,94 @@ def test_hough_circles_accepts_four_field_result_and_drops_votes(
     circles = im.hough_circles(image, min_dist=20, param2=30)
 
     assert circles == [im.Circle(x=10.0, y=20.0, radius=5.0)]
+
+
+# --- Dangerous rho/theta values -----------------------------------------
+#
+# Verified directly that an individually finite, positive but extreme
+# rho/theta value can segfault the process outright (not raise a
+# catchable exception) via the real cv2.HoughLines/cv2.HoughLinesP calls
+# -- e.g. rho=1e6 combined with an extreme theta reliably crashes with
+# SIGSEGV on both installed OpenCV versions. These cases must therefore
+# never be exercised directly in the main pytest process: each is run in
+# an isolated subprocess so that even if improcv's own guard regressed
+# and let a dangerous value through, only that subprocess would crash,
+# not the whole test run.
+
+_DANGEROUS_ROHO_THETA_SUBPROCESS_SCRIPT = """
+import sys
+import numpy as np
+import improcv as im
+
+image = np.zeros((64, 64), dtype=np.uint8)
+try:
+    im.hough_line_segments(image, threshold=10, {kwargs})
+except ValueError:
+    sys.exit(0)
+except Exception as e:
+    print(type(e).__name__, e, file=sys.stderr)
+    sys.exit(2)
+sys.exit(3)  # no exception raised at all -- unexpected
+"""
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        "rho=1e6",
+        "theta=1e100",
+        "rho=1e-10",
+        "theta=1e-10",
+    ],
+)
+def test_hough_line_segments_rejects_dangerous_rho_theta_before_calling_opencv(
+    kwargs: str,
+) -> None:
+    script = _DANGEROUS_ROHO_THETA_SUBPROCESS_SCRIPT.format(kwargs=kwargs)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"expected a clean ValueError (returncode 0) for {kwargs}, "
+        f"got returncode={result.returncode}, stderr={result.stderr!r}"
+    )
+
+
+def test_hough_lines_rejects_extreme_rho_before_calling_opencv() -> None:
+    script = """
+import sys
+import numpy as np
+import improcv as im
+
+image = np.zeros((64, 64), dtype=np.uint8)
+try:
+    im.hough_lines(image, threshold=10, rho=1e6)
+except ValueError:
+    sys.exit(0)
+except Exception as e:
+    print(type(e).__name__, e, file=sys.stderr)
+    sys.exit(2)
+sys.exit(3)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"expected a clean ValueError (returncode 0), got returncode={result.returncode}, "
+        f"stderr={result.stderr!r}"
+    )
+
+
+def test_hough_line_segments_rejects_excessive_accumulator_cell_count() -> None:
+    # Individually within the geometric (0, pi]/(0, diagonal] bounds, but
+    # together implying an accumulator far beyond the safety cap.
+    image = np.zeros((64, 64), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="accumulator"):
+        im.hough_line_segments(image, threshold=10, rho=1e-6, theta=1e-6)

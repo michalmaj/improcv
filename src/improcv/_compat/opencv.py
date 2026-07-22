@@ -39,6 +39,11 @@ def _normalize_hough_lines_p_output(raw: np.ndarray) -> np.ndarray:
     anything else is an internally inconsistent OpenCV result, not a shape
     this function knows how to normalize.
     """
+    if not isinstance(raw, np.ndarray):
+        raise RuntimeError(
+            f"cv2.HoughLinesP returned a {type(raw).__name__}, expected an np.ndarray -- "
+            "unexpected OpenCV output"
+        )
     if raw.dtype != np.int32:
         raise RuntimeError(
             f"cv2.HoughLinesP returned dtype {raw.dtype}, expected int32 -- "
