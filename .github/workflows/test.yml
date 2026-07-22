@@ -23,6 +23,7 @@ jobs:
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
+      MPLBACKEND: "Agg"
     steps:
       - uses: actions/checkout@v4
 
@@ -56,12 +57,15 @@ jobs:
 
   lowest-deps:
     # Everything above always resolves via uv.lock, which picks the
-    # newest version satisfying each constraint — so numpy>=1.24 and
-    # opencv-python>=4.9 in pyproject.toml were never actually tested at
-    # those floors. This job pins the exact declared minimums (on the
-    # oldest supported Python, since numpy 1.24 has no wheels for 3.12+)
-    # to catch a floor that's declared but doesn't actually work.
+    # newest version satisfying each constraint — so numpy>=1.24,
+    # opencv-python>=4.9, and matplotlib>=3.8 in pyproject.toml were never
+    # actually tested at those floors. This job pins the exact declared
+    # minimums (on the oldest supported Python, since numpy 1.24 has no
+    # wheels for 3.12+) to catch a floor that's declared but doesn't
+    # actually work.
     runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: "Agg"
     steps:
       - uses: actions/checkout@v4
 
@@ -73,7 +77,7 @@ jobs:
       - name: Create a venv and install the declared minimum versions
         run: |
           uv venv --python 3.11
-          uv pip install "numpy==1.24.*" "opencv-python-headless==4.9.*" pytest
+          uv pip install "numpy==1.24.*" "opencv-python-headless==4.9.*" "matplotlib==3.8.*" pytest
           uv pip install -e . --no-deps
 
       - name: Test against the lowest declared dependency versions
@@ -95,7 +99,7 @@ jobs:
       - name: Check package metadata and description rendering
         run: uvx twine check dist/*
 
-      - name: Install the built wheel into a clean environment
+      - name: Install the built wheel into a clean environment (no viz extra)
         run: |
           python -m venv /tmp/smoke-env
           /tmp/smoke-env/bin/pip install dist/*.whl "opencv-python-headless>=4.9,<6"
@@ -104,11 +108,46 @@ jobs:
         run: |
           cd /tmp
           /tmp/smoke-env/bin/python -c "
+          import sys
+
           import numpy as np
           import improcv as im
 
           image = np.zeros((20, 20, 3), dtype=np.uint8)
           result = im.resize(image, width=10)
           assert result.shape == (10, 10, 3), result.shape
+          assert 'matplotlib' not in sys.modules, 'import improcv must never import matplotlib'
           print('smoke test OK:', im.__name__, result.shape)
+          "
+
+      - name: Smoke-test that improcv.visualization fails clearly without the viz extra
+        run: |
+          cd /tmp
+          /tmp/smoke-env/bin/python -c "
+          try:
+              import improcv.visualization
+              raise SystemExit('expected ImportError, none was raised')
+          except ImportError as exc:
+              assert 'improcv[viz]' in str(exc), str(exc)
+              print('smoke test OK: clear ImportError without the viz extra')
+          "
+
+      - name: Install the built wheel with the viz extra into a separate clean environment
+        run: |
+          python -m venv /tmp/smoke-env-viz
+          /tmp/smoke-env-viz/bin/pip install "$(echo dist/*.whl)[viz]" "opencv-python-headless>=4.9,<6"
+
+      - name: Smoke-test improcv.visualization with the viz extra installed
+        env:
+          MPLBACKEND: "Agg"
+        run: |
+          cd /tmp
+          /tmp/smoke-env-viz/bin/python -c "
+          import numpy as np
+          import improcv.visualization as viz
+
+          image = np.zeros((20, 20, 3), dtype=np.uint8)
+          ax = viz.show_image(image)
+          ax2 = viz.plot_histogram(image)
+          print('smoke test OK: show_image and plot_histogram both ran under Agg')
           "
