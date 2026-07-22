@@ -139,6 +139,20 @@ for circle in circles:
     print(circle.x, circle.y, circle.radius)
 ```
 
+QR code decoding:
+
+```python
+import improcv as im
+
+code = im.decode_qr_code(image)
+if code is not None:
+    print(code.data, code.points)  # data is None if detected but undecodable
+
+# For images that may contain more than one QR code:
+for code in im.decode_qr_codes(image):
+    print(code.data, code.points)
+```
+
 ## Status
 
 `improcv` is in early development (pre-`1.0.0`); the public API may still change between minor

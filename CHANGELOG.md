@@ -76,6 +76,21 @@ carries a working `0.1.0a1` version number for local development.
   `LineSegment`, `Circle`, `HoughCircleMethod` types.
 - `improcv._compat.opencv`: `_normalize_hough_lines_p_output`, isolating a genuine `cv2.HoughLinesP`
   shape difference between OpenCV 4.x and 5.x.
+- New `improcv.qrcode` module: `decode_qr_code` (single QR code) and `decode_qr_codes` (multiple),
+  built on `cv2.QRCodeDetector` only (not `QRCodeDetectorAruco`). `decode_qr_codes` detects all
+  quadrangles with `detectMulti` and decodes each one individually with its own `decode` call,
+  rather than trusting `detectAndDecodeMulti`'s `straight_codes` output -- verified that OpenCV's
+  Python binding silently drops the `straight_codes` entry for any quadrangle that fails to decode,
+  making it unaligned with `decoded_info`/`points` whenever a batch has a mixed success/failure
+  result; `decode_qr_code` shares the same per-quadrangle decode path via `detect`+`decode` for
+  consistency. `QRCode.data` is `None` when a quadrangle was detected but its content could not be
+  decoded, `""` when it was decoded and genuinely encodes empty content (these are distinguished via
+  `straight_code`, not `retval`, since `retval == ""` is identical in both cases), or the decoded
+  UTF-8 string otherwise -- a non-UTF-8 payload raises `ValueError` rather than a raw
+  `UnicodeDecodeError`. `decode_qr_code` returns `None` for an image containing more than one QR
+  code (a verified `cv2.QRCodeDetector.detect` limitation) -- use `decode_qr_codes` for those. Each
+  result represents one physical QR symbol; Structured Append sequences are not reassembled.
+  `improcv.qrcode`: `QRCode` type.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 
