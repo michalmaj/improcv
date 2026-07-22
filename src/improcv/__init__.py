@@ -97,6 +97,7 @@ from improcv.pixels import (
     in_range,
     invert,
 )
+from improcv.qrcode import QRCode, decode_qr_code
 from improcv.regions import (
     Centroids,
     ComponentStats,
@@ -154,6 +155,7 @@ __all__ = [
     "MeanStdDevResult",
     "MinMaxResult",
     "Moments",
+    "QRCode",
     "RetrievalMode",
     "RotatedRect",
     "SortOrder",
@@ -177,6 +179,7 @@ __all__ = [
     "connected_components_with_stats",
     "convex_hull",
     "crop",
+    "decode_qr_code",
     "detect_and_compute",
     "dilate",
     "distance_transform",
