@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import pytest
 
@@ -8,6 +9,9 @@ from improcv.drawing import (
     _normalize_thickness,
     _require_valid_boxes,
     _require_valid_contours,
+    _require_valid_fill_value,
+    _require_valid_montage_dim,
+    _require_valid_montage_images,
 )
 
 
@@ -329,3 +333,268 @@ def test_draw_bounding_boxes_rejects_zero_thickness() -> None:
 
     with pytest.raises(ValueError, match="0"):
         im.draw_bounding_boxes(image, [BoundingBox(2, 3, 4, 5)], thickness=0)
+
+
+# --- _require_valid_montage_images ---
+
+
+def _solid(value: int, shape: tuple[int, ...] = (10, 10, 3)) -> np.ndarray:
+    return np.full(shape, value, dtype=np.uint8)
+
+
+def test_require_valid_montage_images_accepts_consistent_color_images() -> None:
+    images = [_solid(1), _solid(2)]
+    result = _require_valid_montage_images(images)
+    assert len(result) == 2
+
+
+def test_require_valid_montage_images_accepts_consistent_grayscale_images() -> None:
+    images = [_solid(1, (10, 10)), _solid(2, (10, 10))]
+    result = _require_valid_montage_images(images)
+    assert len(result) == 2
+
+
+def test_require_valid_montage_images_rejects_single_ndarray_instead_of_sequence() -> None:
+    with pytest.raises(TypeError, match="sequence"):
+        _require_valid_montage_images(_solid(1))  # type: ignore[arg-type]
+
+
+def test_require_valid_montage_images_rejects_empty_sequence() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        _require_valid_montage_images([])
+
+
+def test_require_valid_montage_images_rejects_non_ndarray_element() -> None:
+    with pytest.raises(TypeError, match="ndarray"):
+        _require_valid_montage_images([_solid(1), [[1, 2], [3, 4]]])  # type: ignore[list-item]
+
+
+def test_require_valid_montage_images_rejects_non_uint8_dtype() -> None:
+    with pytest.raises(TypeError, match="uint8"):
+        _require_valid_montage_images([_solid(1), _solid(2).astype(np.float32)])
+
+
+def test_require_valid_montage_images_rejects_non_positive_shape() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        _require_valid_montage_images([np.zeros((0, 10, 3), dtype=np.uint8)])
+
+
+def test_require_valid_montage_images_rejects_disallowed_channel_count() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        _require_valid_montage_images([_solid(1, (10, 10, 2))])
+
+
+def test_require_valid_montage_images_rejects_mismatched_channel_counts() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        _require_valid_montage_images([_solid(1, (10, 10, 3)), _solid(2, (10, 10, 4))])
+
+
+def test_require_valid_montage_images_rejects_mismatched_ndim() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        _require_valid_montage_images([_solid(1, (10, 10)), _solid(2, (10, 10, 3))])
+
+
+# --- _require_valid_montage_dim ---
+
+
+def test_require_valid_montage_dim_accepts_positive_int() -> None:
+    assert _require_valid_montage_dim(5, "tile_width") == 5
+
+
+def test_require_valid_montage_dim_rejects_bool() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        _require_valid_montage_dim(True, "tile_width")
+
+
+def test_require_valid_montage_dim_rejects_float() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        _require_valid_montage_dim(1.5, "tile_width")
+
+
+def test_require_valid_montage_dim_rejects_non_positive() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        _require_valid_montage_dim(0, "tile_width")
+
+
+def test_require_valid_montage_dim_rejects_outside_int32() -> None:
+    with pytest.raises(ValueError, match="int32"):
+        _require_valid_montage_dim(2**31, "tile_width")
+
+
+# --- _require_valid_fill_value ---
+
+
+def test_require_valid_fill_value_accepts_valid_value() -> None:
+    assert _require_valid_fill_value(128) == 128
+
+
+@pytest.mark.parametrize("value", [-1, 256])
+def test_require_valid_fill_value_rejects_out_of_range(value: int) -> None:
+    with pytest.raises(ValueError, match="between"):
+        _require_valid_fill_value(value)
+
+
+def test_require_valid_fill_value_rejects_float() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        _require_valid_fill_value(1.5)
+
+
+def test_require_valid_fill_value_rejects_bool() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        _require_valid_fill_value(True)
+
+
+# --- montage ---
+
+
+def test_montage_tiles_four_images_into_default_2x2_grid() -> None:
+    images = [_solid(1), _solid(2), _solid(3), _solid(4)]
+
+    result = im.montage(images, tile_width=5, tile_height=5)
+
+    assert result.shape == (10, 10, 3)
+    assert tuple(result[0, 0]) == (1, 1, 1)
+    assert tuple(result[0, 5]) == (2, 2, 2)
+    assert tuple(result[5, 0]) == (3, 3, 3)
+    assert tuple(result[5, 5]) == (4, 4, 4)
+
+
+def test_montage_respects_explicit_columns() -> None:
+    images = [_solid(1), _solid(2), _solid(3), _solid(4)]
+
+    result = im.montage(images, tile_width=5, tile_height=5, columns=4)
+
+    assert result.shape == (5, 20, 3)
+
+
+def test_montage_fills_leftover_cells_with_fill_value() -> None:
+    images = [_solid(1), _solid(2), _solid(3)]
+
+    result = im.montage(images, tile_width=5, tile_height=5, columns=2, fill_value=9)
+
+    assert result.shape == (10, 10, 3)
+    assert tuple(result[5, 5]) == (9, 9, 9)
+
+
+def test_montage_single_image_produces_one_tile() -> None:
+    result = im.montage([_solid(7)], tile_width=5, tile_height=5)
+
+    assert result.shape == (5, 5, 3)
+    assert tuple(result[0, 0]) == (7, 7, 7)
+
+
+def test_montage_grayscale_images() -> None:
+    images = [np.full((10, 10), 1, dtype=np.uint8), np.full((10, 10), 2, dtype=np.uint8)]
+
+    result = im.montage(images, tile_width=5, tile_height=5, columns=2)
+
+    assert result.shape == (5, 10)
+
+
+def test_montage_does_not_mutate_input_images() -> None:
+    images = [_solid(1), _solid(2)]
+    before = [image.copy() for image in images]
+
+    im.montage(images, tile_width=5, tile_height=5)
+
+    for image, image_before in zip(images, before, strict=True):
+        assert np.array_equal(image, image_before)
+
+
+def test_montage_placed_tile_has_correct_shape() -> None:
+    images = [_solid(1, (20, 30, 3)), _solid(2, (20, 30, 3))]
+
+    result = im.montage(images, tile_width=8, tile_height=6, columns=2)
+
+    assert result.shape == (6, 16, 3)
+
+
+def test_montage_rejects_single_ndarray_instead_of_sequence() -> None:
+    with pytest.raises(TypeError, match="sequence"):
+        im.montage(_solid(1), tile_width=5, tile_height=5)  # type: ignore[arg-type]
+
+
+def test_montage_rejects_mismatched_channel_counts() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        im.montage([_solid(1, (10, 10, 3)), _solid(2, (10, 10, 4))], tile_width=5, tile_height=5)
+
+
+def test_montage_rejects_non_uint8_images() -> None:
+    with pytest.raises(TypeError, match="uint8"):
+        im.montage([_solid(1).astype(np.float32)], tile_width=5, tile_height=5)
+
+
+@pytest.mark.parametrize("value", [-1, 256])
+def test_montage_rejects_out_of_range_fill_value(value: int) -> None:
+    with pytest.raises(ValueError, match="between"):
+        im.montage([_solid(1)], tile_width=5, tile_height=5, fill_value=value)
+
+
+def test_montage_rejects_float_fill_value() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        im.montage([_solid(1)], tile_width=5, tile_height=5, fill_value=1.5)  # type: ignore[arg-type]
+
+
+def test_montage_rejects_bool_fill_value() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        im.montage([_solid(1)], tile_width=5, tile_height=5, fill_value=True)
+
+
+def test_montage_rejects_non_positive_tile_dims() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        im.montage([_solid(1)], tile_width=0, tile_height=5)
+
+
+def test_montage_rejects_output_size_exceeding_safety_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    images = [_solid(1)]
+    full_called = False
+    resize_called = False
+
+    def _spy_full(*args: object, **kwargs: object) -> np.ndarray:
+        nonlocal full_called
+        full_called = True
+        raise AssertionError("np.full should not be called")
+
+    def _spy_resize(*args: object, **kwargs: object) -> np.ndarray:
+        nonlocal resize_called
+        resize_called = True
+        raise AssertionError("cv2.resize should not be called")
+
+    monkeypatch.setattr(np, "full", _spy_full)
+    monkeypatch.setattr(cv2, "resize", _spy_resize)
+
+    with pytest.raises(ValueError, match="byte"):
+        im.montage(images, tile_width=20_000, tile_height=20_000, columns=100)
+
+    assert not full_called
+    assert not resize_called
+
+
+def test_montage_uses_inter_area_when_shrinking(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[int] = []
+    real_resize = cv2.resize
+
+    def _spy_resize(image: np.ndarray, size: tuple[int, int], interpolation: int) -> np.ndarray:
+        captured.append(interpolation)
+        return real_resize(image, size, interpolation=interpolation)
+
+    monkeypatch.setattr(cv2, "resize", _spy_resize)
+
+    im.montage([_solid(1, (100, 100, 3))], tile_width=10, tile_height=10)
+
+    assert captured == [cv2.INTER_AREA]
+
+
+def test_montage_uses_inter_linear_when_enlarging(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[int] = []
+    real_resize = cv2.resize
+
+    def _spy_resize(image: np.ndarray, size: tuple[int, int], interpolation: int) -> np.ndarray:
+        captured.append(interpolation)
+        return real_resize(image, size, interpolation=interpolation)
+
+    monkeypatch.setattr(cv2, "resize", _spy_resize)
+
+    im.montage([_solid(1, (10, 10, 3))], tile_width=100, tile_height=100)
+
+    assert captured == [cv2.INTER_LINEAR]
