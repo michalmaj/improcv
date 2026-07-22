@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 
 import improcv as im
+from improcv.contours import BoundingBox
 from improcv.drawing import (
     _normalize_bgr_color,
     _normalize_thickness,
+    _require_valid_boxes,
     _require_valid_contours,
 )
 
@@ -208,3 +210,122 @@ def test_draw_contours_nested_contours_filled_separately_do_not_leave_a_hole() -
     separate = im.draw_contours(separate, [inner], color=(255, 255, 255), thickness=-1)
 
     assert tuple(separate[9, 9]) == (255, 255, 255)
+
+
+# --- _require_valid_boxes ---
+
+
+def test_require_valid_boxes_accepts_empty_list() -> None:
+    assert _require_valid_boxes([]) == []
+
+
+def test_require_valid_boxes_accepts_valid_boxes() -> None:
+    box = BoundingBox(2, 3, 4, 5)
+    result = _require_valid_boxes([box])
+    assert result == [box]
+
+
+def test_require_valid_boxes_rejects_single_bounding_box_instead_of_sequence() -> None:
+    box = BoundingBox(2, 3, 4, 5)
+    with pytest.raises(TypeError, match="sequence"):
+        _require_valid_boxes(box)  # type: ignore[arg-type]
+
+
+def test_require_valid_boxes_rejects_non_bounding_box_element() -> None:
+    with pytest.raises(TypeError, match="BoundingBox"):
+        _require_valid_boxes([(2, 3, 4, 5)])  # type: ignore[list-item]
+
+
+def test_require_valid_boxes_rejects_non_positive_width() -> None:
+    with pytest.raises(ValueError, match="width"):
+        _require_valid_boxes([BoundingBox(0, 0, 0, 5)])
+
+
+def test_require_valid_boxes_rejects_non_positive_height() -> None:
+    with pytest.raises(ValueError, match="height"):
+        _require_valid_boxes([BoundingBox(0, 0, 5, 0)])
+
+
+def test_require_valid_boxes_rejects_bool_field() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        _require_valid_boxes([BoundingBox(True, 0, 5, 5)])  # type: ignore[arg-type]
+
+
+def test_require_valid_boxes_rejects_field_outside_int32() -> None:
+    with pytest.raises(ValueError, match="int32"):
+        _require_valid_boxes([BoundingBox(0, 0, 2**31, 5)])
+
+
+def test_require_valid_boxes_rejects_edge_sum_outside_int32() -> None:
+    with pytest.raises(ValueError, match="int32"):
+        _require_valid_boxes([BoundingBox(2**31 - 1, 0, 2**31 - 1, 5)])
+
+
+# --- draw_bounding_boxes ---
+
+
+def test_draw_bounding_boxes_fills_exact_pixel_region() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    box = BoundingBox(2, 3, 4, 5)
+
+    result = im.draw_bounding_boxes(image, [box], color=(255, 255, 255), thickness=-1)
+
+    ys, xs = np.where(result[:, :, 0] > 0)
+    assert xs.min() == 2
+    assert xs.max() == 5
+    assert ys.min() == 3
+    assert ys.max() == 7
+
+
+def test_draw_bounding_boxes_empty_list_is_noop() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    result = im.draw_bounding_boxes(image, [])
+
+    assert np.array_equal(result, image)
+
+
+def test_draw_bounding_boxes_does_not_mutate_input() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    before = image.copy()
+
+    im.draw_bounding_boxes(image, [BoundingBox(2, 3, 4, 5)], thickness=-1)
+
+    assert np.array_equal(image, before)
+
+
+def test_draw_bounding_boxes_rejects_grayscale_image() -> None:
+    image = np.zeros((20, 20), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="channel"):
+        im.draw_bounding_boxes(image, [])  # type: ignore[arg-type]
+
+
+def test_draw_bounding_boxes_rejects_non_uint8_image() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.draw_bounding_boxes(image, [])  # type: ignore[arg-type]
+
+
+def test_draw_bounding_boxes_accepts_box_partially_outside_image() -> None:
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+    box = BoundingBox(5, 5, 20, 20)
+
+    result = im.draw_bounding_boxes(image, [box], color=(255, 255, 255), thickness=-1)
+
+    assert tuple(result[9, 9]) == (255, 255, 255)
+
+
+def test_draw_bounding_boxes_rejects_bad_color() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="between"):
+        im.draw_bounding_boxes(image, [BoundingBox(2, 3, 4, 5)], color=(0, 0, 256))
+
+
+def test_draw_bounding_boxes_rejects_zero_thickness() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="0"):
+        im.draw_bounding_boxes(image, [BoundingBox(2, 3, 4, 5)], thickness=0)

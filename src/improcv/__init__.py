@@ -49,7 +49,7 @@ from improcv.contours import (
     min_area_rect,
     sort_contours,
 )
-from improcv.drawing import draw_contours
+from improcv.drawing import draw_bounding_boxes, draw_contours
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.features import (
     DescriptorNorm,
@@ -185,6 +185,7 @@ __all__ = [
     "detect_and_compute",
     "dilate",
     "distance_transform",
+    "draw_bounding_boxes",
     "draw_contours",
     "ensure_gray",
     "erode",
