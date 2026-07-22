@@ -5,10 +5,10 @@ import pytest
 import improcv as im
 from improcv.contours import BoundingBox
 from improcv.detectors import (
-    MSERRegion,
     _normalize_integral_param,
     _normalize_mser_bbox,
     _normalize_mser_region_points,
+    _normalize_mser_regions_container,
     _require_valid_detector_image,
     _require_valid_keypoints,
     _require_valid_mser_result,
@@ -297,6 +297,14 @@ def test_normalize_mser_region_points_accepts_int32_array() -> None:
     assert result.dtype == np.int32
 
 
+def test_normalize_mser_region_points_int32_returns_independent_copy() -> None:
+    region = np.array([[1, 2], [3, 4]], dtype=np.int32)
+
+    result = _normalize_mser_region_points(region, 0)
+
+    assert not np.shares_memory(result, region)
+
+
 def test_normalize_mser_region_points_rejects_wrong_shape() -> None:
     region = np.array([1, 2, 3], dtype=np.int32)
 
@@ -373,6 +381,106 @@ def test_normalize_mser_bbox_rejects_non_positive_height() -> None:
         _normalize_mser_bbox(row, 0)
 
 
+# --- MSER helpers: _normalize_mser_regions_container ---
+
+
+def test_normalize_mser_regions_container_accepts_tuple() -> None:
+    region1 = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    region2 = np.array([[5, 6], [7, 8], [9, 10]], dtype=np.int32)
+
+    result = _normalize_mser_regions_container((region1, region2))
+
+    assert len(result) == 2
+    assert result[0] is region1
+    assert result[1] is region2
+
+
+def test_normalize_mser_regions_container_accepts_list() -> None:
+    region1 = np.array([[1, 2], [3, 4]], dtype=np.int32)
+
+    result = _normalize_mser_regions_container([region1])
+
+    assert len(result) == 1
+    assert result[0] is region1
+
+
+def test_normalize_mser_regions_container_accepts_collapsed_object_ndarray() -> None:
+    # verified pybind11 quirk: when every region has the same point count,
+    # the whole `regions` output can collapse into a single (N, M, 2)
+    # ndarray with dtype=object instead of staying a tuple of per-region
+    # arrays.
+    region1 = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    region2 = np.array([[5, 6], [7, 8]], dtype=np.int32)
+    collapsed = np.array([region1, region2], dtype=object)
+    assert collapsed.shape == (2, 2, 2)  # confirms the collapsed shape
+
+    result = _normalize_mser_regions_container(collapsed)
+
+    assert len(result) == 2
+    assert np.array_equal(np.asarray(result[0]), region1)
+    assert np.array_equal(np.asarray(result[1]), region2)
+
+
+def test_normalize_mser_regions_container_accepts_collapsed_int32_ndarray() -> None:
+    region1 = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    region2 = np.array([[5, 6], [7, 8]], dtype=np.int32)
+    collapsed = np.array([region1, region2], dtype=np.int32)
+    assert collapsed.shape == (2, 2, 2)
+
+    result = _normalize_mser_regions_container(collapsed)
+
+    assert len(result) == 2
+    assert np.array_equal(np.asarray(result[0]), region1)
+    assert np.array_equal(np.asarray(result[1]), region2)
+
+
+def test_normalize_mser_regions_container_accepts_ragged_object_ndarray() -> None:
+    region1 = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    region2 = np.array([[5, 6], [7, 8], [9, 10]], dtype=np.int32)  # different length
+    ragged = np.array([region1, region2], dtype=object)
+    assert ragged.shape == (2,)  # confirms the ragged 1D fallback shape
+
+    result = _normalize_mser_regions_container(ragged)
+
+    assert len(result) == 2
+
+
+def test_normalize_mser_regions_container_rejects_unrecognized_shape() -> None:
+    bad = np.zeros((2, 2), dtype=np.int32)  # wrong ndim, not a valid regions container
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_regions_container(bad)
+
+
+def test_normalize_mser_regions_container_rejects_none() -> None:
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_regions_container(None)
+
+
+def test_detect_mser_regions_full_pipeline_copies_out_of_collapsed_ndarray(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A collapsed (N, M, 2) ndarray's per-region slices are views into a
+    # shared buffer (verified directly) -- MSERRegion.points must be
+    # independent copies, not views into that buffer or into each other.
+    region1 = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    region2 = np.array([[5, 6], [7, 8]], dtype=np.int32)
+    collapsed = np.array([region1, region2], dtype=np.int32)
+    bboxes = np.array([[1, 2, 3, 3], [5, 6, 3, 3]], dtype=np.int32)
+
+    class _FakeMSER:
+        def detectRegions(self, image: np.ndarray) -> tuple[object, object]:
+            return collapsed, bboxes
+
+    monkeypatch.setattr(cv2.MSER, "create", staticmethod(lambda **kwargs: _FakeMSER()))
+
+    regions = im.detect_mser_regions(_noise((50, 50)))
+
+    assert len(regions) == 2
+    for region in regions:
+        assert not np.shares_memory(region.points, collapsed)
+
+
 # --- MSER helpers: _require_valid_mser_result ---
 
 
@@ -413,7 +521,9 @@ def test_require_valid_mser_result_accepts_consistent_region_and_bbox() -> None:
 
     result = _require_valid_mser_result((region,), bboxes)
 
-    assert result == [MSERRegion(points=region, bounding_box=box)]
+    assert len(result) == 1
+    assert np.array_equal(result[0].points, region)
+    assert result[0].bounding_box == box
 
 
 # --- detect_mser_regions ---
@@ -524,6 +634,26 @@ def test_detect_mser_regions_rejects_min_area_not_less_than_max_area() -> None:
 def test_detect_mser_regions_rejects_huge_delta(value: object) -> None:
     with pytest.raises(ValueError, match="int32"):
         im.detect_mser_regions(_noise((50, 50)), delta=value)  # type: ignore[arg-type]
+
+
+def test_detect_mser_regions_accepts_delta_255() -> None:
+    # OpenCV computes val +/- delta as a signed op on uint8 pixel levels;
+    # a delta within [1, 255] is the only range that's meaningful for a
+    # uint8-only detector. Just checking it doesn't raise.
+    im.detect_mser_regions(_noise((50, 50)), delta=255)
+
+
+@pytest.mark.parametrize("delta", [256, 1_000_000, 2**31 - 1])
+def test_detect_mser_regions_rejects_delta_above_255(delta: int) -> None:
+    # Verified (per review) that values in this range reach OpenCV's own
+    # internal signed-int arithmetic on uint8 pixel levels rather than a
+    # meaningful delta, and can silently misbehave (a specific extreme
+    # value was reported to overflow into unexpected non-zero results in
+    # another environment; not independently reproduced locally, treated
+    # as a real, documented risk regardless per this project's established
+    # pattern for platform/build-dependent footguns).
+    with pytest.raises(ValueError, match="delta"):
+        im.detect_mser_regions(_noise((50, 50)), delta=delta)
 
 
 def test_detect_mser_regions_rejects_bool_min_area() -> None:

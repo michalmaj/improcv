@@ -269,7 +269,11 @@ def _normalize_mser_region_points(region: object, index: int) -> np.ndarray:
     `dtype=object` (e.g. when several regions share the same point
     count) -- accepted only after confirming every element is genuinely
     integral and int32-safe; never an unconditional `astype(np.int32)`,
-    which would silently truncate a corrupted float.
+    which would silently truncate a corrupted float. Always returns an
+    independent copy -- a region extracted from a collapsed outer
+    container (see `_normalize_mser_regions_container`) is a view into a
+    shared buffer, and every public `MSERRegion.points` must be
+    independent.
     """
     region_arr = np.asarray(region)
     if region_arr.ndim != 2 or region_arr.shape[1] != 2 or region_arr.shape[0] == 0:
@@ -278,7 +282,7 @@ def _normalize_mser_region_points(region: object, index: int) -> np.ndarray:
             "(N, 2) with N > 0 -- unexpected OpenCV output"
         )
     if region_arr.dtype == np.int32:
-        return region_arr
+        return region_arr.copy()
     if region_arr.dtype == object:
         for value in region_arr.reshape(-1):
             if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
@@ -312,12 +316,48 @@ def _normalize_mser_bbox(row: np.ndarray, index: int) -> BoundingBox:
     return BoundingBox(x, y, width, height)
 
 
+def _normalize_mser_regions_container(regions: object) -> list[object]:
+    """Raise RuntimeError unless `regions` is a recognized MSER regions container; return a list.
+
+    The known pybind11 quirk isn't limited to a single region's own
+    `dtype=object` -- when every region happens to have the same point
+    count, the *whole* `regions` output can collapse into one
+    `(N, M, 2)` ndarray (either `int32` or `object` dtype) instead of
+    staying a tuple of per-region arrays; when point counts differ, it
+    can instead fall back to a 1D `dtype=object` array of per-region
+    arrays. Each recognized variant is unpacked into a plain list here,
+    with each element still validated by `_normalize_mser_region_points`
+    afterward.
+    """
+    if isinstance(regions, (list, tuple)):
+        return list(regions)
+
+    if isinstance(regions, np.ndarray):
+        if (
+            regions.ndim == 3
+            and regions.shape[0] > 0
+            and regions.shape[2] == 2
+            and regions.dtype in (np.int32, object)
+        ):
+            return [regions[i] for i in range(regions.shape[0])]
+
+        if regions.ndim == 1 and regions.dtype == object:
+            return list(regions)
+
+    raise RuntimeError(
+        f"MSER detectRegions returned an unexpected regions container: "
+        f"{type(regions).__name__} {getattr(regions, 'shape', '')} "
+        f"{getattr(regions, 'dtype', '')} -- unexpected OpenCV output"
+    )
+
+
 def _require_valid_mser_result(regions: object, bboxes: object) -> list[MSERRegion]:
     """Raise RuntimeError unless `(regions, bboxes)` is internally consistent; return MSERRegions.
 
-    Handles the documented empty variant (`(), ()`), validates each
-    region's point array, and cross-checks each bbox against its own
-    region's point min/max.
+    Handles the documented empty variant (`(), ()`), normalizes the raw
+    `regions` container (see `_normalize_mser_regions_container`),
+    validates each region's point array, and cross-checks each bbox
+    against its own region's point min/max.
     """
     if isinstance(regions, tuple) and len(regions) == 0:
         if not (isinstance(bboxes, tuple) and len(bboxes) == 0):
@@ -327,26 +367,22 @@ def _require_valid_mser_result(regions: object, bboxes: object) -> list[MSERRegi
             )
         return []
 
-    if not isinstance(regions, (list, tuple)):
-        raise RuntimeError(
-            f"MSER detectRegions returned {type(regions).__name__} for regions, expected a "
-            "list/tuple -- unexpected OpenCV output"
-        )
+    regions_list = _normalize_mser_regions_container(regions)
 
     bboxes_arr = np.asarray(bboxes)
     if (
         bboxes_arr.ndim != 2
         or bboxes_arr.shape[1] != 4
-        or bboxes_arr.shape[0] != len(regions)
+        or bboxes_arr.shape[0] != len(regions_list)
         or bboxes_arr.dtype != np.int32
     ):
         raise RuntimeError(
-            f"MSER detectRegions returned {len(regions)} regions but bboxes shape "
+            f"MSER detectRegions returned {len(regions_list)} regions but bboxes shape "
             f"{bboxes_arr.shape} dtype {bboxes_arr.dtype} -- unexpected OpenCV output"
         )
 
     results: list[MSERRegion] = []
-    for i, region in enumerate(regions):
+    for i, region in enumerate(regions_list):
         points = _normalize_mser_region_points(region, i)
         box = _normalize_mser_bbox(bboxes_arr[i], i)
         x_min, y_min = int(points[:, 0].min()), int(points[:, 1].min())
@@ -380,11 +416,15 @@ def detect_mser_regions(
         BGRA (``(H, W, 4)``), at least 3x3 -- `detectRegions` raises a raw
         `cv2.error` below that size.
     delta, min_area, max_area : int, default 5, 60, 14400
-        Must be integral (no `bool`), fitting signed `int32`, and each
-        positive; `min_area` must be less than `max_area`. OpenCV
-        silently returns zero regions for a non-positive value or an
-        inverted range rather than raising (the same footgun class as
-        `hough_circles`'s radius bounds).
+        Must be integral (no `bool`) and each positive. `min_area`/
+        `max_area` must additionally fit signed `int32`, and `min_area`
+        must be less than `max_area` -- OpenCV silently returns zero
+        regions for a non-positive value or an inverted range rather than
+        raising (the same footgun class as `hough_circles`'s radius
+        bounds). `delta` is further restricted to ``[1, 255]`` -- since
+        this function only accepts `uint8` images, OpenCV's internal
+        `val +/- delta` comparison on pixel levels has no meaningful
+        effect (or can misbehave) outside that range.
 
     Returns
     -------
@@ -398,8 +438,9 @@ def detect_mser_regions(
     ValueError
         If `image` does not have exactly 2 dimensions, a channel count in
         ``{1, 3, 4}``, or at least 3x3 spatial size, or is empty; if
-        `delta`/`min_area`/`max_area` isn't positive or doesn't fit signed
-        `int32`, or `min_area >= max_area`.
+        `delta`/`min_area`/`max_area` isn't positive, if `min_area`/
+        `max_area` doesn't fit signed `int32`, if `delta` isn't in
+        ``[1, 255]``, or if `min_area >= max_area`.
     TypeError
         If `image` does not have dtype ``uint8``; if `delta`/`min_area`/
         `max_area` isn't an integral type or is a `bool`.
@@ -413,8 +454,8 @@ def detect_mser_regions(
     delta_int = _normalize_integral_param(delta, "delta")
     min_area_int = _normalize_integral_param(min_area, "min_area")
     max_area_int = _normalize_integral_param(max_area, "max_area")
-    if delta_int <= 0:
-        raise ValueError(f"delta must be positive, got {delta_int}")
+    if not (1 <= delta_int <= 255):
+        raise ValueError(f"delta must be in [1, 255] for uint8 MSER detection, got {delta_int}")
     if min_area_int <= 0:
         raise ValueError(f"min_area must be positive, got {min_area_int}")
     if max_area_int <= 0:
