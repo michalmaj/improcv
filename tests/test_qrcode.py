@@ -90,12 +90,6 @@ def test_decode_qr_code_corrupted_code_decodes_to_none_data() -> None:
     assert result.data is None
 
 
-def test_decode_qr_code_returns_none_for_image_with_two_codes() -> None:
-    image = _two_qr_image()
-
-    assert im.decode_qr_code(image) is None
-
-
 @pytest.mark.parametrize("channels", [3, 4])
 def test_decode_qr_code_accepts_color_images(channels: int) -> None:
     gray = _single_qr_image("A")
@@ -148,7 +142,25 @@ def test_decode_qr_code_points_are_independent_copy() -> None:
 def test_require_valid_qr_detection_accepts_single_detection_shape() -> None:
     points = np.zeros((1, 4, 2), dtype=np.float32)
 
-    _require_valid_qr_detection(True, points)
+    _require_valid_qr_detection(True, points, expected_count=1)
+
+
+def test_require_valid_qr_detection_rejects_two_quadrangles_when_expecting_one() -> None:
+    points = np.zeros((2, 4, 2), dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _require_valid_qr_detection(True, points, expected_count=1)
+
+
+def test_decode_qr_code_rejects_inconsistent_multi_quadrangle_detect_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = _single_qr_image("A")
+    two_quads = np.zeros((2, 4, 2), dtype=np.float32)
+    monkeypatch.setattr(cv2.QRCodeDetector, "detect", lambda self, img: (True, two_quads))
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        im.decode_qr_code(image)
 
 
 # --- _decode_one_quadrangle postcondition tests ---
@@ -353,6 +365,34 @@ def test_quadrangle_area_of_collapsed_points_is_zero() -> None:
     collapsed = np.array([[5, 5], [5, 5], [5, 5], [5, 5]], dtype=np.float32)
 
     assert _quadrangle_area(collapsed) == 0.0
+
+
+def test_quadrangle_area_with_large_offset_does_not_cancel_to_zero() -> None:
+    offset_square = np.array(
+        [
+            [100000, 100000],
+            [100020, 100000],
+            [100020, 100020],
+            [100000, 100020],
+        ],
+        dtype=np.float32,
+    )
+
+    assert _quadrangle_area(offset_square) == pytest.approx(400.0)
+
+
+def test_quadrangle_area_of_small_nonzero_square() -> None:
+    small_square = np.array(
+        [
+            [100000.0, 100000.0],
+            [100000.1, 100000.0],
+            [100000.1, 100000.1],
+            [100000.0, 100000.1],
+        ],
+        dtype=np.float32,
+    )
+
+    assert _quadrangle_area(small_square) > 0.0
 
 
 def test_quadrangle_area_of_collinear_points_is_zero() -> None:
