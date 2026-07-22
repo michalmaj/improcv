@@ -44,6 +44,14 @@ def _two_qr_image() -> np.ndarray:
     return canvas
 
 
+def _three_qr_image() -> np.ndarray:
+    canvas = np.full((250, 650), 255, dtype=np.uint8)
+    _place_qr(canvas, "A", 20, 20)
+    _place_qr(canvas, "", 20, 220)
+    _place_qr(canvas, "longer payload needed for corruption to stick", 20, 420, corrupt=True)
+    return canvas
+
+
 # --- decode_qr_code ---
 
 
@@ -242,6 +250,94 @@ def test_decode_qr_code_converts_unicode_decode_error(monkeypatch: pytest.Monkey
 
     with pytest.raises(ValueError, match="UTF-8"):
         im.decode_qr_code(image)
+
+
+# --- decode_qr_codes ---
+
+
+def test_decode_qr_codes_matches_three_results_by_position() -> None:
+    image = _three_qr_image()
+
+    results = im.decode_qr_codes(image)
+
+    assert len(results) == 3
+    by_center = {float(result.points[:, 0].mean()): result for result in results}
+    centers = sorted(by_center)
+    assert by_center[centers[0]].data == "A"
+    assert by_center[centers[1]].data == ""
+    assert by_center[centers[2]].data is None
+
+
+def test_decode_qr_codes_blank_image_returns_empty_list() -> None:
+    image = np.full((200, 200), 255, dtype=np.uint8)
+
+    assert im.decode_qr_codes(image) == []
+
+
+@pytest.mark.parametrize("channels", [3, 4])
+def test_decode_qr_codes_accepts_color_images(channels: int) -> None:
+    gray = _two_qr_image()
+    code = cv2.COLOR_GRAY2BGR if channels == 3 else cv2.COLOR_GRAY2BGRA
+    image = cv2.cvtColor(gray, code)
+
+    results = im.decode_qr_codes(image)
+
+    assert len(results) == 2
+
+
+@pytest.mark.parametrize("channels", [2, 5])
+def test_decode_qr_codes_rejects_unsupported_channel_counts(channels: int) -> None:
+    image = np.zeros((100, 100, channels), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="channel"):
+        im.decode_qr_codes(image)
+
+
+def test_decode_qr_codes_rejects_non_uint8_dtype() -> None:
+    image = _two_qr_image().astype(np.float32)
+
+    with pytest.raises(TypeError, match="dtype"):
+        im.decode_qr_codes(image)  # type: ignore[arg-type]
+
+
+def test_decode_qr_codes_does_not_mutate_input() -> None:
+    image = _two_qr_image()
+    before = image.copy()
+
+    im.decode_qr_codes(image)
+
+    assert np.array_equal(image, before)
+
+
+def test_decode_qr_codes_points_are_independent_copies() -> None:
+    image = _two_qr_image()
+
+    results = im.decode_qr_codes(image)
+    originals = sorted((r.points.copy() for r in results), key=lambda p: float(p[:, 0].mean()))
+    for r in results:
+        r.points[:] = 0
+
+    results2 = im.decode_qr_codes(image)
+    results2_sorted = sorted(results2, key=lambda r: float(r.points[:, 0].mean()))
+    for r2, orig in zip(results2_sorted, originals, strict=True):
+        assert np.array_equal(r2.points, orig)
+
+
+def test_decode_qr_codes_rejects_zero_area_quadrangle(monkeypatch: pytest.MonkeyPatch) -> None:
+    image = _two_qr_image()
+    degenerate = np.zeros((2, 4, 2), dtype=np.float32)
+    monkeypatch.setattr(cv2.QRCodeDetector, "detectMulti", lambda self, img: (True, degenerate))
+
+    with pytest.raises(RuntimeError, match="zero-area"):
+        im.decode_qr_codes(image)
+
+
+def test_decode_qr_codes_rejects_bad_detect_multi_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    image = _two_qr_image()
+    monkeypatch.setattr(cv2.QRCodeDetector, "detectMulti", lambda self, img: (True, None))
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        im.decode_qr_codes(image)
 
 
 # --- shared type/quadrangle tests ---

@@ -13,6 +13,7 @@ from improcv.types import Image
 
 __all__ = [
     "decode_qr_code",
+    "decode_qr_codes",
     "QRCode",
 ]
 
@@ -200,3 +201,53 @@ def decode_qr_code(image: Image) -> QRCode | None:
         raise RuntimeError("cv2.QRCodeDetector detected a zero-area quadrangle")
 
     return _decode_one_quadrangle(detector, image, quad)
+
+
+def decode_qr_codes(image: Image) -> list[QRCode]:
+    """Detect and decode every QR code in `image`.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        A `uint8` image, grayscale (``(H, W)``), BGR (``(H, W, 3)``), or
+        BGRA (``(H, W, 4)``).
+
+    Returns
+    -------
+    list of QRCode
+        One `QRCode` per detected quadrangle, `[]` if none are found. The
+        list order is **not** guaranteed to match spatial left-to-right/
+        top-to-bottom placement -- match results by `points` if position
+        matters. Each result represents one physical QR symbol; Structured
+        Append sequences (a logical message split across multiple physical
+        QR codes) are not reassembled into one message by this function.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have exactly 2 dimensions or is empty, has a
+        channel count other than 1, 3, or 4, or a detected code's payload
+        is not valid UTF-8.
+    TypeError
+        If `image` does not have dtype ``uint8``.
+    RuntimeError
+        If OpenCV's raw detection or decode result is internally
+        inconsistent for any quadrangle (wrong type/shape/dtype,
+        non-finite points, a zero-area quadrangle, or a decoded-text/
+        straight_code combination that doesn't make sense).
+    """
+    _require_valid_image_for_qr(image)
+
+    detector = cv2.QRCodeDetector()
+    detected, points = detector.detectMulti(image)
+    _require_valid_qr_detection(detected, points)
+    if not detected:
+        return []
+
+    codes: list[QRCode] = []
+    for i in range(points.shape[0]):
+        quad = points[i : i + 1]
+        if _quadrangle_area(quad[0]) == 0.0:
+            raise RuntimeError(f"cv2.QRCodeDetector detected a zero-area quadrangle at index {i}")
+        codes.append(_decode_one_quadrangle(detector, image, quad))
+    return codes

@@ -97,7 +97,7 @@ from improcv.pixels import (
     in_range,
     invert,
 )
-from improcv.qrcode import QRCode, decode_qr_code
+from improcv.qrcode import QRCode, decode_qr_code, decode_qr_codes
 from improcv.regions import (
     Centroids,
     ComponentStats,
@@ -180,6 +180,7 @@ __all__ = [
     "convex_hull",
     "crop",
     "decode_qr_code",
+    "decode_qr_codes",
     "detect_and_compute",
     "dilate",
     "distance_transform",
