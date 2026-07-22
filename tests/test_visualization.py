@@ -259,3 +259,21 @@ def test_plot_histogram_x_axis_reflects_value_range() -> None:
     x_data = ax.get_lines()[0].get_xdata()
     assert np.allclose(x_data, [112.5, 137.5, 162.5, 187.5])
     assert ax.get_xlim() == (100.0, 200.0)
+
+
+def test_plot_histogram_does_not_leave_a_figure_open_on_dtype_error() -> None:
+    before = tuple(plt.get_fignums())
+
+    with pytest.raises(TypeError):
+        viz.plot_histogram(np.zeros((10, 10), dtype=np.float16))  # type: ignore[arg-type]
+
+    assert tuple(plt.get_fignums()) == before
+
+
+def test_plot_histogram_does_not_leave_a_figure_open_on_bad_bins() -> None:
+    before = tuple(plt.get_fignums())
+
+    with pytest.raises(ValueError, match="bins"):
+        viz.plot_histogram(_gray(), bins=0)
+
+    assert tuple(plt.get_fignums()) == before
