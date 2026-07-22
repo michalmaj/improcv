@@ -123,17 +123,31 @@ def _require_safe_hough_line_params(
     if not (0.0 < rho_float <= max_rho):
         raise ValueError(f"rho must be in (0, {max_rho}] for a {height}x{width} image, got {rho}")
 
-    num_angle = round(math.pi / theta_float)
-    num_rho = round(max_rho / rho_float)
+    # Computed before rounding: a very small (but still individually
+    # "valid") rho/theta can make this division overflow to infinity,
+    # and round(inf) raises a raw OverflowError rather than a value this
+    # function can compare -- verified directly with rho=theta=1e-320.
+    num_angle_estimate = math.pi / theta_float
+    num_rho_estimate = max_rho / rho_float
+    if not (math.isfinite(num_angle_estimate) and math.isfinite(num_rho_estimate)):
+        raise ValueError(
+            f"rho={rho}, theta={theta} produce non-finite Hough accumulator dimensions"
+        )
+    if num_angle_estimate > _MAX_INT32 or num_rho_estimate > _MAX_INT32:
+        raise ValueError(
+            f"rho={rho}, theta={theta} produce an accumulator dimension exceeding int32 "
+            f"(numangle~{num_angle_estimate}, numrho~{num_rho_estimate})"
+        )
+
+    # math.ceil rather than round: this is a defensive upper bound on the
+    # cell count, not a re-implementation of OpenCV's own cvRound-based
+    # sizing, so rounding up (never underestimating) is the safe choice.
+    num_angle = math.ceil(num_angle_estimate)
+    num_rho = math.ceil(num_rho_estimate)
     if num_angle <= 0 or num_rho <= 0:
         raise ValueError(
             f"rho={rho}, theta={theta} produce a degenerate accumulator "
             f"(numangle={num_angle}, numrho={num_rho}) for a {height}x{width} image"
-        )
-    if num_angle > _MAX_INT32 or num_rho > _MAX_INT32:
-        raise ValueError(
-            f"rho={rho}, theta={theta} produce an accumulator dimension exceeding int32 "
-            f"(numangle={num_angle}, numrho={num_rho})"
         )
     num_cells = num_angle * num_rho
     if num_cells > _MAX_ACCUMULATOR_CELLS:
@@ -445,31 +459,53 @@ def hough_circles(
         `"gradient_alt"`, not required.
     param1 : float, default 100.0
         For both methods, the higher of the two Canny thresholds used
-        internally. Must be positive. `improcv`'s own default (matching
-        OpenCV's own C++ default) for both methods -- `300` is only a
-        documented *recommendation* for `"gradient_alt"`, not required.
+        internally. Must be positive. For `method="gradient"` only, must
+        also be at most `int32`'s max -- verified directly that OpenCV
+        rounds `param1` to a C ``int`` internally for this method and
+        silently wraps around beyond `int32` instead of raising, making
+        the threshold meaningless rather than stricter. `improcv`'s own
+        default (matching OpenCV's own C++ default) for both methods --
+        `300` is only a documented *recommendation* for `"gradient_alt"`,
+        not required.
     param2 : float or None, default None
         Method-specific accumulator threshold. For `"gradient"`, must be
-        positive (smaller values report more, potentially false, circles).
-        For `"gradient_alt"`, must be strictly between ``0.0`` and ``1.0``
-        (a circle "perfectness" measure, closer to ``1.0`` is stricter).
-        When `None`, resolves to `100.0` for `"gradient"` or `0.9` for
-        `"gradient_alt"` -- verified directly that OpenCV's own omitted-
-        parameter default (`100.0` regardless of method) violates
-        `"gradient_alt"`'s own required range and raises a raw
-        `cv2.error`, so this function never lets that combination reach
-        OpenCV.
+        positive and at most `int32`'s max (same silent-wraparound risk
+        as `param1` -- verified directly: `param2=2**31-1` correctly
+        finds no circles, but `param2=2**31` or `param2=1e100` silently
+        wrap to something small and find many). For `"gradient_alt"`,
+        must be strictly between ``0.0`` and ``1.0`` (a circle
+        "perfectness" measure, closer to ``1.0`` is stricter) -- verified
+        this method does not exhibit the same wraparound. When `None`,
+        resolves to `100.0` for `"gradient"` or `0.9` for `"gradient_alt"`
+        -- verified directly that OpenCV's own omitted-parameter default
+        (`100.0` regardless of method) violates `"gradient_alt"`'s own
+        required range and raises a raw `cv2.error`, so this function
+        never lets that combination reach OpenCV.
     min_radius : int, default 0
         Minimum circle radius, in pixels. Must be a non-negative integer
-        within the signed `int32` range. `0` means no lower bound
-        (OpenCV's own default).
+        within the signed `int32` range, and -- when `max_radius` is `0`
+        (automatic upper bound) -- within a limit derived from `image`'s
+        own dimensions and `method` (see `max_radius`). `0` means no
+        lower bound (OpenCV's own default).
     max_radius : int, default 0
         Maximum circle radius, in pixels, within the signed `int32`
         range. Semantics:
 
         - ``0`` (default, OpenCV's own default): automatic upper bound
-          (OpenCV uses the maximum image dimension).
-        - Greater than `min_radius`: an explicit range, honored as given.
+          (OpenCV uses the maximum image dimension). When this is used,
+          `min_radius` must itself be less than ``max(height, width)``
+          for `method="gradient"`, or at most
+          ``min(height, width) // 2`` for `method="gradient_alt"`.
+        - Greater than `min_radius`: an explicit range, honored as given
+          -- but also capped at ``max(height, width)`` for
+          `method="gradient"`, or ``min(height, width) // 2`` for
+          `method="gradient_alt"`. Being within `int32` alone isn't
+          enough: verified directly that `cv2.HoughCircles` allocates
+          memory proportional to `max_radius` itself, not image size --
+          `max_radius=50_000_000` on a 64x64 image measurably consumed
+          gigabytes of memory and can be killed by the OS on a
+          memory-constrained system, despite being an entirely ordinary
+          `int32` value.
         - Negative, with `method="gradient"` only: "centers only" mode --
           every returned `radius` is `0.0`.
         - Negative, with `method="gradient_alt"`: rejected with
@@ -516,6 +552,20 @@ def hough_circles(
     dp_float = _require_dp_at_least_one(dp, "dp")
     min_dist_float = _require_strictly_positive(min_dist, "min_dist")
     param1_float = _require_strictly_positive(param1, "param1")
+    # Verified directly, identically on both OpenCV versions: for
+    # method="gradient" only, cv2.HoughCircles rounds param1/param2 to a
+    # C int internally, and a value beyond int32 silently wraps around
+    # instead of raising -- param2=2**31-1 correctly finds 0 circles,
+    # but param2=2**31 (and 1e100) silently wraps to something small and
+    # finds many circles instead, as if the threshold barely mattered.
+    # "gradient_alt" does not exhibit this (confirmed no such jump for
+    # huge param1 there), so this bound is method-specific.
+    if method == "gradient" and param1_float > _MAX_INT32:
+        raise ValueError(
+            f"param1 must be at most {_MAX_INT32} for method='gradient' -- verified directly "
+            f"that OpenCV rounds param1 to a C int internally and silently wraps around "
+            f"beyond int32, got {param1}"
+        )
 
     if param2 is None:
         param2_float = _DEFAULT_PARAM2[method]
@@ -531,6 +581,12 @@ def hough_circles(
         else:
             if not param2_float > 0.0:
                 raise ValueError(f"param2 must be positive for method='gradient', got {param2}")
+            if param2_float > _MAX_INT32:
+                raise ValueError(
+                    f"param2 must be at most {_MAX_INT32} for method='gradient' -- verified "
+                    f"directly that OpenCV rounds param2 to a C int internally and silently "
+                    f"wraps around beyond int32, got {param2}"
+                )
 
     require_integral(min_radius, "min_radius")
     min_radius_int = int(min_radius)
@@ -558,6 +614,41 @@ def hough_circles(
             "-- verified directly that OpenCV silently widens or reorders this range instead of "
             "honoring or rejecting it, so this combination is rejected explicitly"
         )
+
+    # Being within the int32 range isn't enough: verified directly that
+    # cv2.HoughCircles allocates memory proportional to max_radius
+    # itself (not just image size) -- max_radius=50_000_000 on a tiny
+    # 64x64 image measurably consumed gigabytes of memory and can be
+    # killed by the OS (SIGKILL) on a memory-constrained system, even
+    # though it's a perfectly ordinary int32 value. Bound max_radius (and,
+    # for the auto-range max_radius=0 case, min_radius) to the image's own
+    # dimensions instead.
+    height, width = image.shape
+    if max_radius_int > 0:
+        radius_limit = max(height, width) if method == "gradient" else min(height, width) // 2
+        if max_radius_int > radius_limit:
+            raise ValueError(
+                f"max_radius ({max_radius_int}) exceeds the safe limit ({radius_limit}) for a "
+                f"{height}x{width} image with method={method!r} -- verified directly that "
+                "larger values can exhaust memory or be killed by the OS"
+            )
+    elif max_radius_int == 0:
+        if method == "gradient":
+            radius_limit = max(height, width)
+            if not min_radius_int < radius_limit:
+                raise ValueError(
+                    f"min_radius ({min_radius_int}) must be less than {radius_limit} for a "
+                    f"{height}x{width} image with method='gradient' when max_radius=0 (automatic "
+                    "upper bound)"
+                )
+        else:
+            radius_limit = min(height, width) // 2
+            if not min_radius_int <= radius_limit:
+                raise ValueError(
+                    f"min_radius ({min_radius_int}) must be at most {radius_limit} for a "
+                    f"{height}x{width} image with method='gradient_alt' when max_radius=0 "
+                    "(automatic upper bound)"
+                )
 
     raw = cv2.HoughCircles(
         image,
