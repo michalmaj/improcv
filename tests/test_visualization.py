@@ -181,3 +181,81 @@ def test_show_image_rejects_bad_title() -> None:
 def test_show_image_rejects_bad_ax() -> None:
     with pytest.raises(TypeError, match="ax"):
         viz.show_image(_gray(), ax="not an axes")  # type: ignore[arg-type]
+
+
+# --- plot_histogram ---
+
+
+def test_plot_histogram_grayscale_produces_one_black_line() -> None:
+    ax = viz.plot_histogram(_gray())
+
+    lines = ax.get_lines()
+    assert len(lines) == 1
+    assert lines[0].get_color() == "k"
+
+
+def test_plot_histogram_bgr_produces_three_colored_lines() -> None:
+    ax = viz.plot_histogram(_bgr())
+
+    lines = ax.get_lines()
+    assert len(lines) == 3
+    assert [line.get_color() for line in lines] == ["b", "g", "r"]
+
+
+def test_plot_histogram_rejects_bgra() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        viz.plot_histogram(np.zeros((10, 10, 4), dtype=np.uint8))
+
+
+def test_plot_histogram_rejects_two_channels() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        viz.plot_histogram(np.zeros((10, 10, 2), dtype=np.uint8))
+
+
+def test_plot_histogram_mask_changes_result() -> None:
+    image = _gray(128)
+    image[:5, :] = 200  # top half a different value
+
+    mask_top = np.zeros((10, 10), dtype=np.uint8)
+    mask_top[:5, :] = 255
+    mask_bottom = np.zeros((10, 10), dtype=np.uint8)
+    mask_bottom[5:, :] = 255
+
+    ax_top = viz.plot_histogram(image, mask=mask_top)
+    ax_bottom = viz.plot_histogram(image, mask=mask_bottom)
+
+    top_hist = ax_top.get_lines()[0].get_ydata()
+    bottom_hist = ax_bottom.get_lines()[0].get_ydata()
+    assert not np.array_equal(top_hist, bottom_hist)
+
+
+def test_plot_histogram_uses_passed_axes() -> None:
+    fig, ax = plt.subplots()
+
+    result = viz.plot_histogram(_gray(), ax=ax)
+
+    assert result is ax
+
+
+def test_plot_histogram_does_not_mutate_input() -> None:
+    image = _bgr()
+    before = image.copy()
+
+    viz.plot_histogram(image)
+
+    assert np.array_equal(image, before)
+
+
+def test_plot_histogram_propagates_histogram_dtype_error() -> None:
+    with pytest.raises(TypeError):
+        viz.plot_histogram(_gray().astype(np.float16))  # type: ignore[arg-type]
+
+
+def test_plot_histogram_x_axis_reflects_value_range() -> None:
+    image = _gray(150)
+
+    ax = viz.plot_histogram(image, bins=4, value_range=(100.0, 200.0))
+
+    x_data = ax.get_lines()[0].get_xdata()
+    assert np.allclose(x_data, [112.5, 137.5, 162.5, 187.5])
+    assert ax.get_xlim() == (100.0, 200.0)

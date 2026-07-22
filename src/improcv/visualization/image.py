@@ -6,10 +6,12 @@ import numpy as np
 from matplotlib.axes import Axes
 
 from improcv._validation import require_channels, require_dtype, require_image_ndim
+from improcv.analysis import histogram
 from improcv.color import bgr_to_rgb
-from improcv.types import ImageU8
+from improcv.types import Image, ImageU8, Mask
 
 __all__ = [
+    "plot_histogram",
     "show_image",
 ]
 
@@ -108,4 +110,73 @@ def show_image(image: ImageU8, title: str | None = None, ax: Axes | None = None)
     axes.axis("off")
     if title is not None:
         axes.set_title(title)
+    return axes
+
+
+def plot_histogram(
+    image: Image,
+    bins: int = 256,
+    value_range: tuple[float, float] = (0.0, 256.0),
+    mask: Mask | None = None,
+    ax: Axes | None = None,
+) -> Axes:
+    """Plot the intensity histogram of every channel of an image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Grayscale (``(H, W)``) or BGR (``(H, W, 3)``) image. Other channel
+        counts are rejected explicitly. `dtype` is whatever `histogram`
+        itself accepts (``uint8``, ``uint16``, ``float32``) -- not
+        separately restricted here.
+    bins, value_range, mask
+        Passed straight through to `histogram` for each channel; see its
+        own docstring for the exact contract. `value_range` is also used
+        as the plotted x-axis range, converted to `float` only after
+        `histogram` itself has validated it.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on. If `None`, a new figure and axes are created.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes the histogram was plotted on -- never calls `plt.show()`.
+        A grayscale image gets one black line; a BGR image gets three
+        lines colored ``"b"``, ``"g"``, ``"r"`` -- matplotlib's own named
+        colors happen to match OpenCV's channel-order letters exactly.
+        Each line is plotted against its bin's center value (not the bin
+        index), so the x-axis reflects `value_range` directly.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have exactly 2 dimensions or 3 channels, or is
+        empty; anything `histogram` itself raises as `ValueError`
+        propagates unchanged.
+    TypeError
+        If `ax` is not a `matplotlib.axes.Axes` or `None`; anything
+        `histogram` itself raises as `TypeError` (e.g. an unsupported
+        dtype) propagates unchanged.
+    """
+    _require_grayscale_or_bgr(image)
+    axes = _resolve_axes(ax)
+
+    channels = 1 if image.ndim == 2 else 3
+    colors = ("k",) if channels == 1 else ("b", "g", "r")
+    histograms = [
+        histogram(image, channel=i, bins=bins, value_range=value_range, mask=mask)
+        for i in range(channels)
+    ]
+
+    low = float(value_range[0])
+    high = float(value_range[1])
+    edges = np.linspace(low, high, histograms[0].shape[0] + 1, dtype=np.float64)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+
+    for hist, color in zip(histograms, colors, strict=True):
+        axes.plot(centers, hist, color=color)
+
+    axes.set_xlim(low, high)
+    axes.set_xlabel("pixel value")
+    axes.set_ylabel("count")
     return axes
