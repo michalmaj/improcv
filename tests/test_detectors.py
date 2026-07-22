@@ -193,3 +193,88 @@ def test_detect_fast_keypoints_works_with_draw_keypoints() -> None:
     annotated = cv2.drawKeypoints(image, keypoints, None)  # type: ignore[call-overload]
 
     assert annotated.shape == image.shape
+
+
+# --- detect_blob_keypoints ---
+
+
+def _circles_image(centers: list[tuple[int, int]], radius: int = 15) -> np.ndarray:
+    image = np.full((200, 200), 255, dtype=np.uint8)
+    for cx, cy in centers:
+        cv2.circle(image, (cx, cy), radius, 0, -1)
+    return image
+
+
+def test_detect_blob_keypoints_finds_circles() -> None:
+    centers = [(50, 50), (150, 150)]
+    image = _circles_image(centers)
+
+    keypoints = im.detect_blob_keypoints(image)
+
+    assert len(keypoints) == 2
+    found_centers = sorted((round(kp.pt[0]), round(kp.pt[1])) for kp in keypoints)
+    assert found_centers == sorted(centers)
+
+
+def test_detect_blob_keypoints_blank_image_returns_empty() -> None:
+    image = np.full((100, 100), 255, dtype=np.uint8)
+
+    assert im.detect_blob_keypoints(image) == []
+
+
+def test_detect_blob_keypoints_rejects_two_channels() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        im.detect_blob_keypoints(np.zeros((10, 10, 2), dtype=np.uint8))
+
+
+def test_detect_blob_keypoints_rejects_non_uint8() -> None:
+    with pytest.raises(TypeError, match="dtype"):
+        im.detect_blob_keypoints(_circles_image([(50, 50)]).astype(np.float32))  # type: ignore[arg-type]
+
+
+def test_detect_blob_keypoints_rejects_wrong_type_params() -> None:
+    with pytest.raises(TypeError, match="Params"):
+        im.detect_blob_keypoints(_circles_image([(50, 50)]), params="not params")  # type: ignore[arg-type]
+
+
+def test_detect_blob_keypoints_rejects_invalid_params_configuration() -> None:
+    params = cv2.SimpleBlobDetector.Params()
+    params.thresholdStep = 0
+
+    with pytest.raises(ValueError, match="invalid"):
+        im.detect_blob_keypoints(_circles_image([(50, 50)]), params=params)
+
+
+def test_detect_blob_keypoints_custom_params_changes_result() -> None:
+    image = _circles_image([(50, 50), (150, 150)], radius=15)
+
+    default_result = im.detect_blob_keypoints(image)
+
+    params = cv2.SimpleBlobDetector.Params()
+    params.filterByArea = True
+    params.minArea = 100000  # larger than any blob present
+    params.maxArea = 200000
+
+    restricted_result = im.detect_blob_keypoints(image, params=params)
+
+    assert len(restricted_result) < len(default_result)
+
+
+def test_detect_blob_keypoints_respects_mask() -> None:
+    image = _circles_image([(50, 50), (150, 150)])
+    mask = np.zeros((200, 200), dtype=np.uint8)
+    mask[:100, :] = 255
+
+    keypoints = im.detect_blob_keypoints(image, mask=mask)
+
+    assert len(keypoints) == 1
+    assert _mask_hit(mask, keypoints[0])
+
+
+def test_detect_blob_keypoints_does_not_mutate_input() -> None:
+    image = _circles_image([(50, 50)])
+    before = image.copy()
+
+    im.detect_blob_keypoints(image)
+
+    assert np.array_equal(image, before)

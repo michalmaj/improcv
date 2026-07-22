@@ -22,6 +22,7 @@ from improcv.types import Mask
 
 __all__ = [
     "FastType",
+    "detect_blob_keypoints",
     "detect_fast_keypoints",
 ]
 
@@ -164,4 +165,64 @@ def detect_fast_keypoints(
     detector = cv2.FastFeatureDetector.create(
         threshold_int, nonmax_suppression, _FAST_TYPES[fast_type]
     )
+    return _require_valid_keypoints(detector.detect(image, mask))
+
+
+def detect_blob_keypoints(
+    image: np.ndarray,
+    params: cv2.SimpleBlobDetector.Params | None = None,
+    mask: Mask | None = None,
+) -> list[cv2.KeyPoint]:
+    """Detect blob keypoints.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        A `uint8` image, grayscale (``(H, W)``), BGR (``(H, W, 3)``), or
+        BGRA (``(H, W, 4)``).
+    params : cv2.SimpleBlobDetector.Params, optional
+        Detector configuration (threshold range, area/circularity/
+        convexity/inertia/color filters, etc.), passed straight through to
+        `cv2.SimpleBlobDetector.create` -- not re-exposed as separate
+        function parameters given the 14-field surface. `None` uses
+        OpenCV's own defaults.
+    mask : np.ndarray, optional
+        Optional `uint8` mask restricting detection to nonzero regions,
+        matching `image`'s spatial size.
+
+    Returns
+    -------
+    list of cv2.KeyPoint
+        Detected keypoints; no descriptors.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have exactly 2 dimensions or a channel count
+        in ``{1, 3, 4}``, or is empty; if `mask`'s spatial shape doesn't
+        match `image`'s; if `params` is structurally valid but describes
+        an internally invalid configuration (e.g. `thresholdStep <= 0`).
+    TypeError
+        If `image` does not have dtype ``uint8``; if `params` is given and
+        isn't a `cv2.SimpleBlobDetector.Params`; if `mask` isn't `uint8`.
+    RuntimeError
+        If OpenCV's raw keypoint output is internally inconsistent.
+    """
+    _require_valid_detector_image(image)
+    if params is not None and not isinstance(params, cv2.SimpleBlobDetector.Params):
+        raise TypeError(
+            f"params must be a cv2.SimpleBlobDetector.Params or None, got {type(params).__name__}"
+        )
+    if mask is not None:
+        require_spatial_mask(mask, image)
+
+    try:
+        detector = (
+            cv2.SimpleBlobDetector.create(params)
+            if params is not None
+            else cv2.SimpleBlobDetector.create()
+        )
+    except cv2.error as exc:
+        raise ValueError("params contains an invalid SimpleBlobDetector configuration") from exc
+
     return _require_valid_keypoints(detector.detect(image, mask))

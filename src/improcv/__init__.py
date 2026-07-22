@@ -49,7 +49,7 @@ from improcv.contours import (
     min_area_rect,
     sort_contours,
 )
-from improcv.detectors import FastType, detect_fast_keypoints
+from improcv.detectors import FastType, detect_blob_keypoints, detect_fast_keypoints
 from improcv.drawing import draw_bounding_boxes, draw_contours, montage
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.features import (
@@ -185,6 +185,7 @@ __all__ = [
     "decode_qr_code",
     "decode_qr_codes",
     "detect_and_compute",
+    "detect_blob_keypoints",
     "detect_fast_keypoints",
     "dilate",
     "distance_transform",
