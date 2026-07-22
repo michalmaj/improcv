@@ -3,10 +3,15 @@ import numpy as np
 import pytest
 
 import improcv as im
+from improcv.contours import BoundingBox
 from improcv.detectors import (
+    MSERRegion,
     _normalize_integral_param,
+    _normalize_mser_bbox,
+    _normalize_mser_region_points,
     _require_valid_detector_image,
     _require_valid_keypoints,
+    _require_valid_mser_result,
 )
 
 
@@ -278,3 +283,269 @@ def test_detect_blob_keypoints_does_not_mutate_input() -> None:
     im.detect_blob_keypoints(image)
 
     assert np.array_equal(image, before)
+
+
+# --- MSER helpers: _normalize_mser_region_points ---
+
+
+def test_normalize_mser_region_points_accepts_int32_array() -> None:
+    region = np.array([[1, 2], [3, 4]], dtype=np.int32)
+
+    result = _normalize_mser_region_points(region, 0)
+
+    assert np.array_equal(result, region)
+    assert result.dtype == np.int32
+
+
+def test_normalize_mser_region_points_rejects_wrong_shape() -> None:
+    region = np.array([1, 2, 3], dtype=np.int32)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_region_points(region, 0)
+
+
+def test_normalize_mser_region_points_rejects_empty() -> None:
+    region = np.zeros((0, 2), dtype=np.int32)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_region_points(region, 0)
+
+
+def test_normalize_mser_region_points_rejects_unexpected_dtype() -> None:
+    region = np.array([[1.5, 2.5], [3.5, 4.5]], dtype=np.float64)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_region_points(region, 0)
+
+
+def test_normalize_mser_region_points_accepts_valid_object_dtype() -> None:
+    region = np.array([[1, 2], [3, 4]], dtype=object)
+
+    result = _normalize_mser_region_points(region, 0)
+
+    assert result.dtype == np.int32
+    assert np.array_equal(result, np.array([[1, 2], [3, 4]], dtype=np.int32))
+
+
+def test_normalize_mser_region_points_rejects_object_dtype_with_non_integral_element() -> None:
+    region = np.array([[1, 2.5], [3, 4]], dtype=object)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_region_points(region, 0)
+
+
+def test_normalize_mser_region_points_rejects_object_dtype_with_bool_element() -> None:
+    region = np.array([[1, True], [3, 4]], dtype=object)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_region_points(region, 0)
+
+
+def test_normalize_mser_region_points_rejects_object_dtype_out_of_int32_range() -> None:
+    region = np.array([[1, 2**31], [3, 4]], dtype=object)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_region_points(region, 0)
+
+
+# --- MSER helpers: _normalize_mser_bbox ---
+
+
+def test_normalize_mser_bbox_accepts_valid_row() -> None:
+    row = np.array([1, 2, 3, 4], dtype=np.int32)
+
+    result = _normalize_mser_bbox(row, 0)
+
+    assert result == BoundingBox(1, 2, 3, 4)
+
+
+def test_normalize_mser_bbox_rejects_non_positive_width() -> None:
+    row = np.array([1, 2, 0, 4], dtype=np.int32)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_bbox(row, 0)
+
+
+def test_normalize_mser_bbox_rejects_non_positive_height() -> None:
+    row = np.array([1, 2, 3, 0], dtype=np.int32)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _normalize_mser_bbox(row, 0)
+
+
+# --- MSER helpers: _require_valid_mser_result ---
+
+
+def test_require_valid_mser_result_accepts_empty_variant() -> None:
+    assert _require_valid_mser_result((), ()) == []
+
+
+def test_require_valid_mser_result_rejects_empty_regions_with_nonempty_bboxes() -> None:
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _require_valid_mser_result((), np.zeros((1, 4), dtype=np.int32))
+
+
+def test_require_valid_mser_result_rejects_mismatched_counts() -> None:
+    regions = (np.array([[0, 0], [1, 1]], dtype=np.int32),)
+    bboxes = np.zeros((2, 4), dtype=np.int32)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _require_valid_mser_result(regions, bboxes)
+
+
+def test_require_valid_mser_result_rejects_non_sequence_regions() -> None:
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _require_valid_mser_result(None, ())  # type: ignore[arg-type]
+
+
+def test_require_valid_mser_result_rejects_bbox_not_matching_region() -> None:
+    regions = (np.array([[0, 0], [10, 10]], dtype=np.int32),)
+    bboxes = np.array([[0, 0, 999, 999]], dtype=np.int32)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _require_valid_mser_result(regions, bboxes)
+
+
+def test_require_valid_mser_result_accepts_consistent_region_and_bbox() -> None:
+    region = np.array([[2, 3], [5, 3], [5, 8], [2, 8]], dtype=np.int32)
+    box = BoundingBox(2, 3, 4, 6)
+    bboxes = np.array([[box.x, box.y, box.width, box.height]], dtype=np.int32)
+
+    result = _require_valid_mser_result((region,), bboxes)
+
+    assert result == [MSERRegion(points=region, bounding_box=box)]
+
+
+# --- detect_mser_regions ---
+
+
+def _duplicated_patch_image() -> np.ndarray:
+    rng = np.random.default_rng(0)
+    patch = rng.integers(0, 256, (60, 60), dtype=np.uint8)
+    image = np.full((400, 400), 128, dtype=np.uint8)
+    for y, x in [(20, 20), (20, 120), (20, 220), (120, 20), (120, 120), (220, 220)]:
+        image[y : y + 60, x : x + 60] = patch
+    return image
+
+
+def test_detect_mser_regions_finds_regions_in_noise() -> None:
+    image = _noise((300, 300))
+
+    regions = im.detect_mser_regions(image)
+
+    assert len(regions) > 0
+    for region in regions:
+        assert isinstance(region, im.MSERRegion)
+        assert region.points.shape[1] == 2
+        assert region.points.dtype == np.int32
+        x_min, y_min = region.points[:, 0].min(), region.points[:, 1].min()
+        x_max, y_max = region.points[:, 0].max(), region.points[:, 1].max()
+        assert region.bounding_box == BoundingBox(
+            int(x_min), int(y_min), int(x_max - x_min + 1), int(y_max - y_min + 1)
+        )
+
+
+def test_detect_mser_regions_deterministic_fixture_is_non_empty_and_consistent() -> None:
+    image = _duplicated_patch_image()
+
+    regions = im.detect_mser_regions(image)
+
+    assert len(regions) > 0
+    for region in regions:
+        x_min, y_min = region.points[:, 0].min(), region.points[:, 1].min()
+        x_max, y_max = region.points[:, 0].max(), region.points[:, 1].max()
+        assert region.bounding_box.x == x_min
+        assert region.bounding_box.y == y_min
+        assert region.bounding_box.x + region.bounding_box.width - 1 == x_max
+        assert region.bounding_box.y + region.bounding_box.height - 1 == y_max
+
+
+def test_detect_mser_regions_uniform_image_with_tiny_max_area_returns_empty() -> None:
+    # A uniform image forms exactly one maximally-stable region: the whole
+    # image (verified directly, and confirmed version-dependent otherwise --
+    # OpenCV 4.13 finds this single region even for blurred noise where
+    # OpenCV 5.0 finds none, so the empty case is pinned via max_area
+    # instead of relying on incidental image content). max_area smaller
+    # than the image's own area filters that one region out on both
+    # versions.
+    image = np.full((100, 100), 128, dtype=np.uint8)
+
+    assert im.detect_mser_regions(image, min_area=1, max_area=2) == []
+
+
+def test_detect_mser_regions_rejects_non_uint8() -> None:
+    with pytest.raises(TypeError, match="dtype"):
+        im.detect_mser_regions(_noise((50, 50)).astype(np.float32))  # type: ignore[arg-type]
+
+
+def test_detect_mser_regions_rejects_two_channels() -> None:
+    with pytest.raises(ValueError, match="channel"):
+        im.detect_mser_regions(np.zeros((50, 50, 2), dtype=np.uint8))
+
+
+@pytest.mark.parametrize("shape", [(1, 10), (2, 10), (10, 1), (10, 2)])
+def test_detect_mser_regions_rejects_too_small_image(shape: tuple[int, int]) -> None:
+    image = np.random.default_rng(0).integers(0, 256, shape, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="3x3"):
+        im.detect_mser_regions(image)
+
+
+def test_detect_mser_regions_accepts_3x3_image() -> None:
+    image = np.random.default_rng(0).integers(0, 256, (3, 3), dtype=np.uint8)
+
+    assert im.detect_mser_regions(image) == []
+
+
+@pytest.mark.parametrize("delta", [0, -1])
+def test_detect_mser_regions_rejects_non_positive_delta(delta: int) -> None:
+    with pytest.raises(ValueError, match="delta"):
+        im.detect_mser_regions(_noise((50, 50)), delta=delta)
+
+
+@pytest.mark.parametrize("min_area", [0, -1])
+def test_detect_mser_regions_rejects_non_positive_min_area(min_area: int) -> None:
+    with pytest.raises(ValueError, match="min_area"):
+        im.detect_mser_regions(_noise((50, 50)), min_area=min_area)
+
+
+@pytest.mark.parametrize("max_area", [0, -1])
+def test_detect_mser_regions_rejects_non_positive_max_area(max_area: int) -> None:
+    with pytest.raises(ValueError, match="max_area"):
+        im.detect_mser_regions(_noise((50, 50)), max_area=max_area)
+
+
+def test_detect_mser_regions_rejects_min_area_not_less_than_max_area() -> None:
+    with pytest.raises(ValueError, match="min_area"):
+        im.detect_mser_regions(_noise((50, 50)), min_area=100, max_area=100)
+
+
+@pytest.mark.parametrize("value", [2**31, np.int64(2**31)])
+def test_detect_mser_regions_rejects_huge_delta(value: object) -> None:
+    with pytest.raises(ValueError, match="int32"):
+        im.detect_mser_regions(_noise((50, 50)), delta=value)  # type: ignore[arg-type]
+
+
+def test_detect_mser_regions_rejects_bool_min_area() -> None:
+    with pytest.raises(TypeError, match="integ"):
+        im.detect_mser_regions(_noise((50, 50)), min_area=True)  # type: ignore[arg-type]
+
+
+def test_detect_mser_regions_does_not_mutate_input() -> None:
+    image = _noise((300, 300))
+    before = image.copy()
+
+    im.detect_mser_regions(image)
+
+    assert np.array_equal(image, before)
+
+
+def test_detect_mser_regions_rejects_bad_raw_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeMSER:
+        def detectRegions(self, image: np.ndarray) -> tuple[object, object]:
+            return (np.array([[1, 2], [3, 4]], dtype=np.int32),), np.zeros((2, 4), dtype=np.int32)
+
+    monkeypatch.setattr(cv2.MSER, "create", staticmethod(lambda **kwargs: _FakeMSER()))
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        im.detect_mser_regions(_noise((50, 50)))
