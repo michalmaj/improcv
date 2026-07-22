@@ -54,6 +54,11 @@ def test_normalize_hough_lines_p_output_rejects_wrong_dtype() -> None:
         _normalize_hough_lines_p_output(raw)
 
 
+def test_normalize_hough_lines_p_output_rejects_non_ndarray() -> None:
+    with pytest.raises(RuntimeError, match="ndarray"):
+        _normalize_hough_lines_p_output(None)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     "raw",
     [
