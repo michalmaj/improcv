@@ -87,10 +87,11 @@ carries a working `0.1.0a1` version number for local development.
   decoded, `""` when it was decoded and genuinely encodes empty content (these are distinguished via
   `straight_code`, not `retval`, since `retval == ""` is identical in both cases), or the decoded
   UTF-8 string otherwise -- a non-UTF-8 payload raises `ValueError` rather than a raw
-  `UnicodeDecodeError`. `decode_qr_code` returns `None` for an image containing more than one QR
-  code (a verified `cv2.QRCodeDetector.detect` limitation) -- use `decode_qr_codes` for those. Each
-  result represents one physical QR symbol; Structured Append sequences are not reassembled.
-  `improcv.qrcode`: `QRCode` type.
+  `UnicodeDecodeError`. `decode_qr_code` attempts to detect and decode one QR code; if `image`
+  contains multiple QR codes, OpenCV may select one of them or fail to detect any -- which code (if
+  any) is selected is not guaranteed -- use `decode_qr_codes` for images that may contain multiple
+  codes. Each result represents one physical QR symbol; Structured Append sequences are not
+  reassembled. `improcv.qrcode`: `QRCode` type.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 

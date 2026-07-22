@@ -39,19 +39,34 @@ def _quadrangle_area(corners: np.ndarray) -> float:
 
     Used purely as a degenerate-detection guard -- a real QR detection
     can never legitimately have zero area -- not exposed publicly.
+
+    Computed in `float64` after shifting corners relative to the first
+    corner -- verified that the naive `float32` shoelace formula on
+    coordinates far from the origin (e.g. a code detected near pixel
+    (100000, 100000)) can cancel to exactly `0.0` for a real, non-degenerate
+    quadrangle, due to `float32`'s limited precision at that magnitude.
     """
-    x = corners[:, 0]
-    y = corners[:, 1]
+    corners_f64 = corners.astype(np.float64, copy=False)
+    shifted = corners_f64 - corners_f64[0]
+    x = shifted[:, 0]
+    y = shifted[:, 1]
     return float(0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))))
 
 
-def _require_valid_qr_detection(detected: object, points: object) -> None:
+def _require_valid_qr_detection(
+    detected: object, points: object, *, expected_count: int | None = None
+) -> None:
     """Raise RuntimeError unless a raw detect()/detectMulti() result is internally consistent.
 
     `detected` must be an actual `bool`; when `True`, `points` must be a
-    finite `float32` array shaped `(N, 4, 2)` with `N >= 1`; when `False`,
-    `points` must be `None`. OpenCV's own detection call is never expected
-    to violate this, but it's verified only for the specific inputs this
+    finite `float32` array shaped `(N, 4, 2)`. `expected_count` pins `N` to
+    an exact value -- pass `1` for `detect()` (single-quadrangle), which
+    always calls this with `expected_count=1` so a detection result with
+    more than one quadrangle (however that might arise) is rejected rather
+    than silently decoding only the first one; pass `None` for
+    `detectMulti()`, which only requires `N >= 1`. When `False`, `points`
+    must be `None`. OpenCV's own detection call is never expected to
+    violate this, but it's verified only for the specific inputs this
     project has tried -- this closes the gap defensively rather than
     trusting it by convention alone.
     """
@@ -61,13 +76,13 @@ def _require_valid_qr_detection(detected: object, points: object) -> None:
             "result, expected bool -- unexpected OpenCV output"
         )
     if detected:
-        if (
-            not isinstance(points, np.ndarray)
-            or points.dtype != np.float32
-            or points.ndim != 3
-            or points.shape[1:] != (4, 2)
-            or points.shape[0] == 0
-        ):
+        if not isinstance(points, np.ndarray) or points.dtype != np.float32 or points.ndim != 3:
+            valid_shape = False
+        elif expected_count is not None:
+            valid_shape = points.shape == (expected_count, 4, 2)
+        else:
+            valid_shape = points.shape[1:] == (4, 2) and points.shape[0] > 0
+        if not valid_shape:
             raise RuntimeError(
                 f"cv2.QRCodeDetector detection reported success but returned points of shape "
                 f"{getattr(points, 'shape', None)} dtype {getattr(points, 'dtype', None)} -- "
@@ -160,11 +175,11 @@ def decode_qr_code(image: Image) -> QRCode | None:
     Returns
     -------
     QRCode or None
-        `None` if no QR code is detected at all. **If `image` contains
-        more than one QR code, this function returns `None`** -- verified
-        directly that OpenCV's single-quadrangle detector does not fall
-        back to finding just one of several codes present; use
-        `decode_qr_codes` for images that may contain multiple QR codes.
+        `None` if no QR code is detected at all. This function attempts to
+        detect and decode **one** QR code. If `image` contains multiple QR
+        codes, OpenCV may select one of them or fail to detect any --
+        which code (if any) is selected is not guaranteed. Use
+        `decode_qr_codes` for images that may contain multiple codes.
         Otherwise a `QRCode`; `data` is `None` if a quadrangle was
         detected but its content could not be decoded, `""` if it was
         decoded and genuinely encodes empty content, or the decoded UTF-8
@@ -192,15 +207,14 @@ def decode_qr_code(image: Image) -> QRCode | None:
 
     detector = cv2.QRCodeDetector()
     detected, points = detector.detect(image)
-    _require_valid_qr_detection(detected, points)
+    _require_valid_qr_detection(detected, points, expected_count=1)
     if not detected:
         return None
 
-    quad = points[0:1]
-    if _quadrangle_area(quad[0]) == 0.0:
+    if _quadrangle_area(points[0]) == 0.0:
         raise RuntimeError("cv2.QRCodeDetector detected a zero-area quadrangle")
 
-    return _decode_one_quadrangle(detector, image, quad)
+    return _decode_one_quadrangle(detector, image, points)
 
 
 def decode_qr_codes(image: Image) -> list[QRCode]:
