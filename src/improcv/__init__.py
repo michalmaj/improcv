@@ -49,6 +49,7 @@ from improcv.contours import (
     min_area_rect,
     sort_contours,
 )
+from improcv.drawing import draw_bounding_boxes, draw_contours, montage
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.features import (
     DescriptorNorm,
@@ -184,6 +185,8 @@ __all__ = [
     "detect_and_compute",
     "dilate",
     "distance_transform",
+    "draw_bounding_boxes",
+    "draw_contours",
     "ensure_gray",
     "erode",
     "find_contours",
@@ -211,6 +214,7 @@ __all__ = [
     "min_area_rect",
     "min_max_loc",
     "moments",
+    "montage",
     "morph_close",
     "morph_gradient",
     "morph_open",
