@@ -49,6 +49,13 @@ from improcv.contours import (
     min_area_rect,
     sort_contours,
 )
+from improcv.detectors import (
+    FastType,
+    MSERRegion,
+    detect_blob_keypoints,
+    detect_fast_keypoints,
+    detect_mser_regions,
+)
 from improcv.drawing import draw_bounding_boxes, draw_contours, montage
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.features import (
@@ -139,6 +146,7 @@ __all__ = [
     "DescriptorNorm",
     "DistanceMaskSize",
     "DistanceType",
+    "FastType",
     "FeatureMethod",
     "Features",
     "FloodFillResult",
@@ -153,6 +161,7 @@ __all__ = [
     "Line",
     "LineSegment",
     "Mask",
+    "MSERRegion",
     "MeanStdDevResult",
     "MinMaxResult",
     "Moments",
@@ -183,6 +192,9 @@ __all__ = [
     "decode_qr_code",
     "decode_qr_codes",
     "detect_and_compute",
+    "detect_blob_keypoints",
+    "detect_fast_keypoints",
+    "detect_mser_regions",
     "dilate",
     "distance_transform",
     "draw_bounding_boxes",

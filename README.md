@@ -180,6 +180,26 @@ annotated = im.draw_bounding_boxes(annotated, boxes, color=(255, 0, 0), thicknes
 grid = im.montage([image, annotated], tile_width=200, tile_height=200)
 ```
 
+Point/region detectors:
+
+```python
+import cv2
+import improcv as im
+
+gray = im.ensure_gray(image)
+
+fast_keypoints = im.detect_fast_keypoints(gray)
+blob_keypoints = im.detect_blob_keypoints(gray)
+annotated = cv2.drawKeypoints(image, fast_keypoints, None)
+annotated = cv2.drawKeypoints(annotated, blob_keypoints, None)
+
+mser_regions = im.detect_mser_regions(gray)
+# region.points is every pixel belonging to the region as an unordered
+# set -- not an ordered boundary, so don't pass it to draw_contours.
+# Use the region's bounding box instead:
+annotated = im.draw_bounding_boxes(annotated, [region.bounding_box for region in mser_regions])
+```
+
 Visualization (optional, requires `pip install "improcv[viz]"`):
 
 ```python

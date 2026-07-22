@@ -138,6 +138,28 @@ carries a working `0.1.0a1` version number for local development.
   is re-exported from the top-level `improcv` package. `confusion_matrix`/PR-curve/ROC-curve/
   class-bar-chart plotting (classification-evaluation helpers, a different functional area) remain a
   separate, later chunk.
+- New `improcv.detectors` module, closing a Phase 3 scope gap found in a completeness audit (FAST,
+  blob, and MSER detectors were listed in the original roadmap but never implemented, unlike
+  AKAZE/BRISK/KAZE, which are deliberately deferred to a contrib-gated chunk): `detect_fast_keypoints`,
+  `detect_blob_keypoints`, `detect_mser_regions`. All three accept grayscale/BGR/BGRA `uint8` images
+  (verified all three work correctly with 4 channels too, a wider contract than `drawing.py`/
+  `qrcode.py`). `detect_fast_keypoints`'s `threshold` (bounded to `[0, 255]`) and `fast_type` are
+  validated explicitly -- OpenCV silently accepts out-of-range/invalid values for both with
+  undefined-looking behavior rather than raising. `detect_blob_keypoints` passes a
+  `cv2.SimpleBlobDetector.Params` straight through rather than re-exposing its 14 fields, converting a
+  structurally-valid-but-internally-invalid configuration (e.g. `thresholdStep <= 0`) from a raw
+  `cv2.error` into `ValueError`. `detect_mser_regions` returns a new `MSERRegion` type (`points`,
+  `bounding_box`) rather than reusing `Contour` -- verified directly (by rendering a region's points
+  into its own bounding box) that MSER's region output is an **unordered set of every pixel in the
+  region**, not an ordered boundary walk, so passing it to `draw_contours` would connect points in
+  arbitrary order and draw a nonsensical zigzag polygon; `MSERRegion.points` documents this explicitly
+  and recommends `find_contours`/`convex_hull` for an actual ordered boundary. `detect_mser_regions`
+  also rejects images smaller than 3x3 (OpenCV's own hard floor) and normalizes MSER's `bboxes=()`
+  empty-result quirk and a documented pybind11 edge case where a region's points can come back with
+  `dtype=object`. Barcode detection (EAN/UPC/Code128 via `cv2.barcode_BarcodeDetector`) remains a
+  separate, later chunk -- verified to behave differently from QR's `GraphicalCodeDetector` (a single
+  `detectAndDecodeWithType` call already handles multiple codes correctly with no `straight_codes`-style
+  misalignment).
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 
