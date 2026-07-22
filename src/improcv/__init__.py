@@ -73,6 +73,7 @@ from improcv.hough import (
     HoughCircleMethod,
     Line,
     LineSegment,
+    hough_circles,
     hough_line_segments,
     hough_lines,
 )
@@ -191,6 +192,7 @@ __all__ = [
     "harris_corner",
     "histogram",
     "histogram_equalization",
+    "hough_circles",
     "hough_line_segments",
     "hough_lines",
     "in_range",
