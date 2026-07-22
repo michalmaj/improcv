@@ -120,6 +120,24 @@ carries a working `0.1.0a1` version number for local development.
   here to montage's own memory-exhaustion risk. `draw_keypoints`/`draw_matches` wrappers were
   considered and rejected: `cv2.drawKeypoints`/`cv2.drawMatches` with `outImg=None` already return a
   fresh, non-mutated array, so a wrapper would add no value.
+- New `improcv.visualization` subpackage: `show_image`, `plot_histogram` -- matplotlib-based, requires
+  the new optional `viz` extra (`pip install "improcv[viz]"`). `import improcv` never imports this
+  subpackage or matplotlib; importing `improcv.visualization` without the extra installed raises a
+  clear `ImportError` naming the missing extra, following the existing `cv2`-missing guard's pattern.
+  The subpackage itself only imports `matplotlib`/`matplotlib.axes` at module load -- `matplotlib.
+  pyplot` (which resolves a rendering backend as a side effect of import) is imported lazily, only
+  when a caller doesn't supply their own `ax`, so importing the subpackage never forces a backend
+  choice. `show_image` converts BGR to RGB via `bgr_to_rgb` before display (matplotlib interprets
+  channel 0 as red, so an unconverted BGR image displays with red and blue visually swapped) and
+  shows grayscale images with `cmap="gray"` and a fixed `vmin=0`/`vmax=255` range (matplotlib's own
+  defaults are `cmap="viridis"` and a per-image-normalized range, which would make images of
+  different uniform brightness indistinguishable). `plot_histogram` plots one line per channel
+  (black for grayscale; blue/green/red for BGR, matching OpenCV's channel order) against each bin's
+  *center value* rather than its raw index, so the x-axis reflects `value_range` directly. Both
+  functions accept an optional `ax` and return the `Axes` used, never calling `plt.show()`. Neither
+  is re-exported from the top-level `improcv` package. `confusion_matrix`/PR-curve/ROC-curve/
+  class-bar-chart plotting (classification-evaluation helpers, a different functional area) remain a
+  separate, later chunk.
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
 

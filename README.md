@@ -21,6 +21,16 @@ Already have one of these installed under a different name, or building OpenCV y
 `pip install improcv` and install/keep your existing OpenCV — improcv only needs `cv2` importable,
 it doesn't care how it got there.
 
+`improcv.visualization` (matplotlib-based display helpers) needs the separate `viz` extra, on top
+of one of the OpenCV extras above:
+
+```bash
+pip install "improcv[cv-headless,viz]"
+```
+
+`import improcv` never imports matplotlib — only `import improcv.visualization` does, and it
+raises a clear error if the `viz` extra isn't installed.
+
 ## Usage
 
 ```python
@@ -168,6 +178,15 @@ annotated = im.draw_bounding_boxes(annotated, boxes, color=(255, 0, 0), thicknes
 
 # Tiling several images into one grid:
 grid = im.montage([image, annotated], tile_width=200, tile_height=200)
+```
+
+Visualization (optional, requires `pip install "improcv[viz]"`):
+
+```python
+import improcv.visualization as viz
+
+viz.show_image(image, title="input")  # handles BGR->RGB, hides axes by default
+viz.plot_histogram(image)              # one line per channel (B/G/R or grayscale)
 ```
 
 ## Status
