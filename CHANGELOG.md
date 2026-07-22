@@ -98,10 +98,17 @@ carries a working `0.1.0a1` version number for local development.
   both require a 3-channel BGR `uint8` image (grayscale/BGRA rejected), since OpenCV silently uses
   only a color tuple's first element as a grayscale value rather than raising. `color` and
   `thickness` are validated and normalized (integral, no `bool`, `color` channels in `[0, 255]`,
-  `thickness` fitting signed `int32` and never `0` -- OpenCV silently treats `thickness=0` as a thin
-  outline rather than "draw nothing"). `draw_bounding_boxes` uses `cv2.rectangle`'s `Rect` overload
+  `thickness` never `0` -- OpenCV silently treats `thickness=0` as a thin outline rather than "draw
+  nothing" -- and, if positive, capped at `32767`, OpenCV's own internal `MAX_THICKNESS` limit
+  (`32768` reaches a raw `cv2.error: thickness <= MAX_THICKNESS`); negative `thickness` has no such
+  cap but must still fit signed `int32`). `draw_bounding_boxes` uses `cv2.rectangle`'s `Rect` overload
   (`(x, y, width, height)`) rather than its two-point overload, which was verified to draw a filled
-  region one pixel wider and taller than intended. `draw_contours` documents that filling multiple
+  region one pixel wider and taller than intended. `BoundingBox` fields are normalized to plain
+  Python `int` before computing `x + width`/`y + height` -- verified that adding two `np.int32`
+  scalars near `int32`'s max silently wraps around (only a `RuntimeWarning`, easy to miss) rather
+  than raising, which would otherwise let an out-of-range box slip past that very bounds check. A
+  wrong-dtype contour now raises `TypeError` (was inconsistently `ValueError`), matching every other
+  dtype check in the library. `draw_contours` documents that filling multiple
   contours without hierarchy applies OpenCV's even-odd rule across the whole collection (verified:
   nested-but-unrelated contours filled in one call can produce an unintended "hole"); hierarchy
   support itself is out of scope. `montage` tiles same-`ndim`/channel-count images

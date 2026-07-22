@@ -94,10 +94,40 @@ def test_normalize_thickness_rejects_float() -> None:
         _normalize_thickness(1.5)
 
 
-@pytest.mark.parametrize("value", [2**31, -(2**31) - 1])
-def test_normalize_thickness_rejects_outside_int32(value: int) -> None:
+def test_normalize_thickness_rejects_negative_outside_int32() -> None:
     with pytest.raises(ValueError, match="int32"):
-        _normalize_thickness(value)
+        _normalize_thickness(-(2**31) - 1)
+
+
+def test_normalize_thickness_accepts_max_positive_thickness() -> None:
+    assert _normalize_thickness(32767) == 32767
+
+
+def test_normalize_thickness_rejects_above_max_positive_thickness() -> None:
+    with pytest.raises(ValueError, match="32767"):
+        _normalize_thickness(32768)
+
+
+def test_normalize_thickness_rejects_int32_max_as_thickness() -> None:
+    with pytest.raises(ValueError, match="32767"):
+        _normalize_thickness(2**31 - 1)
+
+
+@pytest.mark.parametrize("value", [32768, 2**31 - 1])
+def test_draw_contours_rejects_thickness_above_max(value: int) -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    contour = _contour(0, 0, 10, 10)
+
+    with pytest.raises(ValueError, match="32767"):
+        im.draw_contours(image, [contour], thickness=value)
+
+
+@pytest.mark.parametrize("value", [32768, 2**31 - 1])
+def test_draw_bounding_boxes_rejects_thickness_above_max(value: int) -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="32767"):
+        im.draw_bounding_boxes(image, [BoundingBox(2, 3, 4, 5)], thickness=value)
 
 
 # --- _require_valid_contours ---
@@ -127,7 +157,7 @@ def test_require_valid_contours_rejects_non_ndarray_element() -> None:
 
 def test_require_valid_contours_rejects_wrong_dtype() -> None:
     bad = _contour(0, 0, 10, 10).astype(np.float32)
-    with pytest.raises(ValueError, match="int32"):
+    with pytest.raises(TypeError, match="int32"):
         _require_valid_contours([bad])
 
 
@@ -263,6 +293,27 @@ def test_require_valid_boxes_rejects_field_outside_int32() -> None:
 def test_require_valid_boxes_rejects_edge_sum_outside_int32() -> None:
     with pytest.raises(ValueError, match="int32"):
         _require_valid_boxes([BoundingBox(2**31 - 1, 0, 2**31 - 1, 5)])
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+def test_require_valid_boxes_rejects_x_plus_width_overflow_with_numpy_int32_fields() -> None:
+    box = BoundingBox(np.int32(2**31 - 10), np.int32(0), np.int32(20), np.int32(5))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="int32"):
+        _require_valid_boxes([box])
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+def test_require_valid_boxes_rejects_y_plus_height_overflow_with_numpy_int32_fields() -> None:
+    box = BoundingBox(np.int32(0), np.int32(2**31 - 10), np.int32(5), np.int32(20))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="int32"):
+        _require_valid_boxes([box])
+
+
+def test_require_valid_boxes_returns_normalized_plain_int_fields() -> None:
+    box = BoundingBox(np.int32(2), np.int32(3), np.int32(4), np.int32(5))  # type: ignore[arg-type]
+    result = _require_valid_boxes([box])
+    assert result == [BoundingBox(2, 3, 4, 5)]
+    assert all(type(field) is int for field in result[0])
 
 
 # --- draw_bounding_boxes ---

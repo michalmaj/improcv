@@ -26,6 +26,7 @@ __all__ = [
 ]
 
 _MAX_MONTAGE_BYTES = 512 * 1024 * 1024  # 512 MiB
+_MAX_DRAWING_THICKNESS = 32767  # OpenCV's own internal MAX_THICKNESS limit
 
 
 def _normalize_bgr_color(color: object) -> tuple[int, int, int]:
@@ -51,19 +52,29 @@ def _normalize_bgr_color(color: object) -> tuple[int, int, int]:
 def _normalize_thickness(thickness: object) -> int:
     """Validate and normalize a `thickness` argument.
 
-    Requires an integral number (`bool` rejected), fitting signed
-    ``int32`` (OpenCV raises an unhelpful raw ``cv2.error`` for values far
-    outside a sane range rather than a clear message), and nonzero -- `0`
-    is rejected explicitly since OpenCV silently treats it as a thin
-    outline rather than "draw nothing" (verified directly). Positive
-    values draw an outline; negative values fill the shape's interior.
+    Requires an integral number (`bool` rejected), and nonzero -- `0` is
+    rejected explicitly since OpenCV silently treats it as a thin outline
+    rather than "draw nothing" (verified directly). Positive values draw
+    an outline and must not exceed `_MAX_DRAWING_THICKNESS` (``32767``),
+    OpenCV's own internal ``MAX_THICKNESS`` limit (verified:
+    `thickness=32768` reaches a raw ``cv2.error: thickness <=
+    MAX_THICKNESS``; `32767` is accepted). Negative values fill the
+    shape's interior instead and have no such cap, but must still fit
+    signed `int32`.
     """
     require_integral(thickness, "thickness")
     assert isinstance(thickness, numbers.Integral)  # narrows for the type checker
-    require_fits_dtype(thickness, np.int32, "thickness")
-    if thickness == 0:
+    thickness_int = int(thickness)
+    if thickness_int == 0:
         raise ValueError("thickness must not be 0, got 0")
-    return int(thickness)
+    if thickness_int > 0:
+        if thickness_int > _MAX_DRAWING_THICKNESS:
+            raise ValueError(
+                f"positive thickness must not exceed {_MAX_DRAWING_THICKNESS}, got {thickness_int}"
+            )
+    else:
+        require_fits_dtype(thickness_int, np.int32, "thickness")
+    return thickness_int
 
 
 def _require_valid_contours(contours: object) -> list[np.ndarray]:
@@ -83,7 +94,7 @@ def _require_valid_contours(contours: object) -> list[np.ndarray]:
         if not isinstance(contour, np.ndarray):
             raise TypeError(f"contours[{i}] must be an np.ndarray, got {type(contour).__name__}")
         if contour.dtype != np.int32:
-            raise ValueError(f"contours[{i}] must have dtype int32, got {contour.dtype}")
+            raise TypeError(f"contours[{i}] must have dtype int32, got {contour.dtype}")
         if contour.ndim != 3 or contour.shape[1:] != (1, 2) or contour.shape[0] == 0:
             raise ValueError(
                 f"contours[{i}] must have shape (N, 1, 2) with N > 0, got shape {contour.shape}"
@@ -159,13 +170,21 @@ def _require_valid_boxes(boxes: object) -> list[BoundingBox]:
     element's fields must be integral (no `bool`), `width`/`height`
     positive, and `x`, `y`, `width`, `height`, `x + width`, `y + height`
     must all fit signed `int32`. An empty sequence is valid (no-op).
+
+    Fields are converted to plain Python `int` *before* computing `x +
+    width`/`y + height` -- verified that adding two `np.int32` scalars
+    close to `int32`'s max silently wraps around (with only a
+    `RuntimeWarning`, easy to miss) rather than raising, which would let
+    an out-of-range box slip past the very check meant to catch it. Python
+    `int` addition never overflows, so the sum is always computed
+    correctly before being checked.
     """
     if isinstance(boxes, BoundingBox) or not isinstance(boxes, Sequence):
         raise TypeError(
             f"boxes must be a sequence of BoundingBox values, not a single {type(boxes).__name__}"
         )
-    result = list(boxes)
-    for i, box in enumerate(result):
+    result: list[BoundingBox] = []
+    for i, box in enumerate(boxes):
         if not isinstance(box, BoundingBox):
             raise TypeError(f"boxes[{i}] must be a BoundingBox, got {type(box).__name__}")
         x, y, width, height = box
@@ -181,8 +200,10 @@ def _require_valid_boxes(boxes: object) -> list[BoundingBox]:
             raise ValueError(f"boxes[{i}].width must be positive, got {width}")
         if height <= 0:
             raise ValueError(f"boxes[{i}].height must be positive, got {height}")
-        require_fits_dtype(x + width, np.int32, f"boxes[{i}].x + boxes[{i}].width")
-        require_fits_dtype(y + height, np.int32, f"boxes[{i}].y + boxes[{i}].height")
+        x_int, y_int, width_int, height_int = int(x), int(y), int(width), int(height)
+        require_fits_dtype(x_int + width_int, np.int32, f"boxes[{i}].x + boxes[{i}].width")
+        require_fits_dtype(y_int + height_int, np.int32, f"boxes[{i}].y + boxes[{i}].height")
+        result.append(BoundingBox(x_int, y_int, width_int, height_int))
     return result
 
 
