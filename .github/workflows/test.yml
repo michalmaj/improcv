@@ -238,3 +238,48 @@ jobs:
           ax2 = viz.plot_histogram(image)
           print('smoke test OK: show_image and plot_histogram both ran under Agg')
           "
+
+  ci-gate:
+    # Single, stable check-run name for branch protection to require on
+    # main, instead of every individual matrix job (which change as the
+    # matrix/platform list evolves). `if: always()` is required: without
+    # it, GitHub skips this job entirely when any dependency fails or is
+    # cancelled, which would make a required-status-check on this job
+    # silently pass on a red build instead of failing. No checkout/deps --
+    # this job only inspects its dependencies' own recorded results.
+    name: CI gate
+    if: ${{ always() }}
+    needs:
+      - test
+      - lowest-deps
+      - build
+      - test-windows
+      - test-macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all release-critical jobs succeeded
+        shell: bash
+        run: |
+          failures=()
+
+          for entry in \
+            "test=${{ needs.test.result }}" \
+            "lowest-deps=${{ needs.lowest-deps.result }}" \
+            "build=${{ needs.build.result }}" \
+            "test-windows=${{ needs.test-windows.result }}" \
+            "test-macos=${{ needs.test-macos.result }}"
+          do
+            name="${entry%%=*}"
+            result="${entry#*=}"
+
+            if [[ "$result" != "success" ]]; then
+              failures+=("$name=$result")
+            fi
+          done
+
+          if (( ${#failures[@]} > 0 )); then
+            printf '::error::CI gate failed: %s\n' "${failures[*]}"
+            exit 1
+          fi
+
+          echo "CI gate: all dependencies succeeded"
