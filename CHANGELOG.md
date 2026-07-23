@@ -25,6 +25,9 @@ Hough/QR/drawing/visualization/detectors/barcode).
 ### Added
 - Initial project skeleton: `pyproject.toml` (Hatchling, `uv`), Ruff/Pyright/pytest configuration,
   MIT license, README, GitHub Actions CI.
+- `improcv.__version__`, read from installed package metadata
+  (`importlib.metadata.version("improcv")`), falling back to `"0.0.0.dev0"` only when run from an
+  uninstalled source checkout.
 - `resize`.
 - Core geometric transforms: `translate`, `rotate`, `rotate_bound`, `flip`, `crop`,
   `center_crop`, `pad`, `warp_affine`, `warp_perspective`.

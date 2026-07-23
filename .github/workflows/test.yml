@@ -83,9 +83,14 @@ jobs:
           python-version: "3.11"
 
       - name: Create a venv and install the declared minimum versions
+        # Exact floors, not `.*` wildcards: `numpy==1.24.*`/`matplotlib==3.8.*`
+        # resolve to the newest patch on that branch, not the actual declared
+        # minimum -- verified this job was never really testing 1.24.0/3.8.0.
+        # pytest is pinned to the version currently locked in uv.lock so this
+        # release-critical job doesn't depend on an arbitrary future pytest.
         run: |
           uv venv --python 3.11
-          uv pip install "numpy==1.24.*" "opencv-python-headless==4.9.*" "matplotlib==3.8.*" pytest
+          uv pip install "numpy==1.24.0" "opencv-python-headless==4.9.0.80" "matplotlib==3.8.0" "pytest==9.1.1"
           uv pip install -e . --no-deps
 
       - name: Test against the lowest declared dependency versions
@@ -109,9 +114,13 @@ jobs:
         run: uvx "twine==6.2.0" check dist/*
 
       - name: Install the built wheel into a clean environment (no viz extra)
+        # uv venv/uv pip --python pin the interpreter explicitly: setup-uv's
+        # own python-version input sets UV_PYTHON for uv's *own* commands,
+        # but does not guarantee a plain `python`/`python3` on PATH resolves
+        # to that same interpreter.
         run: |
-          python -m venv /tmp/smoke-env
-          /tmp/smoke-env/bin/pip install dist/*.whl "opencv-python-headless>=4.9,<6"
+          uv venv --python 3.11 /tmp/smoke-env
+          uv pip install --python /tmp/smoke-env/bin/python dist/*.whl "opencv-python-headless>=4.9,<6"
 
       - name: Smoke-test the installed wheel (not the source tree)
         run: |
@@ -143,8 +152,8 @@ jobs:
 
       - name: Install the built wheel with the viz extra into a separate clean environment
         run: |
-          python -m venv /tmp/smoke-env-viz
-          /tmp/smoke-env-viz/bin/pip install "$(echo dist/*.whl)[viz]" "opencv-python-headless>=4.9,<6"
+          uv venv --python 3.11 /tmp/smoke-env-viz
+          uv pip install --python /tmp/smoke-env-viz/bin/python "$(echo dist/*.whl)[viz]" "opencv-python-headless>=4.9,<6"
 
       - name: Smoke-test improcv.visualization with the viz extra installed
         env:
