@@ -11,13 +11,13 @@ between phases — Phase 1 even had a dedicated "release hardening before first 
 (2026-07-19) that was never followed by an actual tag, and development continued straight into
 Phase 2 and Phase 3 instead. By the time the project did a release-readiness audit (2026-07-23),
 Phases 0–3 were all complete but nothing had ever been published. Rather than retroactively
-splitting that work into three separate releases after the fact, **`0.1.0a1` is the first published
-release and covers the accumulated scope of Phases 0–3 together** — a deliberate decision (confirmed
-2026-07-23), not an oversight. The phase-per-minor-version labels below (`0.1.x`/`0.2.x`/`0.3.x`) are
-kept as a record of the *original* plan, not a claim about what actually shipped under those version
-numbers — see [CHANGELOG.md](CHANGELOG.md)'s `[0.1.0a1]` entry for what the first release actually
-contains. Future phases (4 onward) will have their release version decided at the time each is
-actually published, rather than mechanically pre-assigned now.
+splitting that work into three separate releases after the fact, **`0.1.0a1` is designated as the
+first public release and covers the accumulated scope of Phases 0–3 together** — a deliberate
+decision (confirmed 2026-07-23), not an oversight. The phase-per-minor-version labels below
+(`0.1.x`/`0.2.x`/`0.3.x`) are kept as a record of the *original* plan, not a claim about what
+actually shipped under those version numbers — see [CHANGELOG.md](CHANGELOG.md)'s `[0.1.0a1]` entry
+for the exact contents of that first release. Future phases (4 onward) will have their release
+version decided at the time each is actually published, rather than mechanically pre-assigned now.
 
 - [x] **Phase 0** — Project skeleton, CI, `resize`.
 - [x] **Phase 1** (originally planned as `0.1.x`, see note above) — Core geometric transforms
