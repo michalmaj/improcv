@@ -22,6 +22,13 @@ First published release: Phases 0-3 (skeleton, core transforms/color/filters/mor
 ops, contours/region analysis/image analysis/segmentation/restoration, feature detection/matching/
 Hough/QR/drawing/visualization/detectors/barcode).
 
+**On the version number**: the project's original plan (see `ROADMAP.md`) mapped `0.1.x`/`0.2.x`/
+`0.3.x` to Phases 1/2/3 as separate releases. No release was ever cut between phases -- Phase 1 even
+had its own dedicated pre-alpha hardening pass that was never tagged -- so this first published
+release covers the accumulated scope of Phases 0-3 together under `0.1.0a1`, a deliberate decision
+made once a release-readiness audit found nothing had ever actually shipped. See `ROADMAP.md` for
+the full explanation.
+
 ### Added
 - Initial project skeleton: `pyproject.toml` (Hatchling, `uv`), Ruff/Pyright/pytest configuration,
   MIT license, README, GitHub Actions CI.
