@@ -20,6 +20,18 @@ permissions: {}
 # Two tags pushed close together must not publish concurrently, and an
 # in-progress release must never be cancelled by a later trigger (which could
 # leave TestPyPI and PyPI in different states, or abort mid-publish).
+#
+# Known GitHub Actions limitation (verified against actionlint's schema,
+# which only recognizes `group`/`cancel-in-progress` here -- there is no
+# `queue`/queue-depth setting): a concurrency group holds at most one
+# *running* and one *queued* run. If a third tag is pushed while a second is
+# still queued behind a running first, the second is cancelled and replaced
+# by the third -- it never runs. This setup already guarantees the required
+# "never two releases publish at once", but it cannot guarantee "every
+# pushed release tag eventually runs" beyond one deep. Process rule instead
+# of a workflow setting: before pushing a new release tag, confirm via
+# `gh run list --workflow=release.yml` (or the Actions tab) that no release
+# run is currently in progress or queued.
 concurrency:
   group: release
   cancel-in-progress: false

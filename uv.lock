@@ -6,6 +6,9 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+build-constraints = [{ name = "hatchling", specifier = "==1.31.0" }]
+
 [[package]]
 name = "colorama"
 version = "0.4.6"

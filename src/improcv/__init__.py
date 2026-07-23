@@ -1,5 +1,16 @@
 """improcv: modern image-processing and computer-vision utilities for NumPy and OpenCV."""
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
+
+try:
+    __version__ = _version("improcv")
+except PackageNotFoundError:
+    # Only happens when running from a source checkout that was never
+    # installed (editable or otherwise) -- package metadata doesn't exist
+    # yet to read a version from.
+    __version__ = "0.0.0.dev0"
+
 try:
     import cv2 as _cv2  # noqa: F401
 except ModuleNotFoundError as _exc:
@@ -173,6 +184,7 @@ __all__ = [
     "SortOrder",
     "TemplateMatchMethod",
     "TransformMatrix",
+    "__version__",
     "adjust_brightness",
     "adjust_contrast",
     "alpha_blend",
