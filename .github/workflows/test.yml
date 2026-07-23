@@ -6,6 +6,12 @@ on:
     tags: ["v*"]
   pull_request:
     branches: ["main"]
+  # Lets release.yml invoke this workflow's own `test`/`lowest-deps` matrix as
+  # part of the release pipeline, so a release can't be published without the
+  # full test matrix passing inside that same run -- rather than only relying
+  # on this workflow's own independent, parallel run against the same tag
+  # push, whose failure would not block publishing.
+  workflow_call:
 
 jobs:
   test:

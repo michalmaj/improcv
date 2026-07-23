@@ -3,13 +3,24 @@
 All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Version strings (e.g. `0.1.0a1`) follow [PEP 440](https://peps.python.org/pep-0440/), Python's
+packaging version standard — not SemVer's pre-release hyphen syntax (`0.1.0-alpha.1`) — though the
+project's *compatibility policy* is still SemVer-style: pre-`1.0.0`, any `0.MINOR` bump may include
+breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
-Nothing has been published yet (no PyPI/TestPyPI release, no git tag) — everything so far stays
-under `Unreleased` rather than a dated version section, even though `pyproject.toml` already
-carries a working `0.1.0a1` version number for local development.
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.1.0a1] - 2026-07-23
+
+First published release: Phases 0-3 (skeleton, core transforms/color/filters/morphology/edges/pixel
+ops, contours/region analysis/image analysis/segmentation/restoration, feature detection/matching/
+Hough/QR/drawing/visualization/detectors/barcode).
 
 ### Added
 - Initial project skeleton: `pyproject.toml` (Hatchling, `uv`), Ruff/Pyright/pytest configuration,
