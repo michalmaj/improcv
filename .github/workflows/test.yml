@@ -69,6 +69,68 @@ jobs:
       - name: Test
         run: uv run --no-sync pytest
 
+  # Representative, non-Linux platform coverage (brief §8 requires "at least
+  # representative Windows and macOS configurations") -- deliberately just
+  # one job per platform, not the full Python x OpenCV matrix duplicated
+  # twice more: the goal is catching platform-specific problems (path
+  # handling, OpenCV wheel behavior, thread-library differences), not
+  # tripling CI runtime. Each of the two platforms takes one end of the
+  # supported Python range and the opposite OpenCV major line from the
+  # other, so between them all four "extremes" (oldest/newest Python,
+  # both OpenCV lines) get at least one non-Linux run. Verified directly
+  # (PyPI file listing for the latest opencv-python-headless release on
+  # both the 4.x and 5.x lines) that both ship `cp37-abi3` wheels for
+  # `win_amd64` and both `macosx_*_arm64`/`macosx_*_x86_64` -- so wheel
+  # availability isn't a constraint on either platform or Python choice.
+  # No lint/type-check here: both are platform-independent by nature and
+  # already covered above -- only `pytest` runs, which is the check that
+  # can actually differ by platform.
+  test-windows:
+    name: Representative test (windows-latest, Python 3.11, OpenCV 4.x)
+    runs-on: windows-latest
+    env:
+      MPLBACKEND: "Agg"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Install pinned OpenCV major version (4.x)
+        run: uv pip install "opencv-python-headless>=4.9,<5"
+
+      - name: Test
+        run: uv run --no-sync pytest
+
+  test-macos:
+    name: Representative test (macos-latest, Python 3.14, OpenCV 5.x)
+    runs-on: macos-latest
+    env:
+      MPLBACKEND: "Agg"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Install pinned OpenCV major version (5.x)
+        run: uv pip install "opencv-python-headless>=5,<6"
+
+      - name: Test
+        run: uv run --no-sync pytest
+
   lowest-deps:
     # Everything above always resolves via uv.lock, which picks the
     # newest version satisfying each constraint — so numpy>=1.24,
