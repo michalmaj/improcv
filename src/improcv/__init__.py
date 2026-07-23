@@ -118,7 +118,7 @@ from improcv.pixels import (
     invert,
 )
 from improcv.qrcode import QRCode, decode_qr_code, decode_qr_codes
-from improcv.quality import mse, psnr, ssim
+from improcv.quality import gmsd, mse, psnr, ssim
 from improcv.regions import (
     Centroids,
     ComponentStats,
@@ -223,6 +223,7 @@ __all__ = [
     "flood_fill",
     "gamma_correction",
     "gaussian_blur",
+    "gmsd",
     "grabcut_rect",
     "harris_corner",
     "histogram",

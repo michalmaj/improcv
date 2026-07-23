@@ -230,6 +230,11 @@ similarity = im.ssim(original, compressed)      # 1.0 for identical images, not 
 
 # float images need an explicit data_range; uint8 and uint16 infer it automatically:
 similarity = im.ssim(original_f32, compressed_f32, data_range=1.0)
+
+# gmsd is grayscale-only (2D, or 3D with exactly 1 channel) -- convert first
+# with im.ensure_gray. Unlike ssim/psnr, lower is better: 0.0 for identical
+# images, larger for more distortion.
+distortion = im.gmsd(im.ensure_gray(original), im.ensure_gray(compressed))
 ```
 
 ## Status
