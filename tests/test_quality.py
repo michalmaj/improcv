@@ -65,6 +65,64 @@ def test_mse_raises_value_error_on_extreme_float_overflow() -> None:
         im.mse(a, b)
 
 
+# --- mse/psnr underflow: a squared tiny-but-nonzero difference must not be
+# silently reported as "identical" (0.0/inf) just because it underflows ---
+
+
+@pytest.mark.parametrize("exponent", [160, 161])
+def test_mse_represents_small_but_representable_differences(exponent: int) -> None:
+    a = np.zeros((1, 1), dtype=np.float64)
+    b = np.full((1, 1), 10.0**-exponent, dtype=np.float64)
+
+    result = im.mse(a, b)
+
+    assert result > 0.0
+    assert result == pytest.approx((10.0**-exponent) ** 2, rel=1e-9)
+
+
+@pytest.mark.parametrize("exponent", [162, 163, 200])
+def test_mse_raises_value_error_on_true_underflow(exponent: int) -> None:
+    a = np.zeros((1, 1), dtype=np.float64)
+    b = np.full((1, 1), 10.0**-exponent, dtype=np.float64)
+
+    assert not np.array_equal(a, b)
+    with pytest.raises(ValueError, match="underflow"):
+        im.mse(a, b)
+
+
+@pytest.mark.parametrize("exponent", [160, 161, 162, 163, 200])
+def test_psnr_stays_finite_even_when_mse_would_underflow(exponent: int) -> None:
+    a = np.zeros((1, 1), dtype=np.float64)
+    b = np.full((1, 1), 10.0**-exponent, dtype=np.float64)
+
+    result = im.psnr(a, b, data_range=1.0)
+
+    assert math.isfinite(result)
+    assert result == pytest.approx(20.0 * exponent, abs=1e-6)
+
+
+def test_psnr_of_the_1e_minus_162_example_is_about_3240_db() -> None:
+    a = np.zeros((1, 1), dtype=np.float64)
+    b = np.full((1, 1), 1e-162, dtype=np.float64)
+
+    result = im.psnr(a, b, data_range=1.0)
+
+    assert result == pytest.approx(3240.0, abs=1.0)
+
+
+def test_mse_true_underflow_does_not_report_images_as_identical() -> None:
+    # The bug this guards against: reporting mse == 0.0 (and therefore
+    # psnr == inf) for two images that are provably not equal, just
+    # because the squared difference rounds to zero.
+    a = np.zeros((1, 1), dtype=np.float64)
+    b = np.full((1, 1), 1e-162, dtype=np.float64)
+
+    assert not np.array_equal(a, b)
+    with pytest.raises(ValueError):
+        im.mse(a, b)
+    assert im.psnr(a, b, data_range=1.0) != math.inf
+
+
 # --- psnr ---
 
 
@@ -303,6 +361,79 @@ def test_ssim_raises_value_error_on_extreme_float_overflow() -> None:
         im.ssim(a, b, data_range=1.0)
 
 
+# --- ssim: extreme data_range must never raise a raw OverflowError ---
+
+
+def test_ssim_identical_zeros_with_data_range_1e100() -> None:
+    x = np.zeros((11, 11), dtype=np.float64)
+
+    assert im.ssim(x, x, data_range=1e100) == pytest.approx(1.0)
+
+
+def test_ssim_identical_zeros_with_data_range_1e156() -> None:
+    # This exact call previously raised a raw OverflowError: (K2*1e156)**2
+    # overflows float64 on its own, before any image data is involved.
+    x = np.zeros((11, 11), dtype=np.float64)
+
+    assert im.ssim(x, x, data_range=1e156) == pytest.approx(1.0)
+
+
+def test_ssim_identical_zeros_with_data_range_float64_max() -> None:
+    x = np.zeros((11, 11), dtype=np.float64)
+
+    assert im.ssim(x, x, data_range=np.finfo(np.float64).max) == pytest.approx(1.0)
+
+
+def test_ssim_with_very_small_positive_data_range_and_real_content_does_not_crash() -> None:
+    rng = np.random.default_rng(21)
+    a = rng.random((16, 16))
+    b = rng.random((16, 16))
+
+    result = im.ssim(a, b, data_range=1e-300)
+
+    assert math.isfinite(result)
+
+
+def test_ssim_tiny_data_range_with_constant_images_raises_controlled_error() -> None:
+    # A data_range this mismatched with constant (zero-variance) image
+    # content makes C1/C2 themselves underflow to 0.0, producing an actual
+    # 0/0 -- must surface as the same controlled ValueError as any other
+    # non-finite result, not propagate a NaN or crash.
+    x = np.zeros((11, 11), dtype=np.float64)
+
+    with pytest.raises(ValueError):
+        im.ssim(x, x, data_range=1e-300)
+
+
+def test_ssim_non_identical_images_with_huge_data_range_does_not_raise() -> None:
+    rng = np.random.default_rng(22)
+    a = rng.integers(0, 256, (16, 16)).astype(np.float64)
+    b = rng.integers(0, 256, (16, 16)).astype(np.float64)
+
+    result = im.ssim(a, b, data_range=1e200)
+
+    # Not compared to the data_range=255 result: a data_range this wildly
+    # mismatched with the images' actual scale makes C1/C2 dominate the
+    # formula entirely, correctly (per the formula's own definition, not a
+    # bug) driving the result toward 1.0 regardless of real content -- the
+    # only property being verified here is that it stays finite.
+    assert math.isfinite(result)
+
+
+@pytest.mark.parametrize("bad_range", [1e100, 1e156, 1e-300, 1e200])
+def test_ssim_extreme_data_range_never_raises_overflow_error(bad_range: float) -> None:
+    rng = np.random.default_rng(23)
+    a = rng.integers(0, 256, (16, 16)).astype(np.float64)
+    b = rng.integers(0, 256, (16, 16)).astype(np.float64)
+
+    try:
+        im.ssim(a, b, data_range=bad_range)
+    except OverflowError:
+        pytest.fail(f"a raw OverflowError propagated for data_range={bad_range!r}")
+    except ValueError:
+        pass  # a controlled ValueError is an acceptable outcome
+
+
 # --- ssim cross-reference regression values (scikit-image 0.26.0) ---
 # Generated with:
 #   structural_similarity(a, b, data_range=..., channel_axis=...,
@@ -456,6 +587,42 @@ def test_accepts_1_3_4_channels(func_name: str, channels: int) -> None:
     result = func(a, b)
 
     assert math.isfinite(result) or result == math.inf
+
+
+@pytest.mark.parametrize("func_name", ["mse", "psnr", "ssim"])
+def test_accepts_explicit_h_w_1_shape(func_name: str) -> None:
+    func = getattr(im, func_name)
+    rng = np.random.default_rng(13)
+    a = rng.integers(0, 256, (20, 20, 1), dtype=np.uint8)
+    b = rng.integers(0, 256, (20, 20, 1), dtype=np.uint8)
+
+    result = func(a, b)
+
+    assert math.isfinite(result) or result == math.inf
+
+
+@pytest.mark.parametrize("func_name", ["mse", "psnr", "ssim"])
+def test_accepts_2_channels(func_name: str) -> None:
+    func = getattr(im, func_name)
+    rng = np.random.default_rng(14)
+    a = rng.integers(0, 256, (20, 20, 2), dtype=np.uint8)
+    b = rng.integers(0, 256, (20, 20, 2), dtype=np.uint8)
+
+    result = func(a, b)
+
+    assert math.isfinite(result) or result == math.inf
+
+
+@pytest.mark.parametrize("func_name", ["mse", "psnr", "ssim"])
+def test_h_w_1_gives_the_same_result_as_h_w(func_name: str) -> None:
+    func = getattr(im, func_name)
+    rng = np.random.default_rng(15)
+    a_2d = rng.integers(0, 256, (20, 20), dtype=np.uint8)
+    b_2d = rng.integers(0, 256, (20, 20), dtype=np.uint8)
+    a_3d = a_2d.reshape(20, 20, 1)
+    b_3d = b_2d.reshape(20, 20, 1)
+
+    assert func(a_2d, b_2d) == func(a_3d, b_3d)
 
 
 @pytest.mark.parametrize("func_name", ["mse", "psnr", "ssim"])

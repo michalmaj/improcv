@@ -30,6 +30,12 @@ _SSIM_SIGMA = 1.5
 _SSIM_K1 = 0.01
 _SSIM_K2 = 0.03
 _SSIM_BORDER_CROP = (_SSIM_WINDOW_SIZE - 1) // 2
+# Conservative bound, well below where computing (K2*data_range)**2 (the
+# riskier of the two constants, K2 > K1) or squaring an image value near
+# this magnitude could overflow float64 (~1.8e308): (1e75)**2 == 1e150,
+# still tiny relative to the max, leaving ample headroom for the sums and
+# products the SSIM formula itself performs on top of that square.
+_SSIM_SAFE_MAGNITUDE = 1e75
 
 
 def _require_finite_image(image: np.ndarray, name: str) -> None:
@@ -77,17 +83,48 @@ def _normalize_data_range(data_range: object, dtype: np.dtype) -> float:
     return float(data_range)  # type: ignore[arg-type]
 
 
-def _mse_value(image1: np.ndarray, image2: np.ndarray) -> float:
+def _scaled_squared_error_stats(image1: np.ndarray, image2: np.ndarray) -> tuple[float, float]:
+    """Return `(scale, mean_sq_normalized)` such that `mse == scale**2 * mean_sq_normalized`
+    exactly (mathematically), computed by normalizing the difference by its own largest
+    absolute value first.
+
+    Squaring the raw difference directly underflows to exactly `0.0` for two images that
+    are extremely close but not identical (e.g. a constant offset of `1e-162` in `float64`
+    -- `(1e-162)**2` is below the smallest representable subnormal `float64` and rounds to
+    `0.0`), which would silently misreport genuinely different images as identical.
+    Dividing by `scale` first keeps every squared term of order 1 or less, so only the
+    final `scale**2` multiplication -- the mathematically unavoidable point of underflow,
+    if any -- can produce `0.0`. `scale == 0.0` iff the two images are exactly identical
+    (every element of the difference is exactly zero).
+    """
     a = image1.astype(np.float64)
     b = image2.astype(np.float64)
-    # Extreme (but individually finite) float64 inputs can overflow this
-    # arithmetic to inf/nan -- caught explicitly below via math.isfinite,
+    # Extreme (but individually finite) float64 inputs can overflow/underflow this
+    # arithmetic -- caught explicitly by callers via math.isfinite/exact-zero checks,
     # so numpy's own RuntimeWarning for the same condition is redundant.
-    with np.errstate(over="ignore", invalid="ignore"):
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         diff = a - b
-        result = float(np.mean(diff * diff))
+        scale = float(np.max(np.abs(diff)))
+        if scale == 0.0:
+            return 0.0, 0.0
+        normalized = diff / scale
+        mean_sq_normalized = float(np.mean(normalized * normalized))
+    return scale, mean_sq_normalized
+
+
+def _mse_value(image1: np.ndarray, image2: np.ndarray) -> float:
+    scale, mean_sq_normalized = _scaled_squared_error_stats(image1, image2)
+    if scale == 0.0:
+        return 0.0
+    with np.errstate(over="ignore", under="ignore"):
+        result = (scale * scale) * mean_sq_normalized
     if not math.isfinite(result):
         raise ValueError("mse computation overflowed to a non-finite value")
+    if result == 0.0:
+        raise ValueError(
+            "mse underflowed to zero: the true mean squared error between these "
+            "non-identical images is too small to represent as a positive float64 value"
+        )
     return result
 
 
@@ -106,15 +143,22 @@ def mse(image1: Image, image2: Image) -> float:
     -------
     float
         The mean squared error over every element (including channels),
-        always finite and non-negative.
+        always finite and non-negative. Exactly `0.0` only when the two
+        images are pixel-for-pixel identical.
 
     Raises
     ------
     ValueError
         If either image is empty, does not have 2 or 3 dimensions, the two
         images don't have the same shape, either has an unsupported channel
-        count, a float image contains `NaN`/infinity, or the computed
-        result itself overflows to a non-finite value.
+        count, a float image contains `NaN`/infinity, the computed result
+        overflows to a non-finite value, or the two images are not
+        identical but their true mean squared error is too small to
+        represent as a positive `float64` value (e.g. two otherwise-equal
+        `float64` images differing by `1e-162` at a single pixel) -- rather
+        than silently reporting `0.0` and implying the images are
+        identical. Use `psnr` instead if only the error's magnitude in
+        decibels is needed: it remains well-defined in this situation.
     TypeError
         If the two images don't have the same dtype, or the dtype isn't one
         of `uint8`/`uint16`/`float32`/`float64`.
@@ -130,7 +174,14 @@ def psnr(
 ) -> float:
     """Compute the Peak Signal-to-Noise Ratio between two images, in decibels.
 
-    Computed independently from `mse`, using the stable, direct form
+    Computed independently from `mse` -- not by calling it and taking
+    `log10` of the result -- since `mse` itself can legitimately raise for
+    a true positive error too small to represent as a `float64` (see
+    `mse`'s docstring), while `psnr` only ever needs that error's base-10
+    logarithm, which stays finite and well-defined via the same
+    scale-normalized decomposition (`log10(mse) = 2*log10(scale) +
+    log10(mean_sq_normalized)`) even when the raw `mse` scalar itself
+    would underflow to `0.0`. Uses the stable, direct form
     ``20*log10(data_range) - 10*log10(mse)`` rather than
     ``10*log10(data_range**2/mse)`` (avoids squaring `data_range` before
     the log, which matters for large `data_range` values). This project's
@@ -168,7 +219,7 @@ def psnr(
         images don't have the same shape, either has an unsupported channel
         count, a float image contains `NaN`/infinity, `data_range` is
         `None` for a float image, `data_range` is not positive/finite, or
-        the underlying MSE computation overflows to a non-finite value.
+        the underlying error computation overflows to a non-finite value.
     TypeError
         If the two images don't have the same dtype, the dtype isn't one of
         `uint8`/`uint16`/`float32`/`float64`, or `data_range` is not a real
@@ -176,10 +227,13 @@ def psnr(
     """
     _require_comparable_images(image1, image2)
     resolved_range = _normalize_data_range(data_range, image1.dtype)
-    error = _mse_value(image1, image2)
-    if error == 0.0:
+    scale, mean_sq_normalized = _scaled_squared_error_stats(image1, image2)
+    if scale == 0.0:
         return math.inf
-    return 20.0 * math.log10(resolved_range) - 10.0 * math.log10(error)
+    log10_mse = 2.0 * math.log10(scale) + math.log10(mean_sq_normalized)
+    if not math.isfinite(log10_mse):
+        raise ValueError("psnr computation overflowed to a non-finite value")
+    return 20.0 * math.log10(resolved_range) - 10.0 * log10_mse
 
 
 def _gaussian_filter(x: np.ndarray) -> np.ndarray:
@@ -289,11 +343,28 @@ def ssim(
             f"for ssim, got {height}x{width}"
         )
     resolved_range = _normalize_data_range(data_range, image1.dtype)
-    c1 = (_SSIM_K1 * resolved_range) ** 2
-    c2 = (_SSIM_K2 * resolved_range) ** 2
 
     a = image1.astype(np.float64)
     b = image2.astype(np.float64)
+
+    # A common positive rescaling factor applied to both images and
+    # data_range leaves SSIM mathematically unchanged (every term in the
+    # formula scales by the same power of the factor and cancels in the
+    # final ratio), so it's safe to divide by whatever keeps every
+    # subsequent value comfortably representable. Skipped entirely
+    # (factor stays 1.0, computation bit-identical to before) unless
+    # something is actually large enough to risk it -- ordinary uint8/
+    # uint16/small-float inputs never reach this branch, verified against
+    # scikit-image's exact reference values after adding this guard.
+    max_abs = max(resolved_range, float(np.max(np.abs(a))), float(np.max(np.abs(b))))
+    if max_abs > _SSIM_SAFE_MAGNITUDE:
+        a = a / max_abs
+        b = b / max_abs
+        resolved_range = resolved_range / max_abs
+
+    c1 = (_SSIM_K1 * resolved_range) ** 2
+    c2 = (_SSIM_K2 * resolved_range) ** 2
+
     channels = 1 if a.ndim == 2 else a.shape[2]
 
     crop = _SSIM_BORDER_CROP
@@ -301,7 +372,7 @@ def ssim(
     # Extreme (but individually finite) float64 inputs can overflow this
     # arithmetic to inf/nan -- caught explicitly below via math.isfinite,
     # so numpy's own RuntimeWarning for the same condition is redundant.
-    with np.errstate(over="ignore", invalid="ignore"):
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         for c in range(channels):
             a_c = a if channels == 1 else a[:, :, c]
             b_c = b if channels == 1 else b[:, :, c]

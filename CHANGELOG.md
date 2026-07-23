@@ -41,6 +41,22 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ### Changed
 
 ### Fixed
+- `mse`/`psnr`: two distinct, non-identical images could previously be misreported as identical
+  (`mse == 0.0`, `psnr == math.inf`) when their squared difference underflowed `float64` (e.g. a
+  single-pixel `float64` offset of `1e-162` -- `(1e-162)**2` rounds to exactly `0.0`, below the
+  smallest representable subnormal). `mse` now normalizes by the largest absolute difference before
+  squaring, so only a genuine, mathematically unavoidable underflow of the true (non-zero) result
+  raises a clear `ValueError` instead of silently returning `0.0`; `psnr` computes the error's
+  base-10 logarithm directly from that same normalization, so it stays correctly finite (e.g. `~3240`
+  dB for the `1e-162` example) even in exactly the case where `mse` itself must raise.
+- `ssim`: a `data_range` large enough that `(K2*data_range)**2` alone exceeds `float64`'s range (e.g.
+  `1e156`) previously raised a raw `OverflowError`; smaller but still very large values (e.g. `1e100`)
+  produced `NaN` from an internal `inf/inf` division, surfacing as a generic non-finite-result error
+  with no indication of the cause. Both images and `data_range` are now rescaled together by a common
+  factor before computing the windowed statistics whenever either is large enough to risk it (an
+  exact invariance of the SSIM formula, verified re-checked against `scikit-image` for the existing,
+  non-extreme reference vectors -- no precision change for ordinary inputs, which never reach this
+  code path).
 
 ## [0.1.0a1] - 2026-07-23
 
