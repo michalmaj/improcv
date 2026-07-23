@@ -184,6 +184,16 @@ carries a working `0.1.0a1` version number for local development.
   `detectAndDecodeWithType` does not have since it lacks a `straight_code`-shaped field. Each decoded
   quadrangle is also rejected as degenerate (zero-area, e.g. four identical or collinear corners) via
   the same `float64` shoelace-formula guard used in `improcv.qrcode`.
+- **This completes Phase 3's functional scope.** Two items originally listed under Phase 3 remain
+  explicitly out of scope for now, by deliberate decision rather than oversight: AKAZE/BRISK/KAZE
+  detect+describe (confirmed absent from the non-contrib OpenCV build; would need an
+  `opencv-contrib-python` dependency, and this project's OpenCV-distribution policy is still an open
+  decision per the project brief) and `confusion_matrix`/PR-ROC-curve/
+  class-bar-chart plots (a classification-evaluation concern conceptually closer to Phase 5's ML
+  tooling than to this phase's image-display visualization, per the `improcv.visualization` chunk's
+  own scoping decision). `draw_keypoints`/`draw_matches` were also considered and rejected outright
+  (already-safe raw `cv2` calls; wrapping them would be value-less aliases) rather than deferred.
+  Remaining pre-1.0.0 work moves to Phase 4 or a release-hardening pass.
 
 ### Changed
 - `BoundingBox` moved from `improcv.contours` to `improcv.types` (still importable from both
