@@ -37,6 +37,32 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   actual range isn't implied by its dtype; input values are never clipped or rescaled to it. None of
   the three functions mutate their inputs. This is the first of two Phase 4 quality-metrics slices --
   GMSD is a separate, later slice.
+- `improcv.quality.gmsd`, the second Phase 4 quality-metrics slice: Gradient Magnitude Similarity
+  Deviation (Xue, Zhang, Mou, Bovik, IEEE TIP 2014). Matches the reference MATLAB implementation the
+  authors shared (`GMSD.m`) rather than the paper's own rounded prose -- notably, the paper's text
+  states `c=0.0026` for images normalized to `[0, 1]`, but the authors' own code uses `T=170` directly
+  on `0-255` data; `170 / 255**2 == 0.0026144...`, measurably different from `0.0026` (cross-checked
+  to produce score deltas of `~1e-5` to `~1e-4`), and `T=170` is what this implementation uses, since
+  that is what the reference code -- and therefore every benchmark actually run against it --
+  computes. Pooling uses sample standard deviation (`ddof=1`, matching MATLAB's `std2`/`std` default),
+  not the paper's own written population-based equation. Unlike `ssim`/`psnr`, `gmsd` is grayscale-only
+  (2D, or 3D with exactly 1 channel) -- multi-channel input is rejected with a message pointing to
+  `improcv.ensure_gray`, since GMSD has no reference definition for color and this project never hides
+  an automatic color conversion. Lower scores mean higher quality; `0.0` exactly for identical images.
+  Images that downsample to fewer than 2 gradient-magnitude-similarity-map samples (`1x1`, `1x2`,
+  `2x1`, `2x2`) raise `ValueError` instead of matching the reference's own behavior of returning `0.0`
+  for such degenerate inputs regardless of whether the two images are identical or completely
+  different -- a deliberate, safer departure from `GMSD.m`, documented as such. Two different
+  *constant* images can give a non-zero score: the reference's zero-padded border convolution makes
+  the gradient at the image edge artificially non-zero, which is expected reference behavior, not a
+  bug in this port. Cross-checked numerically against the exact, unmodified `GMSD.m` file (run via GNU
+  Octave, an isolated, throwaway environment) across identical/constant/noise/edge images and
+  even/odd/mixed/small spatial sizes -- agreement at floating-point precision (~1e-14 to exact) once
+  two non-obvious implementation details were matched: the `2x2` averaging filter's anchor
+  (MATLAB's `conv2(..., 'same')` anchors an even-sized kernel at its top-left corner, not
+  `cv2.filter2D`'s default) and zero-padding border (`cv2.BORDER_CONSTANT`, not `cv2.filter2D`'s own
+  default border mode) for every filter call. Octave/`GMSD.m` were used only for one-off verification,
+  never added as a project dependency.
 
 ### Changed
 
