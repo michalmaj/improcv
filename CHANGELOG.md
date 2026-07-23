@@ -57,6 +57,18 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   exact invariance of the SSIM formula, verified re-checked against `scikit-image` for the existing,
   non-extreme reference vectors -- no precision change for ordinary inputs, which never reach this
   code path).
+- `ssim`: the same rescaling only guarded against overflow, not against a `data_range`/image
+  magnitude small enough (e.g. `1e-100`, `1e-300`) to underflow the formula's internal squared
+  products to `0.0` and produce the same `NaN` from `0/0` -- including for exactly-identical images,
+  which must always give `1.0` regardless of scale. Fixed with two changes: an exact-equality fast
+  path (`np.array_equal`, after full validation) that always returns `1.0` for pixel-for-pixel
+  identical inputs without needing any of the numeric machinery below it, and widening the rescaling
+  guard to trigger symmetrically for a magnitude below `1e-75` (the exact reciprocal of the existing
+  `1e75` upper bound), not just above it. Re-verified against `scikit-image` for the existing
+  reference vectors (still no precision change) -- `scikit-image` itself was found to produce `NaN`
+  for the new small-magnitude cases (it has no equivalent rescaling), so those are instead validated
+  by confirming the result matches an equivalent unit-scale computation, which the invariance
+  guarantees.
 
 ## [0.1.0a1] - 2026-07-23
 

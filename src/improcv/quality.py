@@ -30,12 +30,15 @@ _SSIM_SIGMA = 1.5
 _SSIM_K1 = 0.01
 _SSIM_K2 = 0.03
 _SSIM_BORDER_CROP = (_SSIM_WINDOW_SIZE - 1) // 2
-# Conservative bound, well below where computing (K2*data_range)**2 (the
-# riskier of the two constants, K2 > K1) or squaring an image value near
-# this magnitude could overflow float64 (~1.8e308): (1e75)**2 == 1e150,
-# still tiny relative to the max, leaving ample headroom for the sums and
-# products the SSIM formula itself performs on top of that square.
-_SSIM_SAFE_MAGNITUDE = 1e75
+# Symmetric bounds (reciprocals of each other) on the largest relevant
+# magnitude (data_range, or either image's own largest absolute value)
+# outside of which images/data_range get rescaled before computing SSIM --
+# see the detailed justification in `ssim`'s body, where the actual check
+# happens. Both leave wide margin against float64's range (~1.8e308 max,
+# ~4.9e-324 smallest positive subnormal) given the formula's numerator/
+# denominator are each effectively a 4th power of this magnitude.
+_SSIM_SAFE_MAGNITUDE_MAX = 1e75
+_SSIM_SAFE_MAGNITUDE_MIN = 1e-75
 
 
 def _require_finite_image(image: np.ndarray, name: str) -> None:
@@ -344,6 +347,15 @@ def ssim(
         )
     resolved_range = _normalize_data_range(data_range, image1.dtype)
 
+    # Exact-equality fast path: pixel-for-pixel identical images always
+    # give SSIM == 1.0 by definition, regardless of dtype, magnitude, or
+    # data_range -- placed after every validation above (dtype/shape/
+    # spatial-size/data_range all still apply to identical inputs) so it
+    # can never mask a real contract violation, only skip computation that
+    # would otherwise need the magnitude-safety handling below.
+    if np.array_equal(image1, image2):
+        return 1.0
+
     a = image1.astype(np.float64)
     b = image2.astype(np.float64)
 
@@ -353,11 +365,28 @@ def ssim(
     # final ratio), so it's safe to divide by whatever keeps every
     # subsequent value comfortably representable. Skipped entirely
     # (factor stays 1.0, computation bit-identical to before) unless
-    # something is actually large enough to risk it -- ordinary uint8/
-    # uint16/small-float inputs never reach this branch, verified against
-    # scikit-image's exact reference values after adding this guard.
+    # something is actually large enough to risk it in *either* direction
+    # -- ordinary uint8/uint16/small-float inputs never reach this branch,
+    # verified against scikit-image's exact reference values after adding
+    # this guard.
+    #
+    # Upper bound: the formula's numerator/denominator are each a product
+    # of two already-squared terms (e.g. c1*c2, or mu_a_sq*mu_b_sq), so
+    # effectively a 4th power of the working magnitude. `1e75**4 == 1e300`
+    # stays comfortably under float64's ~1.8e308 max (~8 orders of
+    # magnitude of margin).
+    #
+    # Lower bound: the same 4th-power relationship applies in the other
+    # direction -- `1e-75**4 == 1e-300` stays far above float64's smallest
+    # positive (subnormal) value (~4.9e-324, ~24 orders of magnitude of
+    # margin), well past the point where a magnitude this small (e.g. two
+    # otherwise-ordinary images with an astronomically small data_range,
+    # or vice versa) would otherwise underflow c1*c2 or similar products
+    # to exactly `0.0` and produce a `0/0` `NaN`. Chosen as the exact
+    # reciprocal of the upper bound for a symmetric, easy-to-reason-about
+    # safe zone.
     max_abs = max(resolved_range, float(np.max(np.abs(a))), float(np.max(np.abs(b))))
-    if max_abs > _SSIM_SAFE_MAGNITUDE:
+    if max_abs > _SSIM_SAFE_MAGNITUDE_MAX or max_abs < _SSIM_SAFE_MAGNITUDE_MIN:
         a = a / max_abs
         b = b / max_abs
         resolved_range = resolved_range / max_abs

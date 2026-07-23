@@ -384,25 +384,15 @@ def test_ssim_identical_zeros_with_data_range_float64_max() -> None:
     assert im.ssim(x, x, data_range=np.finfo(np.float64).max) == pytest.approx(1.0)
 
 
-def test_ssim_with_very_small_positive_data_range_and_real_content_does_not_crash() -> None:
-    rng = np.random.default_rng(21)
-    a = rng.random((16, 16))
-    b = rng.random((16, 16))
-
-    result = im.ssim(a, b, data_range=1e-300)
-
-    assert math.isfinite(result)
-
-
-def test_ssim_tiny_data_range_with_constant_images_raises_controlled_error() -> None:
+def test_ssim_tiny_data_range_with_identical_constant_images_is_exactly_one() -> None:
     # A data_range this mismatched with constant (zero-variance) image
-    # content makes C1/C2 themselves underflow to 0.0, producing an actual
-    # 0/0 -- must surface as the same controlled ValueError as any other
-    # non-finite result, not propagate a NaN or crash.
+    # content used to make C1/C2 themselves underflow to 0.0, producing an
+    # actual 0/0 NaN -- fixed by both the exact-equality fast path (this
+    # case) and, for non-identical-but-tiny inputs, the two-sided rescaling
+    # below.
     x = np.zeros((11, 11), dtype=np.float64)
 
-    with pytest.raises(ValueError):
-        im.ssim(x, x, data_range=1e-300)
+    assert im.ssim(x, x, data_range=1e-300) == 1.0
 
 
 def test_ssim_non_identical_images_with_huge_data_range_does_not_raise() -> None:
@@ -432,6 +422,89 @@ def test_ssim_extreme_data_range_never_raises_overflow_error(bad_range: float) -
         pytest.fail(f"a raw OverflowError propagated for data_range={bad_range!r}")
     except ValueError:
         pass  # a controlled ValueError is an acceptable outcome
+
+
+# --- ssim: extreme *small* data_range/image magnitude must not underflow
+# the formula's internal products either (the symmetric counterpart to the
+# large-magnitude fix above) ---
+
+
+def test_ssim_identical_zeros_with_data_range_1e_minus_100_is_exactly_one() -> None:
+    x = np.zeros((11, 11), dtype=np.float64)
+
+    assert im.ssim(x, x, data_range=1e-100) == 1.0
+
+
+def test_ssim_identical_zeros_with_data_range_1e_minus_300_is_exactly_one() -> None:
+    x = np.zeros((11, 11), dtype=np.float64)
+
+    assert im.ssim(x, x, data_range=1e-300) == 1.0
+
+
+def test_ssim_identical_images_with_smallest_possible_data_range_is_exactly_one() -> None:
+    rng = np.random.default_rng(24)
+    x = rng.random((16, 16))
+
+    assert im.ssim(x, x, data_range=np.nextafter(0.0, 1.0)) == 1.0
+
+
+def test_ssim_constant_1e_minus_100_images_match_unit_scale_reference() -> None:
+    a = np.full((11, 11), 1e-100, dtype=np.float64)
+    b = np.full((11, 11), 2e-100, dtype=np.float64)
+    reference_a = np.ones((11, 11), dtype=np.float64)
+    reference_b = np.full((11, 11), 2.0, dtype=np.float64)
+
+    result = im.ssim(a, b, data_range=1e-100)
+    reference = im.ssim(reference_a, reference_b, data_range=1.0)
+
+    assert result == pytest.approx(reference, abs=1e-9)
+
+
+def test_ssim_constant_1e_minus_200_images_match_unit_scale_reference() -> None:
+    a = np.full((11, 11), 1e-200, dtype=np.float64)
+    b = np.full((11, 11), 2e-200, dtype=np.float64)
+    reference_a = np.ones((11, 11), dtype=np.float64)
+    reference_b = np.full((11, 11), 2.0, dtype=np.float64)
+
+    result = im.ssim(a, b, data_range=1e-200)
+    reference = im.ssim(reference_a, reference_b, data_range=1.0)
+
+    assert result == pytest.approx(reference, abs=1e-9)
+
+
+def test_ssim_random_images_scaled_down_by_1e_minus_100_match_unit_scale() -> None:
+    rng = np.random.default_rng(25)
+    a = rng.integers(0, 256, (16, 16)).astype(np.float64)
+    b = rng.integers(0, 256, (16, 16)).astype(np.float64)
+
+    scaled = im.ssim(a * 1e-100, b * 1e-100, data_range=255e-100)
+    unit_scale = im.ssim(a, b, data_range=255.0)
+
+    assert scaled == pytest.approx(unit_scale, abs=1e-9)
+
+
+def test_ssim_with_very_small_positive_data_range_and_real_content_stays_finite() -> None:
+    rng = np.random.default_rng(21)
+    a = rng.random((16, 16))
+    b = rng.random((16, 16))
+
+    result = im.ssim(a, b, data_range=1e-300)
+
+    assert math.isfinite(result)
+
+
+@pytest.mark.parametrize("bad_range", [1e-100, 1e-200, 1e-300])
+def test_ssim_small_data_range_never_raises_overflow_error(bad_range: float) -> None:
+    rng = np.random.default_rng(26)
+    a = rng.integers(0, 256, (16, 16)).astype(np.float64)
+    b = rng.integers(0, 256, (16, 16)).astype(np.float64)
+
+    try:
+        result = im.ssim(a, b, data_range=bad_range)
+    except OverflowError:
+        pytest.fail(f"a raw OverflowError propagated for data_range={bad_range!r}")
+    else:
+        assert math.isfinite(result)
 
 
 # --- ssim cross-reference regression values (scikit-image 0.26.0) ---
