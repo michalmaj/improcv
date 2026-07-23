@@ -21,19 +21,22 @@ permissions: {}
 # in-progress release must never be cancelled by a later trigger (which could
 # leave TestPyPI and PyPI in different states, or abort mid-publish).
 #
-# Known GitHub Actions limitation (verified against actionlint's schema,
-# which only recognizes `group`/`cancel-in-progress` here -- there is no
-# `queue`/queue-depth setting): a concurrency group holds at most one
-# *running* and one *queued* run. If a third tag is pushed while a second is
-# still queued behind a running first, the second is cancelled and replaced
-# by the third -- it never runs. This setup already guarantees the required
-# "never two releases publish at once", but it cannot guarantee "every
-# pushed release tag eventually runs" beyond one deep. Process rule instead
-# of a workflow setting: before pushing a new release tag, confirm via
-# `gh run list --workflow=release.yml` (or the Actions tab) that no release
-# run is currently in progress or queued.
+# `queue: max` (GitHub Actions concurrency, shipped 2026-05-07) lets up to 100
+# runs wait in this group instead of the `queue: single` default, which only
+# holds one pending run and cancels/replaces it if another arrives -- so a
+# third tag pushed while a second is still queued behind a running first
+# would otherwise never run at all. Verified directly against GitHub's own
+# "Using concurrency" docs (fetched 2026-07-23): `queue` accepts `single`
+# (default) or `max` (up to 100 pending). NOTE: `actionlint` v1.7.12 (current
+# latest release as of this writing) does not yet recognize the `queue` key
+# and will report `unexpected key "queue" for "concurrency" section` --
+# this is a known, tracked actionlint gap (rhysd/actionlint#654, #657, #661,
+# all open), not evidence that the key is invalid. Confirmed via GitHub's
+# current documentation, which is authoritative here over a linter that
+# hasn't caught up yet.
 concurrency:
   group: release
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -118,20 +121,30 @@ jobs:
         run: uvx "twine==6.2.0" check dist/*
 
       - name: Install the wheel into a clean environment (no extras) and smoke-test
+        # uv venv/uv pip --python pin the interpreter explicitly: setup-uv's
+        # own python-version input sets UV_PYTHON for uv's *own* commands,
+        # but does not guarantee a plain `python`/`python3` on PATH resolves
+        # to that same interpreter.
         run: |
-          python3 -m venv /tmp/smoke-wheel
-          /tmp/smoke-wheel/bin/pip install dist/*.whl "opencv-python-headless>=4.9,<6"
+          uv venv --python 3.11 /tmp/smoke-wheel
+          uv pip install --python /tmp/smoke-wheel/bin/python dist/*.whl "opencv-python-headless>=4.9,<6"
           /tmp/smoke-wheel/bin/python -c "
+          import os
           import sys
 
           import numpy as np
           import improcv as im
 
+          expected_version = os.environ['GITHUB_REF_NAME']
+          if expected_version.startswith('v'):
+              expected_version = expected_version[1:]
+          assert im.__version__ == expected_version, (im.__version__, expected_version)
+
           image = np.zeros((20, 20, 3), dtype=np.uint8)
           result = im.resize(image, width=10)
           assert result.shape == (10, 10, 3), result.shape
           assert 'matplotlib' not in sys.modules, 'import improcv must never import matplotlib'
-          print('smoke test OK (wheel, no extras):', im.__name__, result.shape)
+          print('smoke test OK (wheel, no extras):', im.__version__, result.shape)
           "
 
       - name: Verify improcv.visualization fails clearly without the viz extra (wheel)
@@ -147,30 +160,45 @@ jobs:
 
       - name: Install the wheel with the viz extra into a separate clean environment and smoke-test
         run: |
-          python3 -m venv /tmp/smoke-wheel-viz
-          /tmp/smoke-wheel-viz/bin/pip install "$(echo dist/*.whl)[viz]" "opencv-python-headless>=4.9,<6"
+          uv venv --python 3.11 /tmp/smoke-wheel-viz
+          uv pip install --python /tmp/smoke-wheel-viz/bin/python "$(echo dist/*.whl)[viz]" "opencv-python-headless>=4.9,<6"
           /tmp/smoke-wheel-viz/bin/python -c "
+          import os
+
           import numpy as np
+          import improcv as im
           import improcv.visualization as viz
+
+          expected_version = os.environ['GITHUB_REF_NAME']
+          if expected_version.startswith('v'):
+              expected_version = expected_version[1:]
+          assert im.__version__ == expected_version, (im.__version__, expected_version)
 
           image = np.zeros((20, 20, 3), dtype=np.uint8)
           viz.show_image(image)
           viz.plot_histogram(image)
-          print('smoke test OK: show_image and plot_histogram both ran under Agg (wheel+viz)')
+          print('smoke test OK: show_image and plot_histogram both ran under Agg (wheel+viz)', im.__version__)
           "
 
       - name: Install the sdist into a separate clean environment and smoke-test
         run: |
-          python3 -m venv /tmp/smoke-sdist
-          /tmp/smoke-sdist/bin/pip install dist/*.tar.gz "opencv-python-headless>=4.9,<6"
+          uv venv --python 3.11 /tmp/smoke-sdist
+          uv pip install --python /tmp/smoke-sdist/bin/python dist/*.tar.gz "opencv-python-headless>=4.9,<6"
           /tmp/smoke-sdist/bin/python -c "
+          import os
+
           import numpy as np
           import improcv as im
+
+          expected_version = os.environ['GITHUB_REF_NAME']
+          if expected_version.startswith('v'):
+              expected_version = expected_version[1:]
+          assert im.__version__ == expected_version, (im.__version__, expected_version)
 
           image = np.zeros((20, 20, 3), dtype=np.uint8)
           result = im.resize(image, width=10)
           assert result.shape == (10, 10, 3), result.shape
-          print('smoke test OK (sdist):', im.__name__, result.shape)
+          print('smoke test OK (sdist):', im.__version__, result.shape)
           "
 
       - name: Upload the verified dist/ as the release artifact
@@ -178,7 +206,11 @@ jobs:
         with:
           name: release-dist
           path: dist/
-          retention-days: 1
+          # Short, but long enough to survive the manual TestPyPI
+          # verification + `pypi` environment approval step in between
+          # publish-testpypi and publish-pypi -- 1 day was too tight if that
+          # approval doesn't happen immediately.
+          retention-days: 7
           if-no-files-found: error
 
   publish-testpypi:
