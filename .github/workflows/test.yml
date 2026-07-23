@@ -13,6 +13,13 @@ on:
   # push, whose failure would not block publishing.
   workflow_call:
 
+# Deny-by-default beyond read access to repo contents: standalone runs of
+# this workflow (push/pull_request) only ever need to check out the code,
+# and the reusable-workflow-call path from release.yml explicitly caps this
+# further via its own `permissions: contents: read` on the calling job.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

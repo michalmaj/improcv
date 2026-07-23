@@ -232,6 +232,12 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: dist/
+          # TestPyPI-only: lets a re-run after a partial upload or a
+          # transient TestPyPI outage succeed safely instead of erroring on
+          # a version that's already (partially) there. Deliberately not
+          # set on publish-pypi below -- a duplicate there should still
+          # fail loudly.
+          skip-existing: true
 
   publish-pypi:
     name: Publish to PyPI
