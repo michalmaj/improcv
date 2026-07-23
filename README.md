@@ -221,8 +221,8 @@ viz.plot_histogram(image)              # one line per channel (B/G/R or grayscal
 
 ## Status
 
-`improcv` is in early development. `0.1.0a1` is the first published release, covering the
-accumulated scope of Phases 0-3 (see [ROADMAP.md](https://github.com/michalmaj/improcv/blob/main/ROADMAP.md)
+`improcv` is in early development. `0.1.0a1` is designated as the first public release and covers
+the accumulated scope of Phases 0-3 (see [ROADMAP.md](https://github.com/michalmaj/improcv/blob/main/ROADMAP.md)
 for what that includes, and why it doesn't match the project's original one-phase-per-minor-version
 plan). See [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for the exact
 list of what's been added.
@@ -230,7 +230,8 @@ list of what's been added.
 **Compatibility policy before `1.0.0`:**
 - `0.1.0a1` is an alpha: functional, tested, but not yet declared stable.
 - Before `1.0.0`, the public API may still change, including in backwards-incompatible ways, in any
-  `0.MINOR` release.
+  `0.MINOR` release. While in alpha, this also applies between consecutive prereleases of the same
+  version (e.g. `0.1.0a1` → `0.1.0a2`).
 - Any backwards-incompatible change will always be called out explicitly in `CHANGELOG.md`, not
   silently folded into a routine entry.
 - Deprecation (a warning period before removal) will be used where practical, but the project does
