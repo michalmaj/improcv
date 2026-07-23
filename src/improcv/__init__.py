@@ -33,6 +33,7 @@ from improcv.analysis import (
     min_max_loc,
     moments,
 )
+from improcv.barcode import Barcode, decode_barcodes
 from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
 from improcv.contours import (
     ApproxMethod,
@@ -137,6 +138,7 @@ from improcv.types import Image, ImageFloat32, ImageU8, Mask, TransformMatrix
 
 __all__ = [
     "ApproxMethod",
+    "Barcode",
     "BoundingBox",
     "Centroids",
     "Circle",
@@ -189,6 +191,7 @@ __all__ = [
     "connected_components_with_stats",
     "convex_hull",
     "crop",
+    "decode_barcodes",
     "decode_qr_code",
     "decode_qr_codes",
     "detect_and_compute",

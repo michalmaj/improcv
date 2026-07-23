@@ -156,12 +156,34 @@ carries a working `0.1.0a1` version number for local development.
   and recommends `find_contours`/`convex_hull` for an actual ordered boundary. `detect_mser_regions`
   also rejects images smaller than 3x3 (OpenCV's own hard floor) and normalizes MSER's `bboxes=()`
   empty-result quirk and a documented pybind11 edge case where a region's points can come back with
-  `dtype=object`. Barcode detection (EAN/UPC/Code128 via `cv2.barcode_BarcodeDetector`) remains a
-  separate, later chunk -- verified to behave differently from QR's `GraphicalCodeDetector` (a single
+  `dtype=object`. Barcode detection (via `cv2.barcode.BarcodeDetector`) remains a separate, later
+  chunk -- verified to behave differently from QR's `GraphicalCodeDetector` (a single
   `detectAndDecodeWithType` call already handles multiple codes correctly with no `straight_codes`-style
   misalignment).
 - This completes Phase 2's functional scope (contours, region analysis, image analysis, segmentation and
   restoration) — remaining pre-1.0.0 work moves to Phase 3.
+- New `improcv.barcode` module, closing the last Phase 3 completeness-audit gap: `decode_barcodes`,
+  built on `cv2.barcode.BarcodeDetector.detectAndDecodeWithType`. Unlike QR, OpenCV's barcode detector
+  finds all barcodes in one call regardless of count, so only a single function is needed (no
+  `decode_barcode`/`decode_barcodes` split). Verified that OpenCV 4.13/5.0 currently instantiate only
+  an EAN-13 and an EAN-8 decoder internally -- **Code128 and UPC-E are not supported**; UPC-A is
+  produced as a special case of EAN-13 (a decoded payload starting with `'0'` has that leading zero
+  stripped and its type changed to `"UPC_A"`). `Barcode.data`/`Barcode.barcode_type` are both `None`
+  when a barcode-shaped quadrangle was detected but its content could not be decoded -- verified,
+  unlike `QRCode`, that barcode formats have no "successfully decoded but empty" state, so only two
+  outcomes exist rather than QR's three. `decode_barcodes` rejects images with either spatial
+  dimension of 40 pixels or less: verified directly that OpenCV silently never attempts detection
+  below that size, returning results indistinguishable from "nothing found" -- previously this would
+  have produced a misleading `[]`. The raw `retval` from `detectAndDecodeWithType` is validated but
+  never used to decide whether to return `[]`: verified that `retval` only means "at least one code
+  decoded successfully", not "anything was detected" -- an all-corrupted multi-barcode image returns
+  `retval=False` with non-empty, all-undecodable results, which are still returned rather than
+  dropped. The `*BytesMulti` detector variants are out of scope: verified they reproduce the same
+  `decoded_info`/`straight_codes` index-misalignment bug that `detectAndDecodeMulti` has for QR codes
+  (`decoded_info` length 2, `straight_codes` length 0 on a 2-barcode image), which
+  `detectAndDecodeWithType` does not have since it lacks a `straight_code`-shaped field. Each decoded
+  quadrangle is also rejected as degenerate (zero-area, e.g. four identical or collinear corners) via
+  the same `float64` shoelace-formula guard used in `improcv.qrcode`.
 
 ### Changed
 - `BoundingBox` moved from `improcv.contours` to `improcv.types` (still importable from both
