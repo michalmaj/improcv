@@ -1,0 +1,215 @@
+name: release
+
+# Triggered only by pushing a tag matching v* (e.g. v0.1.0a1). test.yml also
+# reacts to the same tag push independently -- this workflow does not rely on
+# that parallel run to gate publishing; it re-runs the full test matrix itself
+# (via a reusable workflow call to test.yml) and adds its own release-specific
+# checks (tag/version/HEAD verification, exact-artifact build+install+smoke
+# test) before anything is uploaded or published.
+
+on:
+  push:
+    tags: ["v*"]
+
+# Deny-by-default at the workflow level; each job below grants only the
+# scope it actually needs. In particular, only the two publish jobs get
+# `id-token: write` (required for PyPI Trusted Publishing) -- the job that
+# builds and verifies the artifact never receives OIDC credentials.
+permissions: {}
+
+# Two tags pushed close together must not publish concurrently, and an
+# in-progress release must never be cancelled by a later trigger (which could
+# leave TestPyPI and PyPI in different states, or abort mid-publish).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check-tag:
+    name: Verify tag matches origin/main HEAD and pyproject.toml version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify the tag points at origin/main's current HEAD
+        # Comparing the tag's version to pyproject.toml alone is not enough:
+        # 0.1.0a1 has been the version string for many commits, so an old
+        # commit would also pass a version-only check. Requiring an exact
+        # match against origin/main's current HEAD (not "is an ancestor of
+        # main") ensures the release is always cut from the actual latest
+        # reviewed state of the default branch.
+        run: |
+          git fetch origin main --quiet
+          tag_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          main_commit="$(git rev-parse origin/main)"
+          if [ "$tag_commit" != "$main_commit" ]; then
+            echo "::error::Tag commit ($tag_commit) does not match origin/main HEAD ($main_commit). Refusing to release from a commit that is not main's current HEAD."
+            exit 1
+          fi
+          echo "Tag commit matches origin/main HEAD: $main_commit"
+
+      - name: Verify the tag matches pyproject.toml's version exactly (PEP 440)
+        run: python3 scripts/verify_release_version.py
+
+  test-matrix:
+    name: Full Python/OpenCV test matrix (reused from test.yml)
+    needs: check-tag
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test.yml
+
+  build-and-verify:
+    name: Build and verify the exact artifacts to be published
+    needs: test-matrix
+    runs-on: ubuntu-latest
+    # No id-token permission here on purpose: this job builds and smoke-tests
+    # the artifact but never publishes, so it never needs OIDC credentials.
+    permissions:
+      contents: read
+    env:
+      MPLBACKEND: "Agg"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Verify dist/ contains exactly one wheel and one sdist
+        run: |
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          sdists=(dist/*.tar.gz)
+          echo "wheels: ${#wheels[@]}, sdists: ${#sdists[@]}"
+          ls -la dist/
+          if [ "${#wheels[@]}" -ne 1 ] || [ "${#sdists[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one wheel and one sdist in dist/, found ${#wheels[@]} wheel(s) and ${#sdists[@]} sdist(s)."
+            exit 1
+          fi
+
+      - name: Check package metadata and description rendering (pinned Twine)
+        run: uvx "twine==6.2.0" check dist/*
+
+      - name: Install the wheel into a clean environment (no extras) and smoke-test
+        run: |
+          python3 -m venv /tmp/smoke-wheel
+          /tmp/smoke-wheel/bin/pip install dist/*.whl "opencv-python-headless>=4.9,<6"
+          /tmp/smoke-wheel/bin/python -c "
+          import sys
+
+          import numpy as np
+          import improcv as im
+
+          image = np.zeros((20, 20, 3), dtype=np.uint8)
+          result = im.resize(image, width=10)
+          assert result.shape == (10, 10, 3), result.shape
+          assert 'matplotlib' not in sys.modules, 'import improcv must never import matplotlib'
+          print('smoke test OK (wheel, no extras):', im.__name__, result.shape)
+          "
+
+      - name: Verify improcv.visualization fails clearly without the viz extra (wheel)
+        run: |
+          /tmp/smoke-wheel/bin/python -c "
+          try:
+              import improcv.visualization
+              raise SystemExit('expected ImportError, none was raised')
+          except ImportError as exc:
+              assert 'improcv[viz]' in str(exc), str(exc)
+              print('smoke test OK: clear ImportError without the viz extra (wheel)')
+          "
+
+      - name: Install the wheel with the viz extra into a separate clean environment and smoke-test
+        run: |
+          python3 -m venv /tmp/smoke-wheel-viz
+          /tmp/smoke-wheel-viz/bin/pip install "$(echo dist/*.whl)[viz]" "opencv-python-headless>=4.9,<6"
+          /tmp/smoke-wheel-viz/bin/python -c "
+          import numpy as np
+          import improcv.visualization as viz
+
+          image = np.zeros((20, 20, 3), dtype=np.uint8)
+          viz.show_image(image)
+          viz.plot_histogram(image)
+          print('smoke test OK: show_image and plot_histogram both ran under Agg (wheel+viz)')
+          "
+
+      - name: Install the sdist into a separate clean environment and smoke-test
+        run: |
+          python3 -m venv /tmp/smoke-sdist
+          /tmp/smoke-sdist/bin/pip install dist/*.tar.gz "opencv-python-headless>=4.9,<6"
+          /tmp/smoke-sdist/bin/python -c "
+          import numpy as np
+          import improcv as im
+
+          image = np.zeros((20, 20, 3), dtype=np.uint8)
+          result = im.resize(image, width=10)
+          assert result.shape == (10, 10, 3), result.shape
+          print('smoke test OK (sdist):', im.__name__, result.shape)
+          "
+
+      - name: Upload the verified dist/ as the release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dist
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the verified release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    # Order is TestPyPI -> PyPI: the real-PyPI job only starts after the
+    # TestPyPI publish (the dry run of the mechanism itself) has succeeded.
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    # Production PyPI stays behind the `pypi` GitHub Environment, which
+    # should be configured with a required reviewer (see the design doc's
+    # manual-steps section) -- this job pauses for manual approval before
+    # running.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the verified release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: dist/

@@ -3,13 +3,24 @@
 All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Version strings (e.g. `0.1.0a1`) follow [PEP 440](https://peps.python.org/pep-0440/), Python's
+packaging version standard — not SemVer's pre-release hyphen syntax (`0.1.0-alpha.1`) — though the
+project's *compatibility policy* is still SemVer-style: pre-`1.0.0`, any `0.MINOR` bump may include
+breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
-Nothing has been published yet (no PyPI/TestPyPI release, no git tag) — everything so far stays
-under `Unreleased` rather than a dated version section, even though `pyproject.toml` already
-carries a working `0.1.0a1` version number for local development.
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.1.0a1] - 2026-07-23
+
+First published release: Phases 0-3 (skeleton, core transforms/color/filters/morphology/edges/pixel
+ops, contours/region analysis/image analysis/segmentation/restoration, feature detection/matching/
+Hough/QR/drawing/visualization/detectors/barcode).
 
 ### Added
 - Initial project skeleton: `pyproject.toml` (Hatchling, `uv`), Ruff/Pyright/pytest configuration,
@@ -184,6 +195,16 @@ carries a working `0.1.0a1` version number for local development.
   `detectAndDecodeWithType` does not have since it lacks a `straight_code`-shaped field. Each decoded
   quadrangle is also rejected as degenerate (zero-area, e.g. four identical or collinear corners) via
   the same `float64` shoelace-formula guard used in `improcv.qrcode`.
+- **This completes Phase 3's functional scope.** Two items originally listed under Phase 3 remain
+  explicitly out of scope for now, by deliberate decision rather than oversight: AKAZE/BRISK/KAZE
+  detect+describe (confirmed absent from the non-contrib OpenCV build; would need an
+  `opencv-contrib-python` dependency, and this project's OpenCV-distribution policy is still an open
+  decision per the project brief) and `confusion_matrix`/PR-ROC-curve/
+  class-bar-chart plots (a classification-evaluation concern conceptually closer to Phase 5's ML
+  tooling than to this phase's image-display visualization, per the `improcv.visualization` chunk's
+  own scoping decision). `draw_keypoints`/`draw_matches` were also considered and rejected outright
+  (already-safe raw `cv2` calls; wrapping them would be value-less aliases) rather than deferred.
+  Remaining pre-1.0.0 work moves to Phase 4 or a release-hardening pass.
 
 ### Changed
 - `BoundingBox` moved from `improcv.contours` to `improcv.types` (still importable from both

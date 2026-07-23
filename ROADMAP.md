@@ -13,9 +13,12 @@ what's shipped so far.
   distance transform, flood fill); image analysis (histograms, moments, template matching, min/max
   location, mean/stddev); seeded segmentation and restoration (watershed, rect-initialized GrabCut,
   inpainting).
-- [ ] **Phase 3** (`0.3.x`) — Feature detection and descriptors, gated behind an `improcv[viz]` extra for
-  the visualization pieces. Built as its own set of small vertical slices (e.g. detectors/descriptors
-  first, matching second, Hough/QR and visualization as later slices) rather than one large PR.
+- [x] **Phase 3** (`0.3.x`) — Feature detection and descriptors, gated behind an `improcv[viz]` extra for
+  the visualization pieces. Built as its own set of small vertical slices (detectors/descriptors,
+  matching, Hough, QR, drawing, visualization, FAST/blob/MSER, barcode — one PR per slice). AKAZE/
+  BRISK/KAZE (need `opencv-contrib-python`) and classification-evaluation plots (confusion matrix,
+  PR/ROC curves, class bar chart — closer to Phase 5's ML tooling) are deliberately out of scope here,
+  not oversights; see [CHANGELOG.md](CHANGELOG.md) for the full reasoning.
 - [ ] **Phase 4** (`0.4.x`) — Photo/creative operations, quality metrics, perceptual hashing. Quality
   metrics (SSIM/GMSD/MSE) implemented natively in NumPy rather than depending on `opencv-contrib`, since
   `cv2.quality`/`cv2.img_hash` are contrib-only.
