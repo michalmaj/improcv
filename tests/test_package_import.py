@@ -1,6 +1,14 @@
 import subprocess
 import sys
 
+import improcv
+
+
+def test_version_matches_installed_package_metadata() -> None:
+    from importlib.metadata import version
+
+    assert improcv.__version__ == version("improcv")
+
 
 def test_missing_cv2_raises_friendly_error() -> None:
     # sys.modules[name] = None is a documented Python import mechanism:

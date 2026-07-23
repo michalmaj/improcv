@@ -53,6 +53,16 @@ dev = [
     "matplotlib>=3.8",
 ]
 
+[tool.uv]
+# Pins the exact Hatchling version `uv build` resolves into its isolated
+# build environment, for release.yml specifically -- deliberately kept
+# separate from [build-system].requires (left as a loose "hatchling" there),
+# since over-constraining that field would also affect anyone building
+# improcv from the sdist in their own environment, not just this project's
+# own release pipeline. Bump deliberately, not automatically, when adopting
+# a newer Hatchling.
+build-constraint-dependencies = ["hatchling==1.31.0"]
+
 [tool.ruff]
 line-length = 100
 src = ["src"]
