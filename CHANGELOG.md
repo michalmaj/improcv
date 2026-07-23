@@ -11,6 +11,32 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- New `improcv.quality` module, Phase 4 slice 1 (quality metrics — core): `mse`, `psnr`, `ssim`.
+  `mse` is the mean squared error over every element (including channels), always finite and
+  non-negative. `psnr` is computed by this project's own formula
+  (`20*log10(data_range) - 10*log10(mse)`), not `cv2.PSNR` -- verified directly that `cv2.PSNR`
+  returns a large-but-finite sentinel (`~361.2`) for identical images instead of the mathematically
+  correct `math.inf`, and silently doesn't scale its default reference value for `uint16` unless the
+  caller passes one explicitly; `psnr` returns `math.inf` for identical images and allows a negative
+  result when the error exceeds `data_range`, uncapped. `ssim` implements the windowed-Gaussian
+  variant from Wang et al. (2004) (`11x11` window, `sigma=1.5`, `K1=0.01`, `K2=0.03`, population
+  covariance) via `cv2.GaussianBlur` with an explicit `11x11` kernel size, not NumPy/SciPy -- no new
+  runtime dependency. The outermost 5-pixel border (where the window would extend past the image
+  edge) is excluded from the final scalar, matching the standard "valid" convolution region rather
+  than depending on a border-extension choice; multi-channel images (including BGRA's alpha channel)
+  get SSIM computed independently per channel, then averaged with the valid spatial region. Cross-
+  checked numerically against `scikit-image` 0.26.0's `structural_similarity(...,
+  gaussian_weights=True, sigma=1.5, use_sample_covariance=False)` in an isolated, throwaway
+  environment -- agreement at floating-point precision (exact match or low-`1e-9`-and-below,
+  depending on dtype) once both the border crop and the explicit `11x11` kernel size were in place;
+  `scikit-image` itself was **not** added as a project dependency, runtime or dev. All three
+  functions share one validator: both images must be non-empty, 2D or 3D with identical shape and
+  dtype (`uint8`/`uint16`/`float32`/`float64`), 1-4 channels, and (for float inputs) free of
+  `NaN`/infinity. `data_range` defaults to `255.0`/`65535.0` for `uint8`/`uint16` and must be given
+  explicitly (a positive, finite, non-bool number) for `float32`/`float64`, since a float image's
+  actual range isn't implied by its dtype; input values are never clipped or rescaled to it. None of
+  the three functions mutate their inputs. This is the first of two Phase 4 quality-metrics slices --
+  GMSD is a separate, later slice.
 
 ### Changed
 

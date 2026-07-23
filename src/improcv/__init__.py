@@ -118,6 +118,7 @@ from improcv.pixels import (
     invert,
 )
 from improcv.qrcode import QRCode, decode_qr_code, decode_qr_codes
+from improcv.quality import mse, psnr, ssim
 from improcv.regions import (
     Centroids,
     ComponentStats,
@@ -245,13 +246,16 @@ __all__ = [
     "morph_close",
     "morph_gradient",
     "morph_open",
+    "mse",
     "pad",
+    "psnr",
     "resize",
     "rgb_to_bgr",
     "rotate",
     "rotate_bound",
     "sobel_edge",
     "sort_contours",
+    "ssim",
     "threshold",
     "to_hsv",
     "to_lab",

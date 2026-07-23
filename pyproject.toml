@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "improcv"
-version = "0.1.0a1"
+version = "0.1.0a2.dev0"
 description = "Modern image-processing and computer-vision utilities for Python, NumPy and OpenCV."
 readme = "README.md"
 license = "MIT"
