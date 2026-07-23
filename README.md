@@ -219,6 +219,19 @@ viz.show_image(image, title="input")  # handles BGR->RGB, hides axes by default
 viz.plot_histogram(image)              # one line per channel (B/G/R or grayscale)
 ```
 
+Image quality metrics:
+
+```python
+import improcv as im
+
+error = im.mse(original, compressed)
+quality_db = im.psnr(original, compressed)      # math.inf if the images are identical
+similarity = im.ssim(original, compressed)      # 1.0 for identical images, not clamped otherwise
+
+# uint16/float images need an explicit data_range (uint8/uint16 infer one automatically):
+similarity = im.ssim(original_f32, compressed_f32, data_range=1.0)
+```
+
 ## Status
 
 `improcv` is in early development. `0.1.0a1` is designated as the first public release and covers
