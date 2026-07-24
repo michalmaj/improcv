@@ -135,6 +135,36 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `ensure_gray`: converts grayscale to BGR, passes through an already-3-channel image as a copy, and
   (deliberately, like the `photo` functions) rejects BGRA rather than guessing how to handle alpha.
   No new runtime dependency.
+- New `improcv.denoising` module, Phase 4 slice 4 (non-local means denoising): `nl_means_denoise`
+  (grayscale, wraps `cv2.fastNlMeansDenoising`) and `nl_means_denoise_colored` (BGR, wraps
+  `cv2.fastNlMeansDenoisingColored`), both in base `opencv-python`, no contrib. Two explicit
+  functions rather than one dispatching on channel count, matching the rest of the library's
+  avoidance of implicit, channel-count-driven behavior. `nl_means_denoise` requires 2D `uint8`;
+  `(H, W, 1)` is rejected (message points at `image[..., 0]`), as is BGR/BGRA (message points at
+  `improcv.ensure_gray`). `nl_means_denoise_colored` requires exactly 3-channel `uint8` BGR;
+  grayscale, `(H, W, 1)`, 2-channel, and BGRA are all rejected -- verified directly that
+  `cv2.fastNlMeansDenoisingColored` technically accepts a 4-channel (BGRA) image in some builds, but
+  silently replaces the output's alpha channel with a constant `255` regardless of the input alpha's
+  actual content; improcv rejects BGRA outright rather than silently discarding it this way. `h`
+  (and `h_luminance`/`h_color` for the colored function) must be non-negative and finite -- `0` is a
+  legal, documented no-op for grayscale denoising (verified: `h=0` reproduces the input exactly), but
+  for the colored function `h_luminance=0`/`h_color=0` does **not** guarantee an identical result,
+  since the BGR/CIELAB round trip alone can shift values by a few of the smallest bits regardless of
+  filtering strength. No OpenCV-documented upper bound exists for `h`, so (unlike `photo.py`'s
+  `sigma_s`/`sigma_r`) values are validated on their `float32`-converted form for both underflow to
+  `0.0` (silently bypassing the "positive" case) and overflow to `inf` (verified directly: converting
+  an extreme value with plain `np.float32(...)` raises an uncontrolled `RuntimeWarning`, now
+  contained). `template_window_size`/`search_window_size` must be a positive odd integer within a
+  C++ `int`'s range, with `search_window_size >= template_window_size` -- verified directly that
+  OpenCV itself enforces none of this and silently no-ops (returns the input unchanged) for an even
+  window size or `search_window_size < template_window_size`, wasting whatever computation still
+  runs. No upper bound is imposed on window size beyond the `int` range: verified that a larger
+  `search_window_size` substantially increases execution time, but no OpenCV-documented maximum
+  exists, and any threshold picked from timing one machine/image size would both reject legitimate
+  uses and fail to bound cost for a larger image anyway. Also fixes `improcv.photo`'s
+  `pencil_sketch`/`stylize`/`detail_enhance`: the error message for a 2D grayscale image now points
+  at `improcv.ensure_bgr(image)`, instead of only stating the dimension-count mismatch. No new
+  runtime dependency.
 
 ### Changed
 

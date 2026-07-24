@@ -61,6 +61,7 @@ from improcv.contours import (
     min_area_rect,
     sort_contours,
 )
+from improcv.denoising import nl_means_denoise, nl_means_denoise_colored
 from improcv.detectors import (
     FastType,
     MSERRegion,
@@ -256,6 +257,8 @@ __all__ = [
     "morph_gradient",
     "morph_open",
     "mse",
+    "nl_means_denoise",
+    "nl_means_denoise_colored",
     "pad",
     "pencil_sketch",
     "phash",
