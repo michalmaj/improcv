@@ -109,7 +109,14 @@ from improcv.morphology import (
     threshold,
     tophat,
 )
-from improcv.photo import PencilSketchResult, detail_enhance, pencil_sketch, stylize
+from improcv.photo import (
+    PencilSketchResult,
+    SeamlessCloneMode,
+    detail_enhance,
+    pencil_sketch,
+    seamless_clone,
+    stylize,
+)
 from improcv.pixels import (
     adjust_brightness,
     adjust_contrast,
@@ -188,6 +195,7 @@ __all__ = [
     "QRCode",
     "RetrievalMode",
     "RotatedRect",
+    "SeamlessCloneMode",
     "SortOrder",
     "TemplateMatchMethod",
     "TransformMatrix",
@@ -267,6 +275,7 @@ __all__ = [
     "rgb_to_bgr",
     "rotate",
     "rotate_bound",
+    "seamless_clone",
     "sobel_edge",
     "sort_contours",
     "ssim",

@@ -443,6 +443,70 @@ def test_accepts_h_color_zero() -> None:
     assert result is not None
 
 
+def test_rejects_bool_h_color() -> None:
+    rng = np.random.default_rng(43)
+    image = _make_bgr(rng)
+
+    with pytest.raises(TypeError):
+        nl_means_denoise_colored(image, h_color=True)
+
+
+def test_rejects_nan_h_color() -> None:
+    rng = np.random.default_rng(44)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError):
+        nl_means_denoise_colored(image, h_color=math.nan)
+
+
+def test_rejects_inf_h_color() -> None:
+    rng = np.random.default_rng(45)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError):
+        nl_means_denoise_colored(image, h_color=math.inf)
+
+
+@pytest.mark.parametrize("value", [1e-46, 1e-100, np.nextafter(0.0, 1.0)])
+def test_rejects_h_color_underflowing_to_zero_in_float32(value: float) -> None:
+    assert value > 0.0
+    assert np.float32(value) == 0.0
+    rng = np.random.default_rng(46)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError, match="too small"):
+        nl_means_denoise_colored(image, h_color=value)
+
+
+def test_rejects_h_color_overflowing_to_inf_in_float32() -> None:
+    rng = np.random.default_rng(47)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError, match="too large"):
+        nl_means_denoise_colored(image, h_color=1e40)
+
+
+def test_rejects_huge_int_h_color_with_controlled_value_error() -> None:
+    rng = np.random.default_rng(48)
+    image = _make_bgr(rng)
+
+    try:
+        nl_means_denoise_colored(image, h_color=10**400)
+    except OverflowError:
+        pytest.fail("a raw OverflowError propagated for an oversized int h_color")
+    except ValueError:
+        pass
+
+
+def test_accepts_numpy_real_scalar_h_color() -> None:
+    rng = np.random.default_rng(49)
+    image = _make_bgr(rng)
+
+    result = nl_means_denoise_colored(image, h_color=np.float32(5.0))  # type: ignore[arg-type]
+
+    assert result is not None
+
+
 # --- window sizes ---
 
 
