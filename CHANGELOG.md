@@ -43,8 +43,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   states `c=0.0026` for images normalized to `[0, 1]`, but the authors' own code uses `T=170` directly
   on `0-255` data; `170 / 255**2 == 0.0026144...`, measurably different from `0.0026` (cross-checked
   to produce score deltas of `~1e-5` to `~1e-4`), and `T=170` is what this implementation uses, since
-  that is what the reference code -- and therefore every benchmark actually run against it --
-  computes. Pooling uses sample standard deviation (`ddof=1`, matching MATLAB's `std2`/`std` default),
+  it is the variant reproduced by the authors' reference implementation. Pooling uses sample standard
+  deviation (`ddof=1`, matching MATLAB's `std2`/`std` default),
   not the paper's own written population-based equation. Unlike `ssim`/`psnr`, `gmsd` is grayscale-only
   (2D, or 3D with exactly 1 channel) -- multi-channel input is rejected with a message pointing to
   `improcv.ensure_gray`, since GMSD has no reference definition for color and this project never hides
@@ -63,6 +63,40 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `cv2.filter2D`'s default) and zero-padding border (`cv2.BORDER_CONSTANT`, not `cv2.filter2D`'s own
   default border mode) for every filter call. Octave/`GMSD.m` were used only for one-off verification,
   never added as a project dependency.
+- New `improcv.hashing` module, Phase 4 slice 2 (perceptual hashing — core): `average_hash`, `phash`,
+  `PerceptualHash`, `PerceptualHashAlgorithm`. Both functions reproduce `cv2.img_hash.AverageHash`'s
+  and `cv2.img_hash.PHash`'s own bit decisions exactly for `uint8` input at `hash_size=8` (verified
+  bit-for-bit against `opencv-contrib-python` 4.13.0.90 and 5.0.0.93 in an isolated, throwaway
+  environment across hundreds of random grayscale/BGR/BGRA images) -- but generalize `hash_size` to
+  any value in `[2, 256]`, which `cv2.img_hash` itself hardcodes to `8`. `average_hash` resizes to
+  `hash_size x hash_size` (`cv2.INTER_LINEAR_EXACT`), converts BGR/BGRA to grayscale **after**
+  resizing (not before -- verified that the opposite order, e.g. via `improcv.ensure_gray` first,
+  does not reproduce the same bits for color input, since `uint8` rounding at each stage does not
+  commute), and thresholds each pixel against the mean rounded to the nearest integer with
+  round-half-to-even (matching `cv::cvRound`). `phash` resizes to `(hash_size*4) x (hash_size*4)`,
+  converts to `float32`, runs `cv2.dct`, takes the top-left `hash_size x hash_size` block, zeroes its
+  DC term, and thresholds against that block's mean cast to `float32` (matching the reference
+  implementation's own `float` storage) -- this is one of several genuinely different,
+  non-interchangeable "pHash" variants in circulation (distinct from both `ImageHash.phash`'s
+  median-of-the-full-block and the original hackerfactor.com blog's mean-of-63-AC-terms recipes);
+  this implementation specifically reproduces `cv2.img_hash.PHash`. Only `uint8` is supported in this
+  first slice (grayscale `(H, W)`/`(H, W, 1)`, BGR `(H, W, 3)`, or BGRA `(H, W, 4)`; 2-channel and
+  non-`uint8` input rejected) -- `uint16`/`float32`/`float64` support is deferred to a later slice.
+  No `data_range` parameter: both algorithms are exactly invariant to positive affine transforms of
+  pixel values (verified both mathematically and numerically), so it isn't needed. `PerceptualHash` is
+  an immutable (frozen, slotted) dataclass wrapping the hash's algorithm, `hash_size`, and bit value;
+  equality/hashability follow from the dataclass, `distance()` computes the Hamming distance (raising
+  `ValueError` if the two hashes have a different `algorithm` or `hash_size` -- same bit length alone
+  is not sufficient, since `average_hash` and `phash` can produce same-length but non-comparable
+  hashes), `str()` gives a fixed-width, lowercase, zero-padded hex string, and `from_hex` parses one
+  back given an explicit `algorithm`/`hash_size` (a hex string alone cannot reveal which algorithm
+  produced it). improcv's own bit/hex serialization (row-major, first bit is most significant) is
+  **not** the same as `cv2.img_hash`'s internal packed-byte layout (LSB-first per byte, one image row
+  per byte) -- only the underlying bit *decisions* are verified to match, not the serialized bytes;
+  raw byte import/export is not offered in this slice. `ImageHash`, the popular third-party library,
+  was deliberately not reused as this type's name, since it has an incompatible representation and
+  semantics under the same name. No new runtime dependency -- `opencv-contrib-python` and `ImageHash`
+  were used only for one-off, throwaway-environment verification.
 
 ### Changed
 

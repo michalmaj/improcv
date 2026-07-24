@@ -50,8 +50,8 @@ _SSIM_SAFE_MAGNITUDE_MIN = 1e-75
 # data. These are NOT the same constant: 170 / 255**2 == 0.00261438..., not
 # 0.0026 -- confirmed to produce measurably different GMSD scores (~1e-5 to
 # 1e-4 absolute, cross-checked against the reference code in Octave). T=170
-# is used here since it is what the authors' own code -- and therefore every
-# benchmark actually run against it -- computes.
+# is used here since it is the variant reproduced by the authors' reference
+# implementation.
 _GMSD_T_CONST = 170.0 / 255.0**2
 _GMSD_AVERAGE_KERNEL = np.full((2, 2), 0.25, dtype=np.float64)
 _GMSD_DX = np.array([[1, 0, -1], [1, 0, -1], [1, 0, -1]], dtype=np.float64) / 3.0

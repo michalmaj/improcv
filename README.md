@@ -233,9 +233,40 @@ similarity = im.ssim(original_f32, compressed_f32, data_range=1.0)
 
 # gmsd is grayscale-only (2D, or 3D with exactly 1 channel) -- convert first
 # with im.ensure_gray. Unlike ssim/psnr, lower is better: 0.0 for identical
-# images, larger for more distortion.
+# images; higher values generally indicate greater distortion according to
+# GMSD.
 distortion = im.gmsd(im.ensure_gray(original), im.ensure_gray(compressed))
 ```
+
+Perceptual hashing:
+
+```python
+import improcv as im
+
+# uint8 only: grayscale (H, W)/(H, W, 1), BGR (H, W, 3), or BGRA (H, W, 4).
+# For color input, alpha (if present) is ignored, not composited.
+a = im.average_hash(original)
+b = im.phash(compressed)              # a different algorithm -- see below
+c = im.phash(compressed_but_blurred)
+
+similarity = c.distance(im.phash(compressed))  # Hamming distance, an int
+print(c)                                       # fixed-width, lowercase hex
+
+# a.distance(b) would raise ValueError: average_hash and phash are different,
+# non-comparable algorithms even though both produce 64-bit hashes by default.
+
+# round-tripping through hex requires the algorithm and hash_size explicitly --
+# a hex string alone can't reveal which algorithm produced it:
+restored = im.PerceptualHash.from_hex(str(c), algorithm=im.PerceptualHashAlgorithm.PHASH)
+assert restored == c
+```
+
+A perceptual hash is not a cryptographic one: collisions are expected, and a
+smaller Hamming distance usually (not always) means more visually similar
+images. `average_hash`/`phash` reproduce `cv2.img_hash`'s own bit decisions
+for `hash_size=8` -- but not its packed-byte serialization, and not other
+libraries' (e.g. `ImageHash`) genuinely different, incompatible variants of
+the same algorithm names.
 
 ## Status
 

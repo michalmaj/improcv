@@ -88,6 +88,7 @@ from improcv.filters import (
     histogram_equalization,
     median_blur,
 )
+from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm, average_hash, phash
 from improcv.hough import (
     Circle,
     HoughCircleMethod,
@@ -179,6 +180,8 @@ __all__ = [
     "MeanStdDevResult",
     "MinMaxResult",
     "Moments",
+    "PerceptualHash",
+    "PerceptualHashAlgorithm",
     "QRCode",
     "RetrievalMode",
     "RotatedRect",
@@ -192,6 +195,7 @@ __all__ = [
     "apply_lut",
     "approx_poly_dp",
     "auto_canny",
+    "average_hash",
     "bgr_to_rgb",
     "bilateral_filter",
     "bitwise_and",
@@ -249,6 +253,7 @@ __all__ = [
     "morph_open",
     "mse",
     "pad",
+    "phash",
     "psnr",
     "resize",
     "rgb_to_bgr",
