@@ -114,8 +114,10 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   adding validation those functions don't perform themselves -- verified directly that none of the
   three has any dtype/channel-count assertion at all. Require exactly `uint8`, 3-channel BGR input;
   grayscale (`(H, W)`/`(H, W, 1)`), 2-channel, and BGRA (`(H, W, 4)`) are all rejected before the
-  OpenCV call, with no automatic conversion or alpha handling -- convert grayscale with the new
-  `improcv.ensure_bgr` first, or explicitly drop/composite alpha for BGRA. Unsupported channel
+  OpenCV call, with no automatic conversion or alpha handling -- convert a `(H, W)` grayscale image
+  with the new `improcv.ensure_bgr` directly; `(H, W, 1)` needs the trailing axis dropped first
+  (`improcv.ensure_bgr(image[..., 0])`), since `ensure_bgr` itself rejects `(H, W, 1)`; 2-channel input
+  has no supported conversion at all; BGRA needs alpha explicitly dropped or composited. Unsupported channel
   layouts are rejected before the OpenCV call to avoid raw errors and build-dependent unsafe behavior
   observed for BGRA inputs (a one-off empirical reproduction, not a claim that every OpenCV version or
   platform crashes the same way). `sigma_s`/`sigma_r`/`shade_factor` are restricted to the ranges
@@ -165,6 +167,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   for the new small-magnitude cases (it has no equivalent rescaling), so those are instead validated
   by confirming the result matches an equivalent unit-scale computation, which the invariance
   guarantees.
+- `pencil_sketch`/`stylize`/`detail_enhance`: `sigma_s`/`sigma_r` were validated for positivity on
+  their original Python value, before conversion to the `float32` OpenCV actually receives -- a
+  positive-but-tiny value (e.g. `1e-46`) previously passed validation but underflowed to exactly
+  `0.0` once converted, silently bypassing the `> 0` contract and reaching OpenCV as `0.0` (the same
+  degenerate, all-black case the contract exists to reject). Both parameters are now validated on
+  their converted `float32` value, and that exact converted value -- not a freshly re-derived one --
+  is what gets passed to OpenCV. `shade_factor` is unaffected: `0.0` is already a valid, documented
+  value for it, so underflowing to `0.0` reaches an already-legal case, not a hidden one.
+- `pencil_sketch`/`stylize`/`detail_enhance`: the `(H, W, 1)` rejection message suggested calling
+  `improcv.ensure_bgr` directly on the offending image, but `ensure_bgr` itself rejects `(H, W, 1)` --
+  the message now points at dropping the trailing axis first (`improcv.ensure_bgr(image[..., 0])`).
+  The 2-channel rejection message no longer mentions `ensure_bgr` at all, since there is no supported
+  conversion for that channel count.
 
 ## [0.1.0a1] - 2026-07-23
 
