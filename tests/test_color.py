@@ -85,6 +85,107 @@ def test_ensure_gray_rejects_1d_array() -> None:
         im.ensure_gray(image)
 
 
+def test_ensure_bgr_converts_gray_image(make_image) -> None:
+    image = make_image(10, 10, channels=None)
+
+    result = im.ensure_bgr(image)
+
+    assert result.shape == (10, 10, 3)
+    assert result.dtype == image.dtype
+    np.testing.assert_array_equal(result[:, :, 0], image)
+    np.testing.assert_array_equal(result[:, :, 1], image)
+    np.testing.assert_array_equal(result[:, :, 2], image)
+
+
+def test_ensure_bgr_passes_through_already_bgr_image(make_image) -> None:
+    image = make_image(10, 10, channels=3)
+
+    result = im.ensure_bgr(image)
+
+    np.testing.assert_array_equal(result, image)
+
+
+def test_ensure_bgr_returns_copy_for_already_bgr_image(make_image) -> None:
+    image = make_image(10, 10, channels=3)
+    original = image.copy()
+
+    result = im.ensure_bgr(image)
+    result[0, 0, 0] = 255
+
+    np.testing.assert_array_equal(image, original)
+
+
+def test_ensure_bgr_returns_copy_not_view_for_gray_input(make_image) -> None:
+    image = make_image(10, 10, channels=None)
+
+    result = im.ensure_bgr(image)
+
+    assert not np.shares_memory(result, image)
+
+
+def test_ensure_bgr_rejects_bgra() -> None:
+    image = np.zeros((4, 4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="3 channels"):
+        im.ensure_bgr(image)
+
+
+def test_ensure_bgr_rejects_h_w_1() -> None:
+    image = np.zeros((4, 4, 1), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="3 channels"):
+        im.ensure_bgr(image)
+
+
+def test_ensure_bgr_rejects_two_channels() -> None:
+    image = np.zeros((4, 4, 2), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="3 channels"):
+        im.ensure_bgr(image)
+
+
+def test_ensure_bgr_rejects_1d_array() -> None:
+    image = np.zeros(10, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="2 or 3 dimensions"):
+        im.ensure_bgr(image)
+
+
+def test_ensure_bgr_rejects_empty_image() -> None:
+    image = np.zeros((0, 10), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="empty"):
+        im.ensure_bgr(image)
+
+
+def test_ensure_bgr_rejects_int64_gray_dtype() -> None:
+    image = np.zeros((4, 4), dtype=np.int64)
+
+    with pytest.raises(TypeError, match="uint8"):
+        im.ensure_bgr(image)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.float32])
+def test_ensure_bgr_accepts_supported_gray_dtypes(dtype) -> None:
+    image = np.zeros((4, 4), dtype=dtype)
+
+    result = im.ensure_bgr(image)
+
+    assert result.dtype == dtype
+
+
+def test_ensure_bgr_accepts_any_dtype_for_already_bgr_image() -> None:
+    # Matches ensure_gray's own behavior: the already-correct-shape path is
+    # a plain copy, not an OpenCV conversion, so no dtype restriction
+    # applies -- verified this is deliberate, not an oversight, by mirroring
+    # ensure_gray's identical already-2D passthrough.
+    image = np.zeros((4, 4, 3), dtype=np.int64)
+
+    result = im.ensure_bgr(image)
+
+    assert result.dtype == np.int64
+
+
 def test_to_hsv_returns_3_channel_image(make_image) -> None:
     image = make_image(10, 10, channels=3)
 

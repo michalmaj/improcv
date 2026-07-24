@@ -108,6 +108,31 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   reused as this type's name, since it has an incompatible representation and
   semantics under the same name. No new runtime dependency -- `opencv-contrib-python` and `ImageHash`
   were used only for one-off, throwaway-environment verification.
+- New `improcv.photo` module, Phase 4 slice 3 (photo/creative — single-image stylization):
+  `pencil_sketch`, `stylize`, `detail_enhance`, `PencilSketchResult`. Thin wrappers around
+  `cv2.pencilSketch`/`cv2.stylization`/`cv2.detailEnhance` (all in base `opencv-python`, no contrib)
+  adding validation those functions don't perform themselves -- verified directly that none of the
+  three has any dtype/channel-count assertion at all. Require exactly `uint8`, 3-channel BGR input;
+  grayscale (`(H, W)`/`(H, W, 1)`), 2-channel, and BGRA (`(H, W, 4)`) are all rejected before the
+  OpenCV call, with no automatic conversion or alpha handling -- convert grayscale with the new
+  `improcv.ensure_bgr` first, or explicitly drop/composite alpha for BGRA. Unsupported channel
+  layouts are rejected before the OpenCV call to avoid raw errors and build-dependent unsafe behavior
+  observed for BGRA inputs (a one-off empirical reproduction, not a claim that every OpenCV version or
+  platform crashes the same way). `sigma_s`/`sigma_r`/`shade_factor` are restricted to the ranges
+  OpenCV's own API documents (`0 < sigma_s <= 200`, `0 < sigma_r <= 1`, `0 <= shade_factor <= 0.1`;
+  `shade_factor=0` is a valid documented extreme, not a degenerate case, and is accepted) -- `sigma_r`
+  is used as a divisor internally, and values outside the documented range are unsupported by OpenCV's
+  own contract (stored as a C++ `float`, so an extreme value can silently degrade toward a useless
+  result). `pencil_sketch` returns `PencilSketchResult(grayscale, color)` -- both fields always
+  populated, since OpenCV computes both in a single internal pass regardless, so a variant-selecting
+  parameter or two separate functions would add API surface without saving any computation.
+  `detail_enhance` lives here, not in `improcv.restoration`: it shares `pencil_sketch`/`stylize`'s
+  exact validation contract and OpenCV source module, and has no mask/inpainting semantics.
+  Cross-checked that all three functions produce bit-identical output between OpenCV 4.13.0 and 5.0.0
+  for the same input. Also adds `improcv.ensure_bgr` to `improcv.color`, symmetric to the existing
+  `ensure_gray`: converts grayscale to BGR, passes through an already-3-channel image as a copy, and
+  (deliberately, like the `photo` functions) rejects BGRA rather than guessing how to handle alpha.
+  No new runtime dependency.
 
 ### Changed
 
