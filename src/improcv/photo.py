@@ -53,29 +53,80 @@ def _require_valid_photo_image(image: np.ndarray) -> None:
                 "onto a chosen background before calling; improcv.ensure_bgr does not "
                 "accept BGRA"
             )
+        if image.shape[2] == 1:
+            raise ValueError(
+                "image must be a 3-channel BGR image, got a single-channel (grayscale) "
+                "image with an explicit trailing axis -- improcv.ensure_bgr itself does "
+                "not accept (H, W, 1); drop the axis first with "
+                "improcv.ensure_bgr(image[..., 0])"
+            )
         raise ValueError(
-            f"image must be a 3-channel BGR image, got {image.shape[2]} channel(s) -- "
-            "convert first with improcv.ensure_bgr if grayscale"
+            f"image must be a 3-channel BGR image, got {image.shape[2]} channels -- "
+            "there is no supported conversion for this channel count"
         )
     require_dtype(image, (np.uint8,), "image")
 
 
-def _require_valid_sigma_s(value: object) -> None:
+def _validated_sigma_s(value: object) -> float:
+    """Raise TypeError/ValueError unless `value` is a valid `sigma_s`, else return
+    its `float32` value as a plain `float` -- the exact value OpenCV will receive.
+
+    Validated on the `float32` value, not the original Python value: e.g.
+    `1e-46` is a positive `float`, but `np.float32(1e-46) == 0.0` (underflows
+    below `float32`'s smallest positive subnormal, `~1.4e-45`) -- silently
+    passing such a value through would let it bypass the public `> 0`
+    contract and reach OpenCV as `0.0`, exactly the degenerate case the
+    contract exists to reject (`stylize`/`pencil_sketch` verified to produce
+    an all-black result for `sigma_s=0`).
+    """
     require_positive(value, "sigma_s")
-    if float(value) > _SIGMA_S_MAX:  # type: ignore[arg-type]
+    numeric = float(value)  # type: ignore[arg-type]
+    if numeric > _SIGMA_S_MAX:
         raise ValueError(f"sigma_s must be <= {_SIGMA_S_MAX}, got {value}")
+    converted = float(np.float32(numeric))
+    if converted == 0.0:
+        raise ValueError(
+            f"sigma_s must be positive, got {value}, which is too small to remain "
+            "positive once converted to OpenCV's float32 parameter"
+        )
+    return converted
 
 
-def _require_valid_sigma_r(value: object) -> None:
+def _validated_sigma_r(value: object) -> float:
+    """Raise TypeError/ValueError unless `value` is a valid `sigma_r`, else return
+    its `float32` value as a plain `float` -- the exact value OpenCV will receive.
+
+    See `_validated_sigma_s` for why validation happens on the converted
+    `float32` value rather than the original Python value.
+    """
     require_positive(value, "sigma_r")
-    if float(value) > _SIGMA_R_MAX:  # type: ignore[arg-type]
+    numeric = float(value)  # type: ignore[arg-type]
+    if numeric > _SIGMA_R_MAX:
         raise ValueError(f"sigma_r must be <= {_SIGMA_R_MAX}, got {value}")
+    converted = float(np.float32(numeric))
+    if converted == 0.0:
+        raise ValueError(
+            f"sigma_r must be positive, got {value}, which is too small to remain "
+            "positive once converted to OpenCV's float32 parameter"
+        )
+    return converted
 
 
-def _require_valid_shade_factor(value: object) -> None:
+def _validated_shade_factor(value: object) -> float:
+    """Raise TypeError/ValueError unless `value` is a valid `shade_factor`, else
+    return its `float32` value as a plain `float` -- the exact value OpenCV
+    will receive.
+
+    Unlike `sigma_s`/`sigma_r`, a `float32`-converted value of `0.0` is not
+    rejected here -- `shade_factor=0` is itself a valid, documented extreme,
+    so a tiny positive value underflowing to `0.0` reaches the same
+    already-legal value, not a hidden contract violation.
+    """
     require_non_negative(value, "shade_factor")
-    if float(value) > _SHADE_FACTOR_MAX:  # type: ignore[arg-type]
+    numeric = float(value)  # type: ignore[arg-type]
+    if numeric > _SHADE_FACTOR_MAX:
         raise ValueError(f"shade_factor must be <= {_SHADE_FACTOR_MAX}, got {value}")
+    return float(np.float32(numeric))
 
 
 class PencilSketchResult(NamedTuple):
@@ -138,22 +189,24 @@ def pencil_sketch(
     ------
     ValueError
         If `image` is empty, does not have exactly 3 dimensions, does not
-        have exactly 3 channels, or `sigma_s`/`sigma_r`/`shade_factor` is
-        outside its documented range (including non-finite).
+        have exactly 3 channels, `sigma_s`/`sigma_r`/`shade_factor` is
+        outside its documented range (including non-finite), or `sigma_s`/
+        `sigma_r` is positive but too small to remain positive once
+        converted to OpenCV's `float32` parameter (e.g. `1e-46`).
     TypeError
         If `image` does not have dtype ``uint8``, or `sigma_s`/`sigma_r`/
         `shade_factor` is not a real number (rejecting `bool`).
     """
     _require_valid_photo_image(image)
-    _require_valid_sigma_s(sigma_s)
-    _require_valid_sigma_r(sigma_r)
-    _require_valid_shade_factor(shade_factor)
+    sigma_s = _validated_sigma_s(sigma_s)
+    sigma_r = _validated_sigma_r(sigma_r)
+    shade_factor = _validated_shade_factor(shade_factor)
 
     grayscale, color = cv2.pencilSketch(
         image,
-        sigma_s=float(sigma_s),
-        sigma_r=float(sigma_r),
-        shade_factor=float(shade_factor),
+        sigma_s=sigma_s,
+        sigma_r=sigma_r,
+        shade_factor=shade_factor,
     )
     return PencilSketchResult(grayscale=cast(ImageU8, grayscale), color=cast(ImageU8, color))
 
@@ -188,17 +241,19 @@ def stylize(image: ImageU8, sigma_s: float = 60.0, sigma_r: float = 0.45) -> Ima
     ------
     ValueError
         If `image` is empty, does not have exactly 3 dimensions, does not
-        have exactly 3 channels, or `sigma_s`/`sigma_r` is outside its
-        documented range (including non-finite).
+        have exactly 3 channels, `sigma_s`/`sigma_r` is outside its
+        documented range (including non-finite), or `sigma_s`/`sigma_r` is
+        positive but too small to remain positive once converted to
+        OpenCV's `float32` parameter (e.g. `1e-46`).
     TypeError
         If `image` does not have dtype ``uint8``, or `sigma_s`/`sigma_r` is
         not a real number (rejecting `bool`).
     """
     _require_valid_photo_image(image)
-    _require_valid_sigma_s(sigma_s)
-    _require_valid_sigma_r(sigma_r)
+    sigma_s = _validated_sigma_s(sigma_s)
+    sigma_r = _validated_sigma_r(sigma_r)
 
-    result = cv2.stylization(image, sigma_s=float(sigma_s), sigma_r=float(sigma_r))
+    result = cv2.stylization(image, sigma_s=sigma_s, sigma_r=sigma_r)
     return cast(ImageU8, result)
 
 
@@ -234,15 +289,17 @@ def detail_enhance(image: ImageU8, sigma_s: float = 10.0, sigma_r: float = 0.15)
     ------
     ValueError
         If `image` is empty, does not have exactly 3 dimensions, does not
-        have exactly 3 channels, or `sigma_s`/`sigma_r` is outside its
-        documented range (including non-finite).
+        have exactly 3 channels, `sigma_s`/`sigma_r` is outside its
+        documented range (including non-finite), or `sigma_s`/`sigma_r` is
+        positive but too small to remain positive once converted to
+        OpenCV's `float32` parameter (e.g. `1e-46`).
     TypeError
         If `image` does not have dtype ``uint8``, or `sigma_s`/`sigma_r` is
         not a real number (rejecting `bool`).
     """
     _require_valid_photo_image(image)
-    _require_valid_sigma_s(sigma_s)
-    _require_valid_sigma_r(sigma_r)
+    sigma_s = _validated_sigma_s(sigma_s)
+    sigma_r = _validated_sigma_r(sigma_r)
 
-    result = cv2.detailEnhance(image, sigma_s=float(sigma_s), sigma_r=float(sigma_r))
+    result = cv2.detailEnhance(image, sigma_s=sigma_s, sigma_r=sigma_r)
     return cast(ImageU8, result)

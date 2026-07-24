@@ -189,18 +189,24 @@ def test_rejects_2d_grayscale(func) -> None:
 
 @pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
 def test_rejects_h_w_1_grayscale(func) -> None:
+    # The message must not suggest calling improcv.ensure_bgr directly on
+    # (H, W, 1) -- ensure_bgr itself rejects that shape. It should instead
+    # point at dropping the trailing axis first.
     image = np.zeros((10, 10, 1), dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="ensure_bgr"):
+    with pytest.raises(ValueError, match=r"ensure_bgr\(image\[\.\.\., 0\]\)") as exc_info:
         func(image)
+    assert "ensure_bgr(image)" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
 def test_rejects_two_channels(func) -> None:
+    # No conversion is suggested for 2-channel input -- there is none.
     image = np.zeros((10, 10, 2), dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="3-channel"):
+    with pytest.raises(ValueError, match="3-channel") as exc_info:
         func(image)
+    assert "ensure_bgr" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
@@ -449,6 +455,72 @@ def test_rejects_nan_sigma_r(func) -> None:
         func(image, sigma_r=math.nan)
 
 
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+def test_rejects_inf_sigma_r(func) -> None:
+    rng = np.random.default_rng(35)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError, match="sigma_r"):
+        func(image, sigma_r=math.inf)
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+def test_rejects_bool_sigma_r(func) -> None:
+    rng = np.random.default_rng(36)
+    image = _make_bgr(rng)
+
+    with pytest.raises(TypeError):
+        func(image, sigma_r=True)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+def test_accepts_int_sigma_r(func) -> None:
+    rng = np.random.default_rng(37)
+    image = _make_bgr(rng)
+
+    result = func(image, sigma_r=1)
+
+    assert result is not None
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+def test_accepts_numpy_real_scalar_sigma_r(func) -> None:
+    rng = np.random.default_rng(38)
+    image = _make_bgr(rng)
+
+    result = func(image, sigma_r=np.float32(0.5))
+
+    assert result is not None
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+def test_rejects_huge_int_sigma_s_with_controlled_value_error(func) -> None:
+    # require_positive's own overflow handling must surface as a controlled
+    # ValueError ("must be finite"), never a raw OverflowError from float().
+    rng = np.random.default_rng(39)
+    image = _make_bgr(rng)
+
+    try:
+        func(image, sigma_s=10**400)
+    except OverflowError:
+        pytest.fail("a raw OverflowError propagated for an oversized int sigma_s")
+    except ValueError:
+        pass
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+def test_rejects_huge_int_sigma_r_with_controlled_value_error(func) -> None:
+    rng = np.random.default_rng(40)
+    image = _make_bgr(rng)
+
+    try:
+        func(image, sigma_r=10**400)
+    except OverflowError:
+        pytest.fail("a raw OverflowError propagated for an oversized int sigma_r")
+    except ValueError:
+        pass
+
+
 def test_rejects_bool_shade_factor() -> None:
     rng = np.random.default_rng(29)
     image = _make_bgr(rng)
@@ -465,12 +537,126 @@ def test_rejects_nan_shade_factor() -> None:
         pencil_sketch(image, shade_factor=math.nan)
 
 
+def test_rejects_inf_shade_factor() -> None:
+    rng = np.random.default_rng(41)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError, match="shade_factor"):
+        pencil_sketch(image, shade_factor=math.inf)
+
+
+def test_accepts_int_shade_factor() -> None:
+    # 0 is the only int that fits shade_factor's [0, 0.1] range.
+    rng = np.random.default_rng(42)
+    image = _make_bgr(rng)
+
+    result = pencil_sketch(image, shade_factor=0)
+
+    assert result is not None
+
+
+def test_accepts_numpy_real_scalar_shade_factor() -> None:
+    rng = np.random.default_rng(43)
+    image = _make_bgr(rng)
+
+    result = pencil_sketch(image, shade_factor=np.float32(0.05))  # type: ignore[arg-type]
+
+    assert result is not None
+
+
 def test_rejects_negative_shade_factor() -> None:
     rng = np.random.default_rng(31)
     image = _make_bgr(rng)
 
     with pytest.raises(ValueError, match="shade_factor"):
         pencil_sketch(image, shade_factor=-0.01)
+
+
+# --- sigma_s / sigma_r: rejected once the value underflows to exactly 0.0
+# after conversion to OpenCV's float32 parameter, even though it is a
+# positive Python float. Verified directly: np.float32(1e-46) == 0.0
+# (below float32's smallest positive subnormal, ~1.4e-45). ---
+
+_FLOAT32_UNDERFLOW_VALUES = [1e-46, 1e-100, np.nextafter(0.0, 1.0)]
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+@pytest.mark.parametrize("value", _FLOAT32_UNDERFLOW_VALUES)
+def test_rejects_sigma_s_underflowing_to_zero_in_float32(func, value: float) -> None:
+    assert value > 0.0  # positive in float64 -- the whole point of this case
+    assert np.float32(value) == 0.0  # but exactly zero once OpenCV would see it
+    rng = np.random.default_rng(44)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError, match="sigma_s"):
+        func(image, sigma_s=value)
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+@pytest.mark.parametrize("value", _FLOAT32_UNDERFLOW_VALUES)
+def test_rejects_sigma_r_underflowing_to_zero_in_float32(func, value: float) -> None:
+    assert value > 0.0
+    assert np.float32(value) == 0.0
+    rng = np.random.default_rng(45)
+    image = _make_bgr(rng)
+
+    with pytest.raises(ValueError, match="sigma_r"):
+        func(image, sigma_r=value)
+
+
+@pytest.mark.parametrize("value", _FLOAT32_UNDERFLOW_VALUES)
+def test_shade_factor_underflowing_to_zero_in_float32_is_still_accepted(value: float) -> None:
+    # Unlike sigma_s/sigma_r, shade_factor=0.0 is itself a valid, documented
+    # value -- underflowing to it is not a hidden contract violation.
+    rng = np.random.default_rng(46)
+    image = _make_bgr(rng)
+
+    result = pencil_sketch(image, shade_factor=value)
+
+    assert np.all(result.grayscale == 0)
+
+
+@pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
+@pytest.mark.parametrize("value", _FLOAT32_UNDERFLOW_VALUES)
+def test_never_reaches_opencv_for_sigma_s_underflowing_to_zero(
+    func, value: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    def boom(*args: object, **kwargs: object) -> None:
+        nonlocal called
+        called = True
+        raise AssertionError("cv2 must not be called for a sigma_s that underflows to 0.0")
+
+    monkeypatch.setattr(cv2, _CV2_FUNC_NAME[func], boom)
+
+    rng = np.random.default_rng(47)
+    image = _make_bgr(rng)
+    with pytest.raises(ValueError):
+        func(image, sigma_s=value)
+    assert not called
+
+
+def test_ordinary_sigma_s_reaches_opencv_as_its_float32_equivalent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    real_stylization = cv2.stylization
+
+    def spy(image: np.ndarray, sigma_s: float = 60.0, sigma_r: float = 0.45):
+        captured["sigma_s"] = sigma_s
+        captured["sigma_r"] = sigma_r
+        return real_stylization(image, sigma_s=sigma_s, sigma_r=sigma_r)
+
+    monkeypatch.setattr(cv2, "stylization", spy)
+
+    rng = np.random.default_rng(48)
+    image = _make_bgr(rng)
+    stylize(image, sigma_s=33.0, sigma_r=0.5)
+
+    assert captured["sigma_s"] == float(np.float32(33.0))
+    assert captured["sigma_r"] == float(np.float32(0.5))
+    assert type(captured["sigma_s"]) is float
 
 
 # --- small/degenerate/thin images ---
