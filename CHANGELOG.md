@@ -155,10 +155,13 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `0.0` (silently bypassing the "positive" case) and overflow to `inf` (verified directly: converting
   an extreme value with plain `np.float32(...)` raises an uncontrolled `RuntimeWarning`, now
   contained). `template_window_size`/`search_window_size` must be a positive odd integer within a
-  C++ `int`'s range, with `search_window_size >= template_window_size` -- verified directly that
-  OpenCV itself enforces none of this and silently no-ops (returns the input unchanged) for an even
-  window size or `search_window_size < template_window_size`, wasting whatever computation still
-  runs. No upper bound is imposed on window size beyond the `int` range: verified that a larger
+  C++ `int`'s range -- verified directly that OpenCV silently canonicalizes an even size to the next
+  odd value instead of rejecting it (e.g. `templateWindowSize=2` gives the same result as `3`), which
+  is why an explicit, odd value is still required rather than accepted and silently reinterpreted.
+  `search_window_size` and `template_window_size` are independent parameters with no required
+  relationship between them -- verified directly that `search_window_size < template_window_size` is
+  not a no-op, it produces real, different output. No upper bound is imposed on window size beyond
+  the `int` range: verified that a larger
   `search_window_size` substantially increases execution time, but no OpenCV-documented maximum
   exists, and any threshold picked from timing one machine/image size would both reject legitimate
   uses and fail to bound cost for a larger image anyway. Also fixes `improcv.photo`'s
@@ -169,6 +172,23 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ### Changed
 
 ### Fixed
+- `nl_means_denoise`/`nl_means_denoise_colored`: removed the incorrect requirement that
+  `search_window_size >= template_window_size` -- the original justification (that OpenCV silently
+  no-ops for a smaller search window) was false; verified directly with `h=100` that
+  `search_window_size < template_window_size` produces real, different output (1019/1024 pixels
+  differ from the input, max difference 156, and differs from the `search_window_size=7` result
+  too), so this is no longer rejected, documented, or tested as an error case -- instead covered by
+  integration tests comparing the wrapper's output exactly against a direct `cv2` call for this
+  parameter combination. Also corrected the justification for still rejecting an even window size:
+  OpenCV does not silently no-op for one, it silently canonicalizes it to the next odd value (e.g.
+  `templateWindowSize=2` gives the exact same result as `3`; `searchWindowSize=20` the same as `21`)
+  -- the odd-size rejection itself is unchanged, only its docstring/comment justification and a new
+  reference test documenting the canonicalization directly against raw `cv2` calls. Also replaced a
+  test asserting a hard-coded `max_difference <= 3` bound for `nl_means_denoise_colored`'s
+  `h_luminance=0, h_color=0` case with an exact-equality comparison against a direct `cv2` call plus
+  no-mutation/shape/dtype checks -- the previous bound was an accidental property of one test seed
+  (verified directly: a different deterministic image on the same OpenCV reaches a difference of
+  `4`), not a real guarantee, so no specific difference bound is documented or tested anymore.
 - `mse`/`psnr`: two distinct, non-identical images could previously be misreported as identical
   (`mse == 0.0`, `psnr == math.inf`) when their squared difference underflowed `float64` (e.g. a
   single-pixel `float64` offset of `1e-162` -- `(1e-162)**2` rounds to exactly `0.0`, below the
