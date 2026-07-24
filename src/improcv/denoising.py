@@ -99,13 +99,17 @@ def _validated_window_size(value: object, name: str) -> int:
     """Raise TypeError/ValueError unless `value` is a valid window-size parameter,
     else return it as a plain `int`.
 
-    Requires a positive, odd integer that fits in a C++ `int` -- OpenCV
-    itself performs none of these checks (verified directly: an even size,
-    or `search_window_size < template_window_size`, is silently accepted
-    and produces a result identical to the input -- a silent no-op, not an
-    error), so this project enforces them explicitly instead of forwarding
-    a value that would otherwise waste computation for no effect, or (for a
-    value too large for a C++ `int`) reach a raw, unfriendly `cv2.error`.
+    Requires a positive, odd integer that fits in a C++ `int`. OpenCV itself
+    does not reject an even size -- verified directly that it silently
+    canonicalizes it to the next odd value instead (e.g. `templateWindowSize=2`
+    gives the exact same result as `templateWindowSize=3`; `searchWindowSize=20`
+    the same as `21`), on both OpenCV 4.13 and 5.0. That silent substitution
+    means the value a caller passed is not the value actually used, which is
+    exactly the kind of mismatch this project rejects explicitly (an odd
+    value is required, matching OpenCV's own documented contract for these
+    parameters) rather than accept and use a different, un-signaled size.
+    A value too large for a C++ `int` would otherwise reach a raw, unfriendly
+    `cv2.error`; this is rejected with a clear message instead.
 
     No upper bound is enforced beyond the C++ `int` range: verified directly
     that larger search windows substantially increase execution time, but
@@ -159,10 +163,12 @@ def nl_means_denoise(
         recommended value.
     search_window_size : int, optional
         Size in pixels of the window searched for similar patches. Must be
-        a positive odd integer, and at least `template_window_size` --
-        verified directly that violating either constraint is not an error
-        in OpenCV, but silently returns `image` unchanged, wasting whatever
-        computation still occurs. Larger search windows can substantially
+        a positive odd integer. There is no requirement that it be at least
+        `template_window_size` -- these are two independent parameters (the
+        patch size used for comparison vs. the area searched for similar
+        patch centers), and verified directly that `search_window_size <
+        template_window_size` is not a no-op: it produces real, different
+        output from the input. Larger search windows can substantially
         increase execution time. Default `21`, OpenCV's own recommended
         value.
 
@@ -178,8 +184,7 @@ def nl_means_denoise(
         If `image` is empty, is not 2D, `h` is negative, non-finite, or
         positive but too small to remain positive once converted to
         `float32`, or `template_window_size`/`search_window_size` is not a
-        positive odd integer within the range of a C++ `int`, or
-        `search_window_size < template_window_size`.
+        positive odd integer within the range of a C++ `int`.
     TypeError
         If `image` does not have dtype ``uint8``, `h` is not a real number
         (rejecting `bool`), or a window size is not an integer (rejecting
@@ -189,12 +194,6 @@ def nl_means_denoise(
     h = _validated_h(h, "h")
     template_window_size = _validated_window_size(template_window_size, "template_window_size")
     search_window_size = _validated_window_size(search_window_size, "search_window_size")
-    if search_window_size < template_window_size:
-        raise ValueError(
-            "search_window_size must be >= template_window_size, got "
-            f"search_window_size={search_window_size} < "
-            f"template_window_size={template_window_size}"
-        )
 
     result = cv2.fastNlMeansDenoising(
         image,
@@ -269,7 +268,7 @@ def nl_means_denoise_colored(
         non-finite, or positive but too small to remain positive once
         converted to `float32`, or `template_window_size`/
         `search_window_size` is not a positive odd integer within the range
-        of a C++ `int`, or `search_window_size < template_window_size`.
+        of a C++ `int`.
     TypeError
         If `image` does not have dtype ``uint8``, `h_luminance`/`h_color`
         is not a real number (rejecting `bool`), or a window size is not an
@@ -280,12 +279,6 @@ def nl_means_denoise_colored(
     h_color = _validated_h(h_color, "h_color")
     template_window_size = _validated_window_size(template_window_size, "template_window_size")
     search_window_size = _validated_window_size(search_window_size, "search_window_size")
-    if search_window_size < template_window_size:
-        raise ValueError(
-            "search_window_size must be >= template_window_size, got "
-            f"search_window_size={search_window_size} < "
-            f"template_window_size={template_window_size}"
-        )
 
     result = cv2.fastNlMeansDenoisingColored(
         image,

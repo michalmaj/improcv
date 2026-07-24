@@ -300,16 +300,27 @@ def test_h_zero_gives_exact_identity_for_grayscale() -> None:
     np.testing.assert_array_equal(result, image)
 
 
-def test_h_and_h_color_zero_does_not_guarantee_identity_for_colored() -> None:
+def test_h_and_h_color_zero_matches_direct_cv2_call_for_colored() -> None:
     # Documented divergence: the BGR -> CIELAB -> BGR round trip alone can
-    # shift values by a small amount, independent of h_luminance/h_color.
+    # shift values, independent of h_luminance/h_color -- but the exact size
+    # of that shift is seed/image-dependent (verified directly: max diff 3
+    # for most sampled seeds, but 4 for at least one other), not a fixed
+    # universal bound. So this pins the wrapper's output to a direct cv2
+    # call instead of to any specific difference threshold.
     rng = np.random.default_rng(18)
     image = _make_bgr(rng)
+    before = image.copy()
 
     result = nl_means_denoise_colored(image, h_luminance=0.0, h_color=0.0)
+    expected = cv2.fastNlMeansDenoisingColored(
+        image, h=0.0, hColor=0.0, templateWindowSize=7, searchWindowSize=21
+    )
 
     assert not np.array_equal(result, image)
-    assert np.abs(result.astype(int) - image.astype(int)).max() <= 3
+    np.testing.assert_array_equal(result, expected)
+    np.testing.assert_array_equal(image, before)
+    assert result.shape == image.shape
+    assert result.dtype == image.dtype
 
 
 @pytest.mark.parametrize("func", _ALL_FUNCS, ids=_ALL_FUNC_NAMES)
@@ -481,13 +492,60 @@ def test_rejects_negative_search_window_size(func) -> None:
         func(image, search_window_size=-21)
 
 
-@pytest.mark.parametrize("func", _ALL_FUNCS, ids=_ALL_FUNC_NAMES)
-def test_rejects_search_smaller_than_template(func) -> None:
-    rng = np.random.default_rng(36)
-    image = _make_gray(rng) if func is nl_means_denoise else _make_bgr(rng)
+def test_search_smaller_than_template_matches_direct_cv2_call_grayscale() -> None:
+    # search_window_size < template_window_size is not rejected: these are
+    # two independent parameters (patch size for comparison vs. area
+    # searched for similar patch centers), and OpenCV produces real,
+    # different output for this combination -- verified directly it is not
+    # a no-op (1019/1024 pixels differ from the input, max diff 156, and
+    # differs from the search_window_size=7 result too).
+    rng = np.random.default_rng(1)
+    image = rng.integers(0, 256, (32, 32), dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="search_window_size"):
-        func(image, template_window_size=7, search_window_size=3)
+    result = nl_means_denoise(image, h=100, template_window_size=7, search_window_size=5)
+    expected = cv2.fastNlMeansDenoising(image, h=100, templateWindowSize=7, searchWindowSize=5)
+
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_search_smaller_than_template_matches_direct_cv2_call_colored() -> None:
+    # Same relaxation as the grayscale case above, for the colored function.
+    rng = np.random.default_rng(1)
+    image = rng.integers(0, 256, (32, 32, 3), dtype=np.uint8)
+
+    result = nl_means_denoise_colored(
+        image, h_luminance=100, h_color=100, template_window_size=7, search_window_size=5
+    )
+    expected = cv2.fastNlMeansDenoisingColored(
+        image, h=100, hColor=100, templateWindowSize=7, searchWindowSize=5
+    )
+
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_opencv_itself_canonicalizes_even_template_window_size_to_next_odd() -> None:
+    # Reference test documenting raw OpenCV behavior, not the wrapper: an
+    # even templateWindowSize is not a no-op, it is silently canonicalized
+    # to the next odd value. The wrapper still rejects even sizes outright
+    # -- see test_rejects_even_template_window_size -- because the value a
+    # caller passed would not be the value actually used.
+    rng = np.random.default_rng(43)
+    image = rng.integers(0, 256, (32, 32), dtype=np.uint8)
+
+    even = cv2.fastNlMeansDenoising(image, templateWindowSize=2)
+    odd = cv2.fastNlMeansDenoising(image, templateWindowSize=3)
+
+    np.testing.assert_array_equal(even, odd)
+
+
+def test_opencv_itself_canonicalizes_even_search_window_size_to_next_odd() -> None:
+    rng = np.random.default_rng(44)
+    image = rng.integers(0, 256, (32, 32), dtype=np.uint8)
+
+    even = cv2.fastNlMeansDenoising(image, searchWindowSize=20)
+    odd = cv2.fastNlMeansDenoising(image, searchWindowSize=21)
+
+    np.testing.assert_array_equal(even, odd)
 
 
 @pytest.mark.parametrize("func", _ALL_FUNCS, ids=_ALL_FUNC_NAMES)

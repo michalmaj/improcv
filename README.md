@@ -308,6 +308,8 @@ implementation) -- unlike the grayscale version, `h_luminance=0, h_color=0` does
 result identical to the input, since the BGR/CIELAB round-trip alone can shift values slightly.
 Larger `search_window_size` values can substantially increase execution time; `7`/`21`
 (`template_window_size`/`search_window_size`) are OpenCV's own recommended defaults, not hard limits.
+`template_window_size` and `search_window_size` are independent parameters -- there is no
+requirement that `search_window_size` be at least `template_window_size`.
 
 ## Status
 
