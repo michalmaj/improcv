@@ -291,6 +291,24 @@ verified directly that `sigma_r=0` leads to division by zero internally, and tha
 these ranges are unsupported by OpenCV's own contract (the parameters are stored as a C++ `float`,
 so extreme values can silently degrade to a useless result).
 
+Non-local means denoising:
+
+```python
+import improcv as im
+
+denoised = im.nl_means_denoise(gray)                # uint8 2D grayscale
+denoised_bgr = im.nl_means_denoise_colored(bgr)      # uint8 (H, W, 3) BGR
+```
+
+Both are `uint8`-only with no automatic conversion (grayscale/BGR/BGRA/2-channel input to the wrong
+function is rejected, not silently handled). Higher `h` (and `h_color` for the colored version)
+generally smooths more aggressively but can also remove real detail. `nl_means_denoise_colored`
+works internally in CIELAB (denoising luminance and color separately, like OpenCV's own
+implementation) -- unlike the grayscale version, `h_luminance=0, h_color=0` does **not** guarantee a
+result identical to the input, since the BGR/CIELAB round-trip alone can shift values slightly.
+Larger `search_window_size` values can substantially increase execution time; `7`/`21`
+(`template_window_size`/`search_window_size`) are OpenCV's own recommended defaults, not hard limits.
+
 ## Status
 
 `improcv` is in early development. `0.1.0a1` is designated as the first public release and covers

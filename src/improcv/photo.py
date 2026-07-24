@@ -44,6 +44,11 @@ def _require_valid_photo_image(image: np.ndarray) -> None:
     Unsupported channel layouts are rejected before the OpenCV call to avoid
     raw errors and build-dependent unsafe behavior observed for BGRA inputs.
     """
+    if image.ndim == 2:
+        raise ValueError(
+            "image must be a 3-channel BGR image, got a 2D grayscale image -- convert "
+            "first with improcv.ensure_bgr(image)"
+        )
     require_image_ndim(image, ndims=(3,))
     if image.shape[2] != 3:
         if image.shape[2] == 4:

@@ -181,9 +181,10 @@ def test_rejects_empty_image(func) -> None:
 
 @pytest.mark.parametrize("func", _FUNCS, ids=_FUNC_NAMES)
 def test_rejects_2d_grayscale(func) -> None:
+    # The message must point at improcv.ensure_bgr as the fix.
     image = np.zeros((10, 10), dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="3 dimensions"):
+    with pytest.raises(ValueError, match=r"ensure_bgr\(image\)"):
         func(image)
 
 
@@ -249,7 +250,7 @@ def test_validation_order_shape_before_dtype(func) -> None:
 def test_validation_order_image_before_sigma_s(func) -> None:
     image = np.zeros((10, 10), dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="3 dimensions"):
+    with pytest.raises(ValueError, match="ensure_bgr"):
         func(image, sigma_s=-5.0)
 
 
