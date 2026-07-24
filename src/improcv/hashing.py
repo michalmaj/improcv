@@ -88,10 +88,12 @@ def _bits_to_value(bits: np.ndarray) -> int:
     """Pack a row-major boolean grid into a single int: the first element (top-left,
     reading left-to-right then top-to-bottom) becomes the most significant bit.
 
-    This is improcv's own serialization contract -- it matches neither
-    `cv2.img_hash`'s packed-byte layout (LSB-first per byte, one 8-pixel image
-    row per byte) nor any third-party library's convention. See `PerceptualHash`
-    for the full contract.
+    This is improcv's own serialization contract. It coincides with the
+    popular `ImageHash` library's row-major, MSB-first hex convention for the
+    same bit grid, but that is a convention match, not an algorithm or object
+    model match -- see `PerceptualHash` for the full contract. It does not
+    match `cv2.img_hash`'s packed-byte layout (LSB-first per byte, one
+    8-pixel image row per byte).
     """
     bit_string = "".join("1" if b else "0" for b in bits.flatten())
     return int(bit_string, 2)
@@ -114,15 +116,22 @@ class PerceptualHash:
     non-comparable feature spaces, even though nothing about their bit length
     alone would reveal that.
 
-    Bit/hex serialization is improcv's own contract, not a reproduction of any
-    third-party library's: the hash's `hash_size x hash_size` bit grid is
-    read row-major (top-to-bottom, left-to-right), with the first bit as the
-    most significant bit of both the internal value and the `str()` hex
-    representation. For `uint8` input and `hash_size=8`, the underlying bit
-    *decisions* (which pixel/DCT coefficient is "above" the threshold) match
-    `cv2.img_hash.AverageHash`/`PHash` exactly -- but the serialized hex string
-    does not match `cv2.img_hash`'s own packed-byte layout, and raw byte
-    import/export is not offered.
+    Bit/hex serialization is improcv's own contract: the hash's
+    `hash_size x hash_size` bit grid is read row-major (top-to-bottom,
+    left-to-right), with the first bit as the most significant bit of both
+    the internal value and the `str()` hex representation. This ordering
+    happens to coincide with the popular `ImageHash` library's own row-major,
+    MSB-first hex convention for the same bit grid -- but that is a
+    convention match only, not an algorithm or compatibility match:
+    `ImageHash.average_hash`/`phash` values are usually different from
+    improcv's for the same image, since the underlying algorithms differ in
+    resize, thresholding, and (for pHash) the statistic used -- matching hex
+    ordering does not imply matching algorithm output. For `uint8` input and
+    `hash_size=8`, the underlying bit *decisions* (which pixel/DCT
+    coefficient is "above" the threshold) match `cv2.img_hash.AverageHash`/
+    `PHash` exactly -- but the serialized hex string does not match
+    `cv2.img_hash`'s own packed-byte layout, and raw byte import/export is
+    not offered.
 
     A perceptual hash is not a cryptographic hash: collisions (two visually
     different images producing the same or a very similar hash) are expected
@@ -308,8 +317,10 @@ def phash(image: ImageU8, hash_size: int = 8) -> PerceptualHash:
     with `cv2.INTER_LINEAR_EXACT`, convert BGR/BGRA to grayscale *after*
     resizing (see `_resize_then_grayscale`), convert to `float32`, compute the
     2D DCT (`cv2.dct`), take the top-left ``hash_size x hash_size`` block, zero
-    its DC term (position ``[0, 0]``), compute the mean of that block as a
-    `float64`, cast the mean to `float32` (matching the reference
+    its DC term (position ``[0, 0]``), compute the mean of that block with
+    `cv2.mean` (matching the reference implementation's `cv::mean`, not
+    `np.mean` -- verified to disagree with it in the last few bits for the
+    same input), cast the mean to `float32` (matching the reference
     implementation's own `float` storage), and set each bit to whether the
     corresponding block value is strictly greater than that `float32`
     threshold. The DC position still gets an output bit, from comparing its
@@ -360,13 +371,18 @@ def phash(image: ImageU8, hash_size: int = 8) -> PerceptualHash:
     dct = cv2.dct(grayf)
     block = dct[:hash_size, :hash_size].copy()
     block[0, 0] = 0.0
-    # cv::mean always accumulates in double, but the reference implementation
-    # stores the result back into a C++ float before comparing -- this cast
-    # is part of bit-for-bit compatibility with it, not incidental precision
-    # loss: see tests/test_hashing.py's dedicated regression test, which
-    # constructs a block where comparing against the uncast float64 mean
-    # flips a bit relative to comparing against this float32-cast one.
-    threshold = np.float32(np.mean(block, dtype=np.float64))
+    # Literal equivalent of the reference implementation's
+    # `cv::mean(topLeftDCT)[0]` followed by storing the result into a C++
+    # `float` -- cv2.mean (not np.mean) matters here: verified directly that
+    # cv2.mean and np.mean(..., dtype=np.float64) can disagree in their last
+    # few bits for the exact same float32 array (different internal
+    # summation), and the float32 cast is itself part of bit-for-bit
+    # compatibility, not incidental precision loss. See
+    # tests/test_hashing.py's dedicated regression test (through the public
+    # phash() call, via monkeypatched cv2.dct/cv2.mean), which locks in that
+    # both this specific function (cv2.mean, not np.mean) and this specific
+    # cast are load-bearing.
+    threshold = np.float32(cv2.mean(block)[0])
     bits = block > threshold
 
     value = _bits_to_value(bits)
