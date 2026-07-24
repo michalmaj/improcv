@@ -311,39 +311,57 @@ def test_average_hash_naive_round_half_up_would_disagree() -> None:
 
 
 def test_phash_threshold_float32_cast_flips_a_bit() -> None:
-    # Fixed-point search for a block where one entry exactly equals the
-    # float64 mean's nearest float32 representation, with that mean rounding
-    # UP to reach it -- the only configuration where comparing against the
-    # float64 mean vs. the float32-cast mean can differ (block entries are
-    # themselves float32, so no float32 value can lie strictly *between* a
-    # float64 value and its own nearest float32 representative -- equality
-    # at the rounded-up boundary is the only way to flip the strict `>`
-    # comparison). Uses this environment's own np.mean behavior throughout,
-    # so it's immune to the cross-platform summation-order issue above.
+    # Fixed-point search for a block where one entry exactly equals
+    # np.mean(block, dtype=np.float64)'s nearest float32 representation,
+    # with that mean rounding UP to reach it -- the only configuration where
+    # comparing against the float64 mean vs. the float32-cast mean can differ
+    # (block entries are themselves float32, so no float32 value can lie
+    # strictly *between* a float64 value and its own nearest float32
+    # representative -- equality at the rounded-up boundary is the only way
+    # to flip the strict `>` comparison).
+    #
+    # The fixed-point iteration below re-derives the target entry by calling
+    # np.mean on the actual 8x8 block itself, on every iteration, rather than
+    # computing an equivalent sum by hand -- an earlier version of this test
+    # computed the running sum via plain Python/numpy scalar arithmetic
+    # instead, which implicitly assumed that matched np.mean's own internal
+    # summation order for a 2D array; it usually does, but not provably so,
+    # and that assumption broke on CI (Linux, numpy version differing from
+    # local). Iterating on np.mean(block, ...) directly makes the fixed
+    # point self-consistent with whatever this environment's numpy actually
+    # computes, regardless of its internal summation algorithm.
     for seed in range(2000):
         rng = np.random.default_rng(seed)
         others = rng.uniform(-500, 500, 62).astype(np.float32)
-        s62 = float(others.astype(np.float64).sum())
+
+        block = np.zeros((8, 8), dtype=np.float32)
+        block.flat[1:63] = others
+        block[0, 0] = 0.0
 
         v = np.float32(0.0)
         for _ in range(50):
-            mean64_guess = (s62 + float(v)) / 64.0
+            block.flat[63] = v
+            mean64_guess = np.mean(block, dtype=np.float64)
             v_new = np.float32(mean64_guess)
             if v_new == v:
                 break
             v = v_new
-
-        block = np.zeros((8, 8), dtype=np.float32)
-        block.flat[1:63] = others
         block.flat[63] = v
-        block[0, 0] = 0.0
 
         threshold64 = np.mean(block, dtype=np.float64)
         threshold32 = np.float32(threshold64)
         if threshold32 == threshold64:
             continue
 
-        bits_f64 = block > threshold64
+        # block.astype(np.float64) is forced explicitly: comparing a float32
+        # array directly against a float64 *scalar* can silently downcast the
+        # scalar back to float32 first, under numpy's legacy (pre-NEP-50)
+        # type-promotion rules -- still the default on numpy < 2.0 -- which
+        # would make this comparison identical to the float32 one below and
+        # defeat the entire point of the test. Production code never hits
+        # this: phash() already casts its threshold to float32 *before*
+        # comparing, so both operands there are unambiguously float32.
+        bits_f64 = block.astype(np.float64) > threshold64
         bits_f32 = block > threshold32
         if not np.array_equal(bits_f64, bits_f32):
             return
