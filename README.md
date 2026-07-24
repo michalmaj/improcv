@@ -268,6 +268,29 @@ for `hash_size=8` -- but not its packed-byte serialization, and not other
 libraries' (e.g. `ImageHash`) genuinely different, incompatible variants of
 the same algorithm names.
 
+Photo/creative single-image effects:
+
+```python
+import improcv as im
+
+# uint8 only, exactly 3-channel BGR -- no automatic grayscale/BGRA handling.
+bgr = im.ensure_bgr(gray)          # convert grayscale first if needed
+sketch = im.pencil_sketch(bgr)     # sketch.grayscale: (H, W); sketch.color: (H, W, 3)
+stylized = im.stylize(bgr)
+enhanced = im.detail_enhance(bgr)
+
+# BGRA must be handled explicitly before calling -- ensure_bgr does not
+# accept it, since there's no single correct way to turn alpha into BGR:
+bgr_from_bgra = bgra[..., :3]                    # drop alpha, or
+# bgr_from_bgra = your_own_alpha_compositing(bgra)  # composite onto a background
+```
+
+`sigma_s`/`sigma_r` (and `pencil_sketch`'s `shade_factor`) are restricted to the ranges OpenCV's
+own API documents (`0 < sigma_s <= 200`, `0 < sigma_r <= 1`, `0 <= shade_factor <= 0.1`) --
+verified directly that `sigma_r=0` leads to division by zero internally, and that values beyond
+these ranges are unsupported by OpenCV's own contract (the parameters are stored as a C++ `float`,
+so extreme values can silently degrade to a useless result).
+
 ## Status
 
 `improcv` is in early development. `0.1.0a1` is designated as the first public release and covers

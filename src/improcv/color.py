@@ -11,6 +11,7 @@ from improcv.types import Image
 __all__ = [
     "bgr_to_rgb",
     "rgb_to_bgr",
+    "ensure_bgr",
     "ensure_gray",
     "to_hsv",
     "to_lab",
@@ -75,6 +76,34 @@ def ensure_gray(image: Image) -> Image:
     require_channels(image, 3)
     require_dtype(image, _CHANNEL_REORDER_DTYPES)
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def ensure_bgr(image: Image) -> Image:
+    """Return a 3-channel BGR version of `image`.
+
+    Accepts either an already-3-channel BGR image or a grayscale image;
+    always returns a new array, never a view into `image`. BGRA is
+    rejected -- there is no single correct way to turn a 4th (alpha)
+    channel into BGR (drop it? composite onto what background?), so the
+    caller must decide explicitly (e.g. ``image[..., :3]`` to drop it)
+    before calling this function.
+
+    Raises
+    ------
+    ValueError
+        If `image` does not have 2 or 3 dimensions, is empty, or (for a
+        3D input) is not exactly 3-channel -- this also rejects
+        `(H, W, 1)`, 2-channel, and BGRA (`(H, W, 4)`) input.
+    TypeError
+        If a grayscale `image` does not have dtype ``uint8``, ``uint16``,
+        or ``float32``.
+    """
+    require_image_ndim(image)
+    if image.ndim == 2:
+        require_dtype(image, _CHANNEL_REORDER_DTYPES)
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    require_channels(image, 3)
+    return image.copy()
 
 
 def to_hsv(image: Image) -> Image:

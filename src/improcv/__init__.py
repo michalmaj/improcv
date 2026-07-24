@@ -45,7 +45,7 @@ from improcv.analysis import (
     moments,
 )
 from improcv.barcode import Barcode, decode_barcodes
-from improcv.color import bgr_to_rgb, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
+from improcv.color import bgr_to_rgb, ensure_bgr, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
 from improcv.contours import (
     ApproxMethod,
     BoundingBox,
@@ -108,6 +108,7 @@ from improcv.morphology import (
     threshold,
     tophat,
 )
+from improcv.photo import PencilSketchResult, detail_enhance, pencil_sketch, stylize
 from improcv.pixels import (
     adjust_brightness,
     adjust_contrast,
@@ -180,6 +181,7 @@ __all__ = [
     "MeanStdDevResult",
     "MinMaxResult",
     "Moments",
+    "PencilSketchResult",
     "PerceptualHash",
     "PerceptualHashAlgorithm",
     "QRCode",
@@ -211,6 +213,7 @@ __all__ = [
     "decode_barcodes",
     "decode_qr_code",
     "decode_qr_codes",
+    "detail_enhance",
     "detect_and_compute",
     "detect_blob_keypoints",
     "detect_fast_keypoints",
@@ -219,6 +222,7 @@ __all__ = [
     "distance_transform",
     "draw_bounding_boxes",
     "draw_contours",
+    "ensure_bgr",
     "ensure_gray",
     "erode",
     "find_contours",
@@ -253,6 +257,7 @@ __all__ = [
     "morph_open",
     "mse",
     "pad",
+    "pencil_sketch",
     "phash",
     "psnr",
     "resize",
@@ -262,6 +267,7 @@ __all__ = [
     "sobel_edge",
     "sort_contours",
     "ssim",
+    "stylize",
     "threshold",
     "to_hsv",
     "to_lab",
