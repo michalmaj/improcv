@@ -302,47 +302,53 @@ def test_average_hash_naive_round_half_up_would_disagree() -> None:
 
 # --- phash: float32-cast threshold regression (synthetic, not from an image --
 # see the PR description for why a natural uint8 image triggering this could
-# not be found despite an extensive search) ---
+# not be found despite an extensive search). Derived at test-run time (not
+# hardcoded) because the exact floating-point sum of 63 float32 values is
+# sensitive to numpy's internal summation order, which can differ across
+# numpy versions/platforms at the single-ULP level that this edge case lives
+# on -- a hardcoded block solved on one platform is not guaranteed to still
+# sit on the float32-rounding boundary on another. ---
 
 
 def test_phash_threshold_float32_cast_flips_a_bit() -> None:
-    # Directly constructed via a fixed-point search: block value at [7, 7]
-    # exactly equals the float64 mean's nearest float32 representation,
-    # and that mean rounds UP to reach it -- the only configuration where
-    # comparing against the float64 mean vs the float32-cast mean can differ
-    # (block entries are themselves float32, so no float32 value can lie
-    # strictly *between* a float64 value and its own nearest float32
-    # representative -- equality at the rounded-up boundary is the only way
-    # to flip the strict `>` comparison).
-    block = np.array(
-        [
-            [0.0, 11.821625, 450.46368, -355.8404],
-            [448.64944, -188.16855, -76.67355, 327.7026],
-            [-90.800865, 49.59369, -472.4409, 253.5131],
-            [38.143314, -170.26828, 288.4287, -196.80518],
-            [-46.50211, -365.9583, -96.88702, -296.54477],
-            [-237.68666, 250.36467, -219.59125, -14.809026],
-            [480.7372, 461.6572, 224.78995, 41.226856],
-            [-223.1088, -339.348, 469.9254, 16.068586],
-            [-384.1344, 123.48975, 276.6831, 113.0033],
-            [417.2977, -460.40714, 28.589264, -40.664116],
-            [-437.65042, 141.32817, 352.63284, 92.94102],
-            [-239.90256, 339.88153, 9.495881, 10.888885],
-            [253.03021, -352.07797, 319.6267, 183.28691],
-            [287.09695, -308.38373, 302.36417, -308.6761],
-            [-418.4474, 355.22696, 361.2835, 376.5371],
-            [-28.09028, -225.95161, -492.90817, 16.96893],
-        ],
-        dtype=np.float32,
-    ).reshape(8, 8)
-    threshold64 = np.mean(block, dtype=np.float64)
-    threshold32 = np.float32(threshold64)
+    # Fixed-point search for a block where one entry exactly equals the
+    # float64 mean's nearest float32 representation, with that mean rounding
+    # UP to reach it -- the only configuration where comparing against the
+    # float64 mean vs. the float32-cast mean can differ (block entries are
+    # themselves float32, so no float32 value can lie strictly *between* a
+    # float64 value and its own nearest float32 representative -- equality
+    # at the rounded-up boundary is the only way to flip the strict `>`
+    # comparison). Uses this environment's own np.mean behavior throughout,
+    # so it's immune to the cross-platform summation-order issue above.
+    for seed in range(2000):
+        rng = np.random.default_rng(seed)
+        others = rng.uniform(-500, 500, 62).astype(np.float32)
+        s62 = float(others.astype(np.float64).sum())
 
-    assert threshold32 != threshold64  # the cast must actually change the value
-    bits_f64 = block > threshold64
-    bits_f32 = block > threshold32
-    assert not np.array_equal(bits_f64, bits_f32)
-    assert bits_f64[7, 7] != bits_f32[7, 7]
+        v = np.float32(0.0)
+        for _ in range(50):
+            mean64_guess = (s62 + float(v)) / 64.0
+            v_new = np.float32(mean64_guess)
+            if v_new == v:
+                break
+            v = v_new
+
+        block = np.zeros((8, 8), dtype=np.float32)
+        block.flat[1:63] = others
+        block.flat[63] = v
+        block[0, 0] = 0.0
+
+        threshold64 = np.mean(block, dtype=np.float64)
+        threshold32 = np.float32(threshold64)
+        if threshold32 == threshold64:
+            continue
+
+        bits_f64 = block > threshold64
+        bits_f32 = block > threshold32
+        if not np.array_equal(bits_f64, bits_f32):
+            return
+
+    pytest.fail("could not construct a float32-cast-sensitive phash threshold block")
 
 
 # --- PerceptualHash / PerceptualHashAlgorithm ---
