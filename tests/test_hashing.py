@@ -1,11 +1,17 @@
 import dataclasses
 import math
 
+import cv2
 import numpy as np
 import pytest
 
 import improcv as im
-from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm, average_hash, phash
+from improcv.hashing import (
+    PerceptualHash,
+    PerceptualHashAlgorithm,
+    average_hash,
+    phash,
+)
 
 _FUNCS = [average_hash, phash]
 _FUNC_NAMES = ["average_hash", "phash"]
@@ -300,73 +306,51 @@ def test_average_hash_naive_round_half_up_would_disagree() -> None:
     assert result._value != naive_value
 
 
-# --- phash: float32-cast threshold regression (synthetic, not from an image --
-# see the PR description for why a natural uint8 image triggering this could
-# not be found despite an extensive search). Derived at test-run time (not
-# hardcoded) because the exact floating-point sum of 63 float32 values is
-# sensitive to numpy's internal summation order, which can differ across
-# numpy versions/platforms at the single-ULP level that this edge case lives
-# on -- a hardcoded block solved on one platform is not guaranteed to still
-# sit on the float32-rounding boundary on another. ---
+# --- phash: threshold computation regression, exercised through the actual
+# public phash() call via monkeypatched cv2.dct/cv2.mean (not a standalone
+# numeric assertion disconnected from production code -- an earlier version
+# of this test only checked the arithmetic in isolation and passed unchanged
+# even after removing the float32 cast from phash() itself). ---
 
 
-def test_phash_threshold_float32_cast_flips_a_bit() -> None:
-    # Fixed-point search for a block where one entry exactly equals
-    # np.mean(block, dtype=np.float64)'s nearest float32 representation,
-    # with that mean rounding UP to reach it -- the only configuration where
-    # comparing against the float64 mean vs. the float32-cast mean can differ
-    # (block entries are themselves float32, so no float32 value can lie
-    # strictly *between* a float64 value and its own nearest float32
-    # representative -- equality at the rounded-up boundary is the only way
-    # to flip the strict `>` comparison).
-    #
-    # The fixed-point iteration below re-derives the target entry by calling
-    # np.mean on the actual 8x8 block itself, on every iteration, rather than
-    # computing an equivalent sum by hand -- an earlier version of this test
-    # computed the running sum via plain Python/numpy scalar arithmetic
-    # instead, which implicitly assumed that matched np.mean's own internal
-    # summation order for a 2D array; it usually does, but not provably so,
-    # and that assumption broke on CI (Linux, numpy version differing from
-    # local). Iterating on np.mean(block, ...) directly makes the fixed
-    # point self-consistent with whatever this environment's numpy actually
-    # computes, regardless of its internal summation algorithm.
-    for seed in range(2000):
-        rng = np.random.default_rng(seed)
-        others = rng.uniform(-500, 500, 62).astype(np.float32)
+def test_phash_threshold_cast_is_load_bearing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # coefficient sits exactly at mean64's nearest float32 representative,
+    # with mean64 approaching it from below (rounds UP when cast) -- the only
+    # configuration where comparing against the uncast float64 mean vs. the
+    # float32-cast mean can differ for a `>` comparison against that exact
+    # value. These two scalar comparisons demonstrate that directly: they are
+    # ordinary numpy scalar-to-scalar comparisons (not array-to-scalar), so
+    # unlike `block > threshold` below they aren't affected by numpy's
+    # array/scalar type-promotion rules (which changed between numpy's
+    # "legacy" and NEP-50 promotion modes) -- confirmed identical on both.
+    coefficient = np.float32(1.0)
+    mean64 = np.nextafter(np.float64(1.0), np.float64(0.0))
+    assert coefficient > mean64  # without the cast: true, at float64 precision
+    assert not coefficient > np.float32(mean64)  # with the cast: false (now equal)
 
-        block = np.zeros((8, 8), dtype=np.float32)
-        block.flat[1:63] = others
-        block[0, 0] = 0.0
+    hash_size = 8
+    dct_size = hash_size * 4  # matches phash's internal _PHASH_HIGHFREQ_FACTOR
 
-        v = np.float32(0.0)
-        for _ in range(50):
-            block.flat[63] = v
-            mean64_guess = np.mean(block, dtype=np.float64)
-            v_new = np.float32(mean64_guess)
-            if v_new == v:
-                break
-            v = v_new
-        block.flat[63] = v
+    # A synthetic "DCT output": every AC coefficient is 0 except the one at
+    # the bottom-right corner of the hash_size x hash_size block, set to
+    # `coefficient`. cv2.dct's real behavior doesn't matter here -- it's
+    # replaced outright, so the actual pixel content of `image` below is
+    # irrelevant too.
+    fake_dct = np.zeros((dct_size, dct_size), dtype=np.float32)
+    fake_dct[hash_size - 1, hash_size - 1] = coefficient
+    monkeypatch.setattr(cv2, "dct", lambda _src: fake_dct)
+    # cv2.mean's real return value doesn't matter either -- forcing it to
+    # `mean64` regardless of the (fake) block's actual content isolates the
+    # cast/comparison behavior precisely at the boundary constructed above.
+    monkeypatch.setattr(cv2, "mean", lambda _src: (mean64, 0.0, 0.0, 0.0))
 
-        threshold64 = np.mean(block, dtype=np.float64)
-        threshold32 = np.float32(threshold64)
-        if threshold32 == threshold64:
-            continue
+    image = np.zeros((dct_size, dct_size), dtype=np.uint8)
+    result = phash(image, hash_size=hash_size)
 
-        # block.astype(np.float64) is forced explicitly: comparing a float32
-        # array directly against a float64 *scalar* can silently downcast the
-        # scalar back to float32 first, under numpy's legacy (pre-NEP-50)
-        # type-promotion rules -- still the default on numpy < 2.0 -- which
-        # would make this comparison identical to the float32 one below and
-        # defeat the entire point of the test. Production code never hits
-        # this: phash() already casts its threshold to float32 *before*
-        # comparing, so both operands there are unambiguously float32.
-        bits_f64 = block.astype(np.float64) > threshold64
-        bits_f32 = block > threshold32
-        if not np.array_equal(bits_f64, bits_f32):
-            return
-
-    pytest.fail("could not construct a float32-cast-sensitive phash threshold block")
+    # The bottom-right block position is the *last* element in row-major
+    # flattening, which PerceptualHash's own bit-packing convention (see
+    # _bits_to_value) maps to the least significant bit of the value.
+    assert result._value & 1 == 0
 
 
 # --- PerceptualHash / PerceptualHashAlgorithm ---

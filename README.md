@@ -249,7 +249,7 @@ a = im.average_hash(original)
 b = im.phash(compressed)              # a different algorithm -- see below
 c = im.phash(compressed_but_blurred)
 
-similarity = c.distance(im.phash(compressed))  # Hamming distance, an int
+distance = c.distance(im.phash(compressed))    # Hamming distance, an int -- lower means more similar
 print(c)                                       # fixed-width, lowercase hex
 
 # a.distance(b) would raise ValueError: average_hash and phash are different,
