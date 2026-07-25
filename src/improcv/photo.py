@@ -1,4 +1,4 @@
-"""Photo/creative single-image effects: pencil sketch, stylization, detail enhancement."""
+"""Photo and creative operations: stylization, enhancement, and image compositing."""
 
 from __future__ import annotations
 

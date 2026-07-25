@@ -317,6 +317,37 @@ region can produce little or no visible change, unlike the "cut and paste" effec
 for loosely-drawn masks); `"monochrome_transfer"` transfers `source`'s luminance structure rather
 than its color. The result always has `destination`'s shape and dtype.
 
+HDR-related operations (`improcv.hdr`) are split into three distinct techniques, not one "HDR"
+feature: **exposure fusion** (below) blends a stack of differently-exposed images directly, without
+reconstructing any physical light measurement; a future **radiance HDR merge** will reconstruct an
+actual HDR radiance map from a stack plus its exposure times; a future **tone mapping** will compress
+that radiance map's dynamic range back down for display. Only exposure fusion is implemented so far.
+
+Exposure fusion:
+
+```python
+import numpy as np
+import improcv as im
+
+fused = im.fuse_exposures(images)  # images: list/tuple of uint8, same shape, at least 2
+
+# fused is float32, nominally close to [0, 1] but not clipped to it --
+# convert explicitly before saving/displaying as uint8:
+display = np.clip(fused, 0.0, 1.0)
+display_u8 = np.round(display * 255.0).astype(np.uint8)
+```
+
+`fuse_exposures` wraps OpenCV's Mertens exposure fusion: it blends the stack directly (in the domain
+of a Laplacian pyramid, weighted by local contrast/saturation/well-exposedness), producing a single
+well-exposed image -- it does **not** need exposure times and does **not** produce a physical HDR
+radiance map, so its result does not need (and should not go through) tone mapping. `images` must be
+a real `Sequence` (list/tuple, or another `collections.abc.Sequence`) of at least 2 `uint8` images,
+either all 2D grayscale or all 3D BGR `(H, W, 3)` with identical shape -- a single stacked array,
+`(H, W, 1)`, 2-channel, and BGRA are all rejected, with no automatic conversion. `contrast_weight`/
+`saturation_weight`/`exposure_weight` must be non-negative and finite; `0` is legal for all three
+(it's `exposure_weight`'s own default). Repeated calls with identical input are not guaranteed to be
+bit-for-bit identical -- OpenCV's implementation uses internal parallel summation.
+
 Non-local means denoising:
 
 ```python
