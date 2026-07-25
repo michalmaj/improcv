@@ -229,10 +229,11 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   (OpenCV's implementation uses internal parallel summation), on both OpenCV versions -- this is not
   presented as a guarantee in either direction. No new runtime dependency.
 - `improcv.hdr.merge_hdr_debevec`/`merge_hdr_robertson`, Phase 4 slice 7 (radiance HDR merge -- the
-  second of three planned HDR-related slices; camera-response calibration and tone mapping remain
-  separate, later slices): wrap `cv2.createMergeDebevec`/`cv2.createMergeRobertson`, in base
-  `opencv-python`, no contrib. Unlike `fuse_exposures`, this reconstructs a physical HDR radiance map
-  from the image stack **and** its exposure times, via a weighted log-average (Debevec) or weighted-
+  second of three planned HDR-related slices; camera-response calibration is a separate slice below,
+  tone mapping remains separate and not yet designed): wrap `cv2.createMergeDebevec`/
+  `cv2.createMergeRobertson`, in base `opencv-python`, no contrib. Unlike `fuse_exposures`, this
+  reconstructs a physical HDR radiance map from the image stack **and** its exposure times, via a
+  weighted log-average (Debevec) or weighted-
   linear (Robertson) combination of the camera response -- the two are different algorithms, not
   interchangeable variants, and are not guaranteed to produce comparable absolute radiance scales for
   the same input. `images` share `fuse_exposures`' stack contract (real `Sequence`, at least 2,
@@ -276,6 +277,45 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `RuntimeError` otherwise (the same postcondition pattern now also applied to `fuse_exposures`, see
   below). Unlike `fuse_exposures`, both merge algorithms are bit-deterministic across repeated calls
   with identical arguments, verified directly on both OpenCV 4.13 and 5.0. No new runtime dependency.
+- `improcv.hdr.calibrate_camera_response_debevec`/`calibrate_camera_response_robertson`, Phase 4
+  slice 8 (camera-response calibration -- the last of the radiance-HDR slices; tone mapping remains
+  separate and not yet designed): wrap `cv2.createCalibrateDebevec`/`cv2.createCalibrateRobertson`,
+  in base `opencv-python`, no contrib. Their output is meant for `merge_hdr_debevec`/
+  `merge_hdr_robertson`'s `response_curve` parameter; neither merge function calibrates implicitly,
+  matching the existing "no hidden calibration" contract. Unlike the merge functions, calibration is
+  **`uint8`-only** -- verified directly, in OpenCV's own C++ source, that both calibrators assert this
+  unconditionally. `calibrate_camera_response_debevec` accepts grayscale or BGR (its per-channel,
+  smoothness-regularized SVD solve has no hardcoded channel-count assumption, unlike `MergeDebevec`'s
+  buggy default-response path); `calibrate_camera_response_robertson` is BGR-only, rejecting grayscale
+  explicitly with a message pointing at the Debevec calibrator, since verified directly that
+  `cv2.CalibrateRobertson` raises a raw, unhelpful error for anything else. `samples`
+  (`CalibrateDebevec`) is a positive, `int32`-range integer; for the default grid-sampling mode
+  (`random_sampling=False`), this project's own validator replicates OpenCV's exact grid formula
+  (`x_points = int(sqrt(samples * width / height))`, `y_points = samples // x_points`) to reject a
+  `samples` value with no valid grid for the image size *before* calling OpenCV, since verified
+  directly that OpenCV itself raises a raw, unindexed `CV_Assert` there -- `samples` is only ever a
+  *target* count in this mode (verified directly: `samples=4` and `samples=5` can round to the
+  identical grid via integer truncation). For `random_sampling=True`, no grid or pixel-count bound
+  applies, matching OpenCV's own with-replacement sampling; that mode has no seed parameter in
+  OpenCV's own API, so its result is not guaranteed reproducible. `smoothness` (`CalibrateDebevec`'s
+  `lambda`) must be strictly positive and `float32`-safe -- verified directly that `smoothness=0` can
+  produce an `inf`-valued curve, and that `NaN`/`inf` reaching OpenCV's internal SVD solver triggers
+  low-level LAPACK warnings rather than a clean error, so both are rejected before ever calling
+  OpenCV. `max_iterations` (`CalibrateRobertson`) is a positive, `int32`-range integer (`0` rejected
+  as a misleading no-op: verified directly that it silently returns the untouched initial linear
+  response). `threshold` (`CalibrateRobertson`) must be non-negative and `float32`-safe, but --
+  unlike every other float32-safe parameter in this module -- a positive value underflowing to `0.0f`
+  is accepted rather than rejected, since `threshold=0` is itself a legal value (it only disables
+  early stopping, not iteration itself). **Real finding, not hypothetical**: verified directly that
+  `CalibrateRobertson`'s per-intensity-level histogram normalization divides by the count of pixels
+  observed at each of the 256 levels across the whole stack, so any level that never appears yields
+  `NaN` at that entry -- an all-black or all-white image stack (or one with very few distinct
+  intensity values) therefore can never produce a finite curve here, regardless of image size, while
+  `calibrate_camera_response_debevec`'s smoothness regularization handles the same stack finitely.
+  Neither degenerate case is heuristically rejected before calling OpenCV; both go through the same
+  `RuntimeError` postcondition as any other non-finite result. `exposure_times` reuses the existing,
+  already-verified validator shared with the merge functions (fresh, contiguous `float32` array;
+  strictly positive; no automatic reordering). No new runtime dependency.
 
 ### Changed
 

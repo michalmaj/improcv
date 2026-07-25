@@ -357,34 +357,47 @@ import improcv as im
 hdr = im.merge_hdr_debevec(images, exposure_times)  # or im.merge_hdr_robertson(...)
 ```
 
-With a response curve (a future, separate calibration step will produce one -- for now, any
-correctly-shaped `float32` `ndarray` can be passed through):
+With a calibrated response curve:
 
 ```python
+response = im.calibrate_camera_response_debevec(images, exposure_times)
 hdr = im.merge_hdr_debevec(images, exposure_times, response_curve=response)
+
+# or the Robertson equivalent:
+response = im.calibrate_camera_response_robertson(images, exposure_times)
+hdr = im.merge_hdr_robertson(images, exposure_times, response_curve=response)
 ```
 
 `images[i]` and `exposure_times[i]` are paired by index -- neither is ever reordered. All exposure
 times must use one consistent unit (conventionally seconds): uniformly rescaling every time by a
 constant factor rescales the entire output radiance map by the reciprocal of that factor. Not passing
-`response_curve` does **not** calibrate anything -- OpenCV uses a fixed linear response instead. The
-output is a raw radiance map (`float32`, typically ranging far beyond `[0, 1]`, not clipped or
-normalized) -- it is **not** display-ready and needs tone mapping (not yet implemented) before it can
-be saved or shown; do not write it directly as a `uint8` image. **Both functions accept BGR only --
-grayscale is not supported by either.** `merge_hdr_robertson` raises a raw `cv2.error` for grayscale
-regardless of dtype, verified directly. `merge_hdr_debevec`'s own default (no explicit
-`response_curve`) linear-response construction has a confirmed bug in OpenCV's own C++ source that
-corrupts memory for a genuinely 1-channel array -- undefined behavior that happens not to crash on
-some platforms but crashed the process outright (a non-catchable native abort) in this project's own
-CI on another, so grayscale is rejected unconditionally for both functions rather than only in the
-specific triggering case. `uint8`, `uint16`, and `float32` are all accepted for BGR (`float32` values
-must be finite and within `[0, 1]`). `uint16`/`float32` stacks use a 65536-entry response curve,
-`uint8` a 256-entry one -- a future calibration step will be `uint8`-only, so its output will pair
-directly with a `uint8` merge, not automatically with `uint16`/`float32`. `uint16`/`float32`
-additionally require an OpenCV build that supports them for HDR merge -- verified directly that
-OpenCV `4.9.0` (this project's documented minimum) only supports `uint8` here; a clear `ValueError`
-is raised instead of a raw OpenCV error on an older build.
-Exposure alignment and ghost removal are not performed -- the input stack is assumed already aligned.
+`response_curve` does **not** calibrate anything -- calibration is always an explicit, separate step
+you call yourself; OpenCV uses a fixed linear response instead if you don't. The output is a raw
+radiance map (`float32`, typically ranging far beyond `[0, 1]`, not clipped or normalized) -- it is
+**not** display-ready and needs tone mapping (not yet implemented) before it can be saved or shown;
+do not write it directly as a `uint8` image. **Both merge functions accept BGR only -- grayscale is
+not supported by either.** `merge_hdr_robertson` raises a raw `cv2.error` for grayscale regardless of
+dtype, verified directly. `merge_hdr_debevec`'s own default (no explicit `response_curve`)
+linear-response construction has a confirmed bug in OpenCV's own C++ source that corrupts memory for
+a genuinely 1-channel array -- undefined behavior that happens not to crash on some platforms but
+crashed the process outright (a non-catchable native abort) in this project's own CI on another, so
+grayscale is rejected unconditionally for both merge functions rather than only in the specific
+triggering case. `uint8`, `uint16`, and `float32` are all accepted for BGR merge (`float32` values
+must be finite and within `[0, 1]`). `uint16`/`float32` additionally require an OpenCV build that
+supports them for HDR merge -- verified directly that OpenCV `4.9.0` (this project's documented
+minimum) only supports `uint8` here; a clear `ValueError` is raised instead of a raw OpenCV error on
+an older build. **Calibration itself is always `uint8`-only** (for both algorithms), so its output is
+always a 256-entry curve -- it pairs directly with a `uint8` merge, not automatically with a
+`uint16`/`float32` one. `calibrate_camera_response_debevec` accepts grayscale *or* BGR;
+`calibrate_camera_response_robertson` is **BGR only** (raises a clear error pointing at the Debevec
+calibrator for a grayscale stack). `calibrate_camera_response_debevec`'s `random_sampling=True`
+samples pixel locations randomly with no seed control in OpenCV's own API -- its result is not
+guaranteed reproducible across calls. `calibrate_camera_response_robertson` needs a reasonably
+diverse intensity histogram to produce a finite curve at all: verified directly that an all-black or
+all-white image stack (or one with very few distinct intensity values) deterministically raises
+`RuntimeError` here, regardless of image size, while the same stack calibrates finitely with the
+Debevec algorithm. Neither calibrator performs exposure alignment or ghost removal -- the input stack
+is assumed already aligned, for both calibration and merge.
 
 Non-local means denoising:
 

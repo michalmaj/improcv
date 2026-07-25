@@ -90,7 +90,13 @@ from improcv.filters import (
     median_blur,
 )
 from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm, average_hash, phash
-from improcv.hdr import fuse_exposures, merge_hdr_debevec, merge_hdr_robertson
+from improcv.hdr import (
+    calibrate_camera_response_debevec,
+    calibrate_camera_response_robertson,
+    fuse_exposures,
+    merge_hdr_debevec,
+    merge_hdr_robertson,
+)
 from improcv.hough import (
     Circle,
     HoughCircleMethod,
@@ -214,6 +220,8 @@ __all__ = [
     "bitwise_or",
     "blackhat",
     "bounding_boxes",
+    "calibrate_camera_response_debevec",
+    "calibrate_camera_response_robertson",
     "center_crop",
     "clahe",
     "connected_components",

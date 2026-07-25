@@ -7,7 +7,13 @@ import pytest
 
 import improcv as im
 import improcv.hdr as hdr_module
-from improcv.hdr import fuse_exposures, merge_hdr_debevec, merge_hdr_robertson
+from improcv.hdr import (
+    calibrate_camera_response_debevec,
+    calibrate_camera_response_robertson,
+    fuse_exposures,
+    merge_hdr_debevec,
+    merge_hdr_robertson,
+)
 
 _WEIGHT_NAMES = ["contrast_weight", "saturation_weight", "exposure_weight"]
 
@@ -1435,6 +1441,887 @@ def test_merge_hdr_never_reaches_opencv_for_invalid_stack(
     assert not called
 
 
+# --- calibrate_camera_response_debevec / _robertson: happy paths ---
+
+_CALIBRATE_FUNCS = [calibrate_camera_response_debevec, calibrate_camera_response_robertson]
+_CALIBRATE_FUNC_NAMES = ["calibrate_camera_response_debevec", "calibrate_camera_response_robertson"]
+_CV2_CALIBRATE_FACTORY = {
+    calibrate_camera_response_debevec: cv2.createCalibrateDebevec,
+    calibrate_camera_response_robertson: cv2.createCalibrateRobertson,
+}
+
+
+def test_calibrate_debevec_accepts_grayscale() -> None:
+    rng = np.random.default_rng(200)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=0)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES)
+
+    assert result.shape == (256, 1)
+    assert result.dtype == np.float32
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_debevec_accepts_bgr() -> None:
+    rng = np.random.default_rng(201)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES)
+
+    assert result.shape == (256, 1, 3)
+    assert result.dtype == np.float32
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_debevec_default_parameters() -> None:
+    rng = np.random.default_rng(202)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES)
+    expected = cv2.createCalibrateDebevec().process(
+        images, np.array(_DEFAULT_TIMES, dtype=np.float32)
+    )
+
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_calibrate_robertson_accepts_bgr() -> None:
+    rng = np.random.default_rng(203)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+
+    assert result.shape == (256, 1, 3)
+    assert result.dtype == np.float32
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_robertson_default_parameters() -> None:
+    rng = np.random.default_rng(204)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+    expected = cv2.createCalibrateRobertson().process(
+        images, np.array(_DEFAULT_TIMES, dtype=np.float32)
+    )
+
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_calibrate_robertson_rejects_grayscale_with_debevec_suggestion() -> None:
+    rng = np.random.default_rng(205)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=0)
+
+    with pytest.raises(ValueError, match="calibrate_camera_response_debevec"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+
+
+def test_calibrate_robertson_never_reaches_opencv_for_grayscale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def boom():
+        nonlocal called
+        called = True
+        raise AssertionError("cv2 must not be called for a grayscale Robertson calibration")
+
+    monkeypatch.setattr(cv2, "createCalibrateRobertson", boom)
+
+    rng = np.random.default_rng(206)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=0)
+    with pytest.raises(ValueError, match="grayscale"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+    assert not called
+
+
+# --- calibrate_camera_response_debevec: samples ---
+
+
+def test_calibrate_debevec_accepts_samples_1() -> None:
+    rng = np.random.default_rng(207)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=1)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_debevec_accepts_numpy_integer_samples() -> None:
+    rng = np.random.default_rng(208)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_debevec(
+        images,
+        _DEFAULT_TIMES,
+        samples=np.int32(70),  # type: ignore[arg-type]
+    )
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_debevec_rejects_bool_samples() -> None:
+    rng = np.random.default_rng(209)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(TypeError):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=True)
+
+
+def test_calibrate_debevec_rejects_zero_samples() -> None:
+    rng = np.random.default_rng(210)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="positive"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=0)
+
+
+def test_calibrate_debevec_rejects_negative_samples() -> None:
+    rng = np.random.default_rng(211)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="positive"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=-5)
+
+
+def test_calibrate_debevec_rejects_samples_beyond_int32_range() -> None:
+    rng = np.random.default_rng(212)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="int32"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=2**31)
+
+
+def test_calibrate_debevec_grid_formula_landscape() -> None:
+    rng = np.random.default_rng(213)
+    images = _make_hdr_images(rng, dtype=np.uint8, height=20, width=40, channels=3)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=70)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_debevec_grid_formula_portrait() -> None:
+    rng = np.random.default_rng(214)
+    images = _make_hdr_images(rng, dtype=np.uint8, height=40, width=20, channels=3)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=70)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_debevec_equivalent_samples_produce_identical_grid() -> None:
+    # Verified directly against raw OpenCV: samples=4 and samples=5 round to
+    # the identical 2x2 grid on a square image via integer truncation.
+    rng = np.random.default_rng(215)
+    images = _make_hdr_images(rng, dtype=np.uint8, height=32, width=32, channels=3)
+
+    result_4 = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=4)
+    result_5 = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=5)
+
+    np.testing.assert_array_equal(result_4, result_5)
+
+
+def test_calibrate_debevec_rejects_samples_too_large_for_grid() -> None:
+    rng = np.random.default_rng(216)
+    images = _make_hdr_images(rng, dtype=np.uint8, height=20, width=24, channels=3)
+
+    with pytest.raises(ValueError, match="sampling grid"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=10**6)
+
+
+def test_calibrate_debevec_never_reaches_opencv_for_samples_too_large_for_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def boom(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("cv2 must not be called for a samples value with no valid grid")
+
+    monkeypatch.setattr(cv2, "createCalibrateDebevec", boom)
+
+    rng = np.random.default_rng(217)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    with pytest.raises(ValueError, match="sampling grid"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=10**6)
+    assert not called
+
+
+def test_calibrate_debevec_accepts_large_samples_with_random_sampling() -> None:
+    # No grid to validate, and no upper bound tied to pixel count, when
+    # random_sampling=True -- OpenCV samples with replacement. Deliberately
+    # not an enormous value: OpenCV's own linear system scales with
+    # samples * len(images), so an extreme value (e.g. 10**6) makes the
+    # underlying solve itself allocate gigabytes and hang/OOM -- a real
+    # resource cost, not something this validator should (or safely can)
+    # guard against, so this test only needs to exceed the pixel count.
+    rng = np.random.default_rng(218)
+    images = _make_hdr_images(rng, dtype=np.uint8, height=20, width=24, channels=3)
+    assert 2000 > 20 * 24  # exceeds the image's pixel count (480)
+
+    result = calibrate_camera_response_debevec(
+        images, _DEFAULT_TIMES, samples=2000, random_sampling=True
+    )
+
+    assert np.all(np.isfinite(result))
+
+
+# --- calibrate_camera_response_debevec: smoothness ---
+
+
+def test_calibrate_debevec_rejects_zero_smoothness() -> None:
+    rng = np.random.default_rng(219)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="positive"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, smoothness=0.0)
+
+
+def test_calibrate_debevec_rejects_negative_smoothness() -> None:
+    rng = np.random.default_rng(220)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="positive"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, smoothness=-1.0)
+
+
+def test_calibrate_debevec_rejects_bool_smoothness() -> None:
+    rng = np.random.default_rng(221)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(TypeError):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, smoothness=True)
+
+
+def test_calibrate_debevec_rejects_nan_smoothness() -> None:
+    rng = np.random.default_rng(222)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, smoothness=math.nan)
+
+
+def test_calibrate_debevec_rejects_inf_smoothness() -> None:
+    rng = np.random.default_rng(223)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, smoothness=math.inf)
+
+
+@pytest.mark.parametrize("value", [1e-46, 1e-100, np.nextafter(0.0, 1.0)])
+def test_calibrate_debevec_rejects_smoothness_underflowing_to_zero(value: float) -> None:
+    assert value > 0.0
+    assert np.float32(value) == 0.0
+    rng = np.random.default_rng(224)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="too small"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, smoothness=value)
+
+
+def test_calibrate_debevec_rejects_smoothness_overflowing_to_inf() -> None:
+    rng = np.random.default_rng(225)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="too large"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, smoothness=1e40)
+
+
+def test_calibrate_debevec_accepts_numpy_real_scalar_smoothness() -> None:
+    rng = np.random.default_rng(226)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_debevec(
+        images,
+        _DEFAULT_TIMES,
+        smoothness=np.float32(10.0),  # type: ignore[arg-type]
+    )
+
+    assert np.all(np.isfinite(result))
+
+
+# --- calibrate_camera_response_debevec: random_sampling ---
+
+
+def test_calibrate_debevec_rejects_int_random_sampling() -> None:
+    rng = np.random.default_rng(227)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(TypeError):
+        calibrate_camera_response_debevec(
+            images,
+            _DEFAULT_TIMES,
+            random_sampling=1,  # type: ignore[arg-type]
+        )
+
+
+def test_calibrate_debevec_rejects_numpy_integer_random_sampling() -> None:
+    rng = np.random.default_rng(228)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(TypeError):
+        calibrate_camera_response_debevec(
+            images,
+            _DEFAULT_TIMES,
+            random_sampling=np.int32(1),  # type: ignore[arg-type]
+        )
+
+
+def test_calibrate_debevec_rejects_string_random_sampling() -> None:
+    rng = np.random.default_rng(229)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(TypeError):
+        calibrate_camera_response_debevec(
+            images,
+            _DEFAULT_TIMES,
+            random_sampling="true",  # type: ignore[arg-type]
+        )
+
+
+def test_calibrate_debevec_random_sampling_false_is_deterministic() -> None:
+    rng = np.random.default_rng(230)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    first = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, random_sampling=False)
+    second = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, random_sampling=False)
+
+    np.testing.assert_array_equal(first, second)
+
+
+def test_calibrate_debevec_random_sampling_true_runs_without_identity_promise() -> None:
+    # Not asserted deterministic or non-deterministic -- only that it runs
+    # and produces a valid, finite result; OpenCV's rand() gives no seed
+    # control either way.
+    rng = np.random.default_rng(231)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES, random_sampling=True)
+
+    assert result.shape == (256, 1, 3)
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_debevec_passes_exact_parameters_to_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    real_factory = cv2.createCalibrateDebevec
+
+    def fake_factory(samples, smoothness, random_sampling):
+        captured["samples"] = samples
+        captured["smoothness"] = smoothness
+        captured["random_sampling"] = random_sampling
+        return real_factory(samples, smoothness, random_sampling)
+
+    monkeypatch.setattr(cv2, "createCalibrateDebevec", fake_factory)
+
+    rng = np.random.default_rng(232)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    calibrate_camera_response_debevec(
+        images, _DEFAULT_TIMES, samples=42, smoothness=5.0, random_sampling=True
+    )
+
+    assert captured["samples"] == 42
+    assert captured["smoothness"] == float(np.float32(5.0))
+    assert captured["random_sampling"] is True
+
+
+@pytest.mark.parametrize(
+    "bad_kwargs",
+    [{"samples": 0}, {"smoothness": 0.0}, {"random_sampling": 1}],
+    ids=["samples", "smoothness", "random_sampling"],
+)
+def test_calibrate_debevec_never_reaches_opencv_for_invalid_parameter(
+    bad_kwargs: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    def boom(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("cv2 must not be called for an invalid parameter")
+
+    monkeypatch.setattr(cv2, "createCalibrateDebevec", boom)
+
+    rng = np.random.default_rng(233)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    with pytest.raises((ValueError, TypeError)):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, **bad_kwargs)
+    assert not called
+
+
+# --- calibrate_camera_response_robertson: max_iterations ---
+
+
+def test_calibrate_robertson_accepts_max_iterations_1() -> None:
+    rng = np.random.default_rng(234)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(images, _DEFAULT_TIMES, max_iterations=1)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_robertson_accepts_numpy_integer_max_iterations() -> None:
+    rng = np.random.default_rng(235)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(
+        images,
+        _DEFAULT_TIMES,
+        max_iterations=np.int32(30),  # type: ignore[arg-type]
+    )
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_robertson_rejects_bool_max_iterations() -> None:
+    rng = np.random.default_rng(236)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(TypeError):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, max_iterations=True)
+
+
+def test_calibrate_robertson_rejects_zero_max_iterations() -> None:
+    rng = np.random.default_rng(237)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="positive"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, max_iterations=0)
+
+
+def test_calibrate_robertson_rejects_negative_max_iterations() -> None:
+    rng = np.random.default_rng(238)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="positive"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, max_iterations=-1)
+
+
+def test_calibrate_robertson_rejects_max_iterations_beyond_int32_range() -> None:
+    rng = np.random.default_rng(239)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="int32"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, max_iterations=2**31)
+
+
+# --- calibrate_camera_response_robertson: threshold ---
+
+
+def test_calibrate_robertson_accepts_threshold_zero() -> None:
+    rng = np.random.default_rng(240)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=0.0)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_robertson_accepts_positive_threshold() -> None:
+    rng = np.random.default_rng(241)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=0.5)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_robertson_accepts_numpy_real_scalar_threshold() -> None:
+    rng = np.random.default_rng(242)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(
+        images,
+        _DEFAULT_TIMES,
+        threshold=np.float32(0.01),  # type: ignore[arg-type]
+    )
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_robertson_rejects_bool_threshold() -> None:
+    rng = np.random.default_rng(243)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(TypeError):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=True)
+
+
+def test_calibrate_robertson_rejects_negative_threshold() -> None:
+    rng = np.random.default_rng(244)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=-0.1)
+
+
+def test_calibrate_robertson_rejects_nan_threshold() -> None:
+    rng = np.random.default_rng(245)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=math.nan)
+
+
+def test_calibrate_robertson_rejects_inf_threshold() -> None:
+    rng = np.random.default_rng(246)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=math.inf)
+
+
+@pytest.mark.parametrize("value", [1e-46, 1e-100, np.nextafter(0.0, 1.0)])
+def test_calibrate_robertson_accepts_threshold_underflowing_to_effective_zero(
+    value: float,
+) -> None:
+    # Unlike smoothness, a positive-but-tiny threshold underflowing to
+    # 0.0f is accepted -- threshold=0 is itself a legal value.
+    assert value > 0.0
+    assert np.float32(value) == 0.0
+    rng = np.random.default_rng(247)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=value)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_calibrate_robertson_rejects_threshold_overflowing_to_inf() -> None:
+    rng = np.random.default_rng(248)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="too large"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, threshold=1e40)
+
+
+def test_calibrate_robertson_is_deterministic() -> None:
+    rng = np.random.default_rng(249)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    first = calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+    second = calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+
+    np.testing.assert_array_equal(first, second)
+
+
+def test_calibrate_robertson_passes_exact_parameters_to_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    real_factory = cv2.createCalibrateRobertson
+
+    def fake_factory(max_iterations, threshold):
+        captured["max_iterations"] = max_iterations
+        captured["threshold"] = threshold
+        return real_factory(max_iterations, threshold)
+
+    monkeypatch.setattr(cv2, "createCalibrateRobertson", fake_factory)
+
+    rng = np.random.default_rng(250)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    calibrate_camera_response_robertson(images, _DEFAULT_TIMES, max_iterations=7, threshold=0.5)
+
+    assert captured["max_iterations"] == 7
+    assert captured["threshold"] == float(np.float32(0.5))
+
+
+@pytest.mark.parametrize(
+    "bad_kwargs",
+    [{"max_iterations": 0}, {"threshold": -1.0}],
+    ids=["max_iterations", "threshold"],
+)
+def test_calibrate_robertson_never_reaches_opencv_for_invalid_parameter(
+    bad_kwargs: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    def boom(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("cv2 must not be called for an invalid parameter")
+
+    monkeypatch.setattr(cv2, "createCalibrateRobertson", boom)
+
+    rng = np.random.default_rng(251)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    with pytest.raises((ValueError, TypeError)):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES, **bad_kwargs)
+    assert not called
+
+
+# --- calibrate_camera_response_*: stack contract (shared helper, spot checks) ---
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_rejects_too_few_images(func) -> None:
+    rng = np.random.default_rng(252)
+    images = _make_hdr_images(rng, count=1, dtype=np.uint8, channels=3)
+
+    with pytest.raises(ValueError, match="at least 2"):
+        func(images, [1.0])
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_rejects_non_uint8_dtype(func) -> None:
+    rng = np.random.default_rng(253)
+    base_images = _make_hdr_images(rng, dtype=np.uint8, channels=3)
+    images = [im.astype(np.uint16) for im in base_images]
+
+    with pytest.raises(TypeError, match=r"images\[0\]"):
+        func(images, _DEFAULT_TIMES)
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_rejects_mismatched_shape_with_index(func) -> None:
+    rng = np.random.default_rng(254)
+    images = _make_hdr_images(rng, count=3, dtype=np.uint8, channels=3)
+    images[2] = rng.integers(0, 256, (10, 10, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match=r"images\[2\]"):
+        func(images, _DEFAULT_TIMES)
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+@pytest.mark.parametrize(
+    "bad_shape",
+    [(20, 24, 1), (20, 24, 2), (20, 24, 4)],
+    ids=["h_w_1", "2ch", "bgra"],
+)
+def test_calibrate_rejects_unsupported_channel_counts(func, bad_shape) -> None:
+    rng = np.random.default_rng(255)
+    images = [rng.integers(0, 256, bad_shape, dtype=np.uint8) for _ in range(3)]
+
+    with pytest.raises(ValueError, match=r"images\[0\]"):
+        func(images, _DEFAULT_TIMES)
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_never_reaches_opencv_for_invalid_stack(
+    func, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    def boom(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("cv2 must not be called for an invalid stack")
+
+    monkeypatch.setattr(cv2, _CV2_CALIBRATE_FACTORY[func].__name__, boom)
+
+    with pytest.raises(ValueError):
+        func([], [])
+    assert not called
+
+
+# --- calibrate_camera_response_*: exposure_times (reuses existing shared validation) ---
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_rejects_wrong_times_length(func) -> None:
+    rng = np.random.default_rng(256)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match="exactly 3"):
+        func(images, [1.0, 2.0])
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_rejects_negative_time(func) -> None:
+    rng = np.random.default_rng(257)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(ValueError, match=r"exposure_times\[0\]"):
+        func(images, [-1.0, 1.0, 2.0])
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_passes_fresh_contiguous_float32_times(
+    func, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rng = np.random.default_rng(258)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    original_times = np.array(_DEFAULT_TIMES, dtype=np.float64)
+    captured: dict[str, np.ndarray] = {}
+
+    real_factory = _CV2_CALIBRATE_FACTORY[func]
+    real_calibrator = real_factory()
+
+    class _CapturingCalibrator:
+        def process(self, imgs, times):
+            captured["times"] = times
+            return real_calibrator.process(imgs, times)
+
+    monkeypatch.setattr(cv2, real_factory.__name__, lambda *a, **kw: _CapturingCalibrator())
+
+    func(images, list(original_times))
+
+    passed_times = captured["times"]
+    assert passed_times.dtype == np.float32
+    assert passed_times.flags["C_CONTIGUOUS"]
+    assert not np.shares_memory(passed_times, original_times)
+
+
+# --- calibrate_camera_response_*: degenerate stacks ---
+#
+# None of these are heuristically rejected before calling OpenCV. Verified
+# directly that some of them make CalibrateRobertson (never
+# CalibrateDebevec, which is more robust thanks to its smoothness
+# regularization term) produce a non-finite curve deterministically,
+# regardless of image size: its histogram-based normalization divides by
+# the count of pixels at each of the 256 intensity levels, so any level
+# that never appears anywhere in the stack yields 0/0 = NaN for that
+# entry -- an all-black or all-white image (a single intensity level) can
+# therefore never produce a finite CalibrateRobertson curve. This is
+# checked by asserting the documented contract itself (a finite result, or
+# a controlled RuntimeError) rather than assuming one specific outcome.
+
+
+def _assert_calibrates_or_raises_controlled_runtime_error(func, images, times, **kwargs) -> None:
+    try:
+        result = func(images, times, **kwargs)
+    except RuntimeError as error:
+        assert "finite" in str(error)
+        return
+    assert isinstance(result, np.ndarray)
+    assert result.dtype == np.float32
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_all_black_stack_finite_or_controlled_runtime_error(func) -> None:
+    images = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(3)]
+
+    _assert_calibrates_or_raises_controlled_runtime_error(func, images, _DEFAULT_TIMES)
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_all_white_stack_finite_or_controlled_runtime_error(func) -> None:
+    images = [np.full((64, 64, 3), 255, dtype=np.uint8) for _ in range(3)]
+
+    _assert_calibrates_or_raises_controlled_runtime_error(func, images, _DEFAULT_TIMES)
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_identical_images_distinct_times_finite_or_controlled_runtime_error(
+    func,
+) -> None:
+    rng = np.random.default_rng(259)
+    image = rng.integers(0, 256, (64, 64, 3), dtype=np.uint8)
+    images = [image.copy() for _ in range(3)]
+
+    _assert_calibrates_or_raises_controlled_runtime_error(func, images, _DEFAULT_TIMES)
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_identical_times_finite_or_controlled_runtime_error(func) -> None:
+    rng = np.random.default_rng(260)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    _assert_calibrates_or_raises_controlled_runtime_error(func, images, [1.0, 1.0, 1.0])
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_few_intensity_levels_finite_or_controlled_runtime_error(func) -> None:
+    rng = np.random.default_rng(261)
+    images = [
+        np.where(rng.random((64, 64, 3)) > 0.5, np.uint8(50), np.uint8(200)) for _ in range(3)
+    ]
+
+    _assert_calibrates_or_raises_controlled_runtime_error(func, images, _DEFAULT_TIMES)
+
+
+def test_calibrate_robertson_all_black_stack_actually_raises() -> None:
+    # Pinned, verified outcome (confirmed on OpenCV 4.9.0, 4.13.0, and
+    # 5.0.0): CalibrateRobertson's histogram-based normalization can never
+    # produce a finite curve for a single-intensity-level stack, regardless
+    # of image size (0/0 for every unpopulated one of the 256 bins). Unlike
+    # Robertson, whether CalibrateDebevec itself is robust to this same
+    # stack is version-dependent (verified directly: finite on 4.13.0/
+    # 5.0.0, non-finite on 4.9.0) -- so no equivalent pinned test exists
+    # for Debevec, only the general finite-or-controlled-RuntimeError
+    # check above.
+    images = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(3)]
+
+    with pytest.raises(RuntimeError, match="finite"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+
+
+# --- calibrate + merge: end-to-end integration ---
+
+
+def test_calibrate_and_merge_debevec_end_to_end() -> None:
+    rng = np.random.default_rng(262)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    images_before = [im.copy() for im in images]
+    times = list(_DEFAULT_TIMES)
+    times_before = list(times)
+
+    response = calibrate_camera_response_debevec(images, times)
+    response_before = response.copy()
+    hdr = merge_hdr_debevec(images, times, response_curve=response)
+
+    assert hdr.shape == images[0].shape
+    assert hdr.dtype == np.float32
+    assert np.all(np.isfinite(hdr))
+    for image, original in zip(images, images_before, strict=True):
+        np.testing.assert_array_equal(image, original)
+    assert times == times_before
+    np.testing.assert_array_equal(response, response_before)
+
+
+def test_calibrate_and_merge_robertson_end_to_end() -> None:
+    rng = np.random.default_rng(263)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    images_before = [im.copy() for im in images]
+    times = list(_DEFAULT_TIMES)
+    times_before = list(times)
+
+    response = calibrate_camera_response_robertson(images, times)
+    response_before = response.copy()
+    hdr = merge_hdr_robertson(images, times, response_curve=response)
+
+    assert hdr.shape == images[0].shape
+    assert hdr.dtype == np.float32
+    assert np.all(np.isfinite(hdr))
+    for image, original in zip(images, images_before, strict=True):
+        np.testing.assert_array_equal(image, original)
+    assert times == times_before
+    np.testing.assert_array_equal(response, response_before)
+
+
+# --- calibrate_camera_response_*: mutation and aliasing ---
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_does_not_mutate_images(func) -> None:
+    rng = np.random.default_rng(264)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    before = [im.copy() for im in images]
+
+    func(images, _DEFAULT_TIMES)
+
+    for image, original in zip(images, before, strict=True):
+        np.testing.assert_array_equal(image, original)
+
+
+@pytest.mark.parametrize("func", _CALIBRATE_FUNCS, ids=_CALIBRATE_FUNC_NAMES)
+def test_calibrate_output_does_not_share_memory_with_inputs(func) -> None:
+    rng = np.random.default_rng(265)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = func(images, _DEFAULT_TIMES)
+
+    for image in images:
+        assert not np.shares_memory(result, image)
+
+
 # --- public exports ---
 
 
@@ -1442,3 +2329,5 @@ def test_public_exports() -> None:
     assert im.fuse_exposures is fuse_exposures
     assert im.merge_hdr_debevec is merge_hdr_debevec
     assert im.merge_hdr_robertson is merge_hdr_robertson
+    assert im.calibrate_camera_response_debevec is calibrate_camera_response_debevec
+    assert im.calibrate_camera_response_robertson is calibrate_camera_response_robertson
