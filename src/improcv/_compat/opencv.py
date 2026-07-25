@@ -7,9 +7,50 @@ handles it directly.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+import cv2
 import numpy as np
 
 __all__: list[str] = []
+
+_hdr_merge_dtype_support: dict[tuple[int, type], bool] = {}
+
+
+def merge_hdr_supports_dtype(merger_factory: Callable[[], object], dtype: type) -> bool:
+    """Return whether the installed OpenCV build's HDR merge accepts `dtype`
+    for its image stack.
+
+    `uint8` is always supported -- it is the original, unconditional depth
+    for `cv2.MergeDebevec`/`cv2.MergeRobertson`. `uint16`/`float32` support
+    was added to OpenCV's HDR merge at some point after `4.9.0` (verified
+    directly: raises `CV_Assert(images[0].depth() == CV_8U)` there) and
+    before `4.13.0` (verified: both work) -- the exact version boundary was
+    not pinned down, and `MergeDebevec`/`MergeRobertson` are not guaranteed
+    to have gained the capability in the same release, so this probes the
+    real capability directly (a minimal 2x2 merge call against the actual
+    `merger_factory`) rather than guessing from a version number or
+    assuming the two classes moved together. The result is cached per
+    `(id(merger_factory), dtype)` for the life of the process, since the
+    installed OpenCV build cannot change at runtime.
+    """
+    if dtype == np.uint8:
+        return True
+    cache_key = (id(merger_factory), dtype)
+    cached = _hdr_merge_dtype_support.get(cache_key)
+    if cached is not None:
+        return cached
+
+    probe_value = 0.5 if dtype == np.float32 else 1
+    probe = np.full((2, 2, 3), probe_value, dtype=dtype)
+    times = np.array([1.0, 2.0], dtype=np.float32)
+    try:
+        merger_factory().process([probe, probe], times)  # type: ignore[attr-defined]
+        supported = True
+    except cv2.error:
+        supported = False
+    _hdr_merge_dtype_support[cache_key] = supported
+    return supported
 
 
 def _normalize_calc_hist_output(raw: np.ndarray, bins: int) -> np.ndarray:
