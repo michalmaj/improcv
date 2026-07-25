@@ -602,79 +602,41 @@ def test_merge_hdr_accepts_dtype_combinations_bgr(func, dtype) -> None:
     assert np.all(np.isfinite(result))
 
 
-def test_merge_hdr_debevec_accepts_uint8_grayscale() -> None:
-    rng = np.random.default_rng(50)
-    images = _make_hdr_images(rng, dtype=np.uint8, channels=0)
-
-    result = merge_hdr_debevec(images, _DEFAULT_TIMES)
-
-    assert result.shape == images[0].shape
-    assert result.dtype == np.float32
-    assert np.all(np.isfinite(result))
-
-
-@pytest.mark.parametrize("dtype", [np.uint16, np.float32])
-def test_merge_hdr_debevec_rejects_non_uint8_grayscale(dtype) -> None:
-    # A grayscale uint16/float32 stack was observed to crash the OpenCV
-    # process outright (a non-catchable native abort, not a cv2.error) on
-    # at least one supported platform/OpenCV build -- this must never be
-    # reachable through the public wrapper, regardless of what any single
-    # local environment's capability probe would otherwise report.
-    rng = np.random.default_rng(50)
-    images = _make_hdr_images(rng, dtype=dtype, channels=0)
-
-    with pytest.raises(ValueError, match="grayscale"):
-        merge_hdr_debevec(images, _DEFAULT_TIMES)
-
-
-@pytest.mark.parametrize("dtype", [np.uint16, np.float32])
-def test_merge_hdr_debevec_never_reaches_opencv_for_non_uint8_grayscale(
-    dtype, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    called = False
-
-    def boom():
-        nonlocal called
-        called = True
-        raise AssertionError("cv2 must not be called for a non-uint8 grayscale Debevec stack")
-
-    monkeypatch.setattr(cv2, "createMergeDebevec", boom)
-
-    rng = np.random.default_rng(50)
-    images = _make_hdr_images(rng, dtype=dtype, channels=0)
-    with pytest.raises(ValueError, match="grayscale"):
-        merge_hdr_debevec(images, _DEFAULT_TIMES)
-    assert not called
-
-
+@pytest.mark.parametrize("func", _MERGE_FUNCS, ids=_MERGE_FUNC_NAMES)
 @pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.float32])
-def test_merge_hdr_robertson_rejects_grayscale(dtype) -> None:
-    # Verified directly: cv2.MergeRobertson raises a raw, unhelpful error
-    # for grayscale input regardless of dtype -- this must never be
-    # reachable through the public wrapper.
+def test_merge_hdr_rejects_grayscale(func, dtype) -> None:
+    # Neither merge function supports grayscale input, for different
+    # reasons: MergeRobertson raises a raw, unhelpful cv2.error for any
+    # non-3-channel stack; MergeDebevec's own default-response-curve
+    # construction corrupts memory for a genuinely 1-channel array
+    # (confirmed in OpenCV's own C++ source) -- a real, reproducible
+    # process crash observed directly in CI, though undefined behavior
+    # that happens not to manifest as a crash on every platform. This must
+    # never be reachable through the public wrapper regardless of dtype.
     rng = np.random.default_rng(50)
     images = _make_hdr_images(rng, dtype=dtype, channels=0)
 
     with pytest.raises(ValueError, match="grayscale"):
-        merge_hdr_robertson(images, _DEFAULT_TIMES)
+        func(images, _DEFAULT_TIMES)
 
 
-def test_merge_hdr_robertson_never_reaches_opencv_for_grayscale(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("func", _MERGE_FUNCS, ids=_MERGE_FUNC_NAMES)
+def test_merge_hdr_never_reaches_opencv_for_grayscale(
+    func, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     called = False
 
     def boom():
         nonlocal called
         called = True
-        raise AssertionError("cv2 must not be called for a grayscale Robertson stack")
+        raise AssertionError("cv2 must not be called for a grayscale stack")
 
-    monkeypatch.setattr(cv2, "createMergeRobertson", boom)
+    monkeypatch.setattr(cv2, _CV2_MERGE_FACTORY[func].__name__, boom)
 
     rng = np.random.default_rng(50)
     images = _make_hdr_images(rng, channels=0)
     with pytest.raises(ValueError, match="grayscale"):
-        merge_hdr_robertson(images, _DEFAULT_TIMES)
+        func(images, _DEFAULT_TIMES)
     assert not called
 
 
@@ -1064,14 +1026,18 @@ def test_merge_hdr_accepts_correct_response_curve_shape_bgr(func, dtype, shape) 
     assert np.all(np.isfinite(result))
 
 
-def test_merge_hdr_debevec_accepts_correct_response_curve_shape_grayscale() -> None:
+def test_merge_hdr_debevec_rejects_grayscale_even_with_explicit_response_curve() -> None:
+    # The memory-corrupting OpenCV code path only triggers when
+    # response_curve is None (the default-linear-response construction),
+    # so an explicit, correctly-shaped curve would technically bypass it --
+    # but grayscale is rejected unconditionally here anyway, favoring a
+    # simple, uniformly safe contract over a narrower conditional one.
     rng = np.random.default_rng(79)
     images = _make_hdr_images(rng, dtype=np.uint8, channels=0)
     curve = rng.random((256, 1)).astype(np.float32) + 0.1
 
-    result = merge_hdr_debevec(images, _DEFAULT_TIMES, response_curve=curve)
-
-    assert np.all(np.isfinite(result))
+    with pytest.raises(ValueError, match="grayscale"):
+        merge_hdr_debevec(images, _DEFAULT_TIMES, response_curve=curve)
 
 
 @pytest.mark.parametrize("func", _MERGE_FUNCS, ids=_MERGE_FUNC_NAMES)

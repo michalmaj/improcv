@@ -451,21 +451,26 @@ def merge_hdr_debevec(
     images : Sequence[np.ndarray]
         A real `Sequence` (e.g. a list or tuple) of at least 2 images -- a
         single `np.ndarray` (including a 4D stack), a `str`/`bytes`, and a
-        generator/iterator are all rejected explicitly. Every image must be
-        non-empty and have exactly the same shape and dtype as `images[0]`:
-        either 2D grayscale ``(H, W)`` or 3D BGR ``(H, W, 3)`` -- ``(H, W, 1)``,
-        2-channel, and BGRA are all rejected, with no automatic conversion,
-        and mixing grayscale/BGR or mixing dtypes within one stack is
-        rejected. dtype must be `uint8`, `uint16`, or `float32` -- for
-        `float32`, every value must be finite and within ``[0, 1]``
-        (verified directly that OpenCV silently clips values outside this
-        range instead of rejecting them). **`uint16`/`float32` grayscale is
-        not supported**: observed directly to crash the OpenCV process
-        outright (a non-catchable native abort, not a `cv2.error`) on at
-        least one supported platform/OpenCV build; use a `uint8` grayscale
-        stack, or `uint16`/`float32` with a 3-channel BGR stack instead.
-        `uint16`/`float32` (BGR) additionally require an OpenCV build that
-        supports them: verified directly that OpenCV `4.9.0` (this
+        generator/iterator are all rejected explicitly. **Grayscale input is
+        not supported -- only 3-channel BGR ``(H, W, 3)``.** Confirmed
+        directly in OpenCV's own C++ source: when `response_curve` is not
+        given, `MergeDebevec` builds its default linear response with
+        `linearResponse(channels, lutLength)` (correctly sized for the
+        image's real channel count), but the very next line unconditionally
+        writes through a hardcoded 3-channel (`Vec3f`) accessor regardless
+        of that count -- for a genuinely 1-channel (grayscale) response
+        array, this reads/writes 3 floats through a buffer that only has 1
+        float per element, corrupting memory. This is undefined behavior:
+        harmless on some platforms/allocators, a real, reproducible process
+        crash on others (observed directly in CI). Every image must be
+        non-empty and have exactly the same shape and dtype as `images[0]`
+        -- ``(H, W, 1)``, 2-channel, BGRA, and any other channel count are
+        all rejected too, with no automatic conversion. dtype must be
+        `uint8`, `uint16`, or `float32` -- for `float32`, every value must
+        be finite and within ``[0, 1]`` (verified directly that OpenCV
+        silently clips values outside this range instead of rejecting
+        them). `uint16`/`float32` additionally require an OpenCV build
+        that supports them: verified directly that OpenCV `4.9.0` (this
         project's documented minimum) only supports `uint8` for HDR merge,
         raising a raw `CV_Assert` for anything else, while `4.13.0`/`5.0.0`
         support all three -- the exact version this was added is not
@@ -499,8 +504,7 @@ def merge_hdr_debevec(
         and strictly positive everywhere (its logarithm is used internally;
         verified directly that a zero or negative entry can silently
         corrupt the result rather than raising an error), with shape
-        depending on `images[0]`'s dtype and channel count: ``(256, 1)``/
-        ``(256, 1, 3)`` for `uint8` (grayscale/BGR), ``(65536, 1)``/
+        depending on `images[0]`'s dtype: ``(256, 1, 3)`` for `uint8`,
         ``(65536, 1, 3)`` for `uint16`/`float32` -- there is no universal
         shape. Not modified.
 
@@ -521,13 +525,13 @@ def merge_hdr_debevec(
     ------
     ValueError
         If `images` has fewer than 2 elements, an element is empty, has a
-        shape or dtype different from `images[0]`, an unsupported channel
-        count, (for `float32`) a non-finite or out-of-``[0, 1]`` value, a
-        `uint16`/`float32` grayscale stack, or a dtype the installed OpenCV
-        build's HDR merge does not support; if `exposure_times` does not
-        have exactly `len(images)` values, or a value is non-positive,
-        non-finite, or too small to remain positive once converted to
-        `float32`; if `response_curve` has the wrong shape for `images[0]`'s
+        shape or dtype different from `images[0]`, a grayscale or otherwise
+        unsupported channel count, (for `float32`) a non-finite or
+        out-of-``[0, 1]`` value, or a dtype the installed OpenCV build's HDR
+        merge does not support; if `exposure_times` does not have exactly
+        `len(images)` values, or a value is non-positive, non-finite, or
+        too small to remain positive once converted to `float32`; if
+        `response_curve` has the wrong shape for `images[0]`'s
         dtype/channels, contains a non-finite value, or contains a zero or
         negative value.
     TypeError
@@ -552,13 +556,15 @@ def merge_hdr_debevec(
     numerically finite but is not verified to be physically meaningful.
     """
     normalized_images = _require_valid_exposure_stack(images, allowed_dtypes=_MERGE_DTYPES)
-    if normalized_images[0].ndim == 2 and normalized_images[0].dtype != np.uint8:
+    if normalized_images[0].ndim == 2:
         raise ValueError(
-            f"images[0] has dtype {normalized_images[0].dtype}, but merge_hdr_debevec only "
-            "supports uint8 for grayscale input -- a grayscale uint16/float32 stack was "
-            "observed to crash the OpenCV process outright (a non-catchable native abort) "
-            "on at least one supported platform/OpenCV build -- use a uint8 grayscale "
-            "stack, or uint16/float32 with a 3-channel BGR stack instead"
+            "merge_hdr_debevec does not support grayscale input -- verified directly, and "
+            "confirmed in OpenCV's own C++ source, that its default (no explicit "
+            "response_curve) linear response construction unconditionally writes through a "
+            "3-channel accessor regardless of the image's actual channel count, corrupting "
+            "memory for a genuinely 1-channel array (undefined behavior: silently harmless "
+            "on some platforms, a real process crash observed on others) -- use a 3-channel "
+            "BGR stack instead"
         )
     _require_merge_dtype_supported(normalized_images[0], cv2.createMergeDebevec, "MergeDebevec")
     times_array = _require_valid_exposure_times(exposure_times, len(normalized_images))
@@ -594,13 +600,14 @@ def merge_hdr_robertson(
     Parameters
     ----------
     images : Sequence[np.ndarray]
-        See `merge_hdr_debevec`, with one additional restriction: **grayscale
-        input is not supported**. Verified directly that `cv2.MergeRobertson`
-        raises a raw, unhelpful `cv2.error` for any stack that is not
-        3-channel BGR -- regardless of dtype, and regardless of whether
-        `response_curve` is given -- so a grayscale stack is rejected here
-        with a clear message before ever reaching OpenCV. Use
-        `merge_hdr_debevec` for a grayscale stack instead.
+        See `merge_hdr_debevec` -- grayscale is unsupported here too
+        (neither `merge_hdr_debevec` nor `merge_hdr_robertson` currently
+        support grayscale input, for different reasons). Verified directly
+        that `cv2.MergeRobertson` raises a raw, unhelpful `cv2.error` for
+        any stack that is not 3-channel BGR -- regardless of dtype, and
+        regardless of whether `response_curve` is given -- so a grayscale
+        stack is rejected here with a clear message before ever reaching
+        OpenCV.
     exposure_times : Sequence[float]
         See `merge_hdr_debevec`.
     response_curve : np.ndarray or None, optional
@@ -639,8 +646,8 @@ def merge_hdr_robertson(
         raise ValueError(
             "merge_hdr_robertson does not support grayscale input -- verified directly "
             "that OpenCV's MergeRobertson raises a raw, unhelpful error for any channel "
-            "count other than 3, regardless of dtype -- use merge_hdr_debevec for a "
-            "grayscale stack instead"
+            "count other than 3, regardless of dtype -- use a 3-channel BGR stack instead "
+            "(merge_hdr_debevec does not support grayscale input either)"
         )
     _require_merge_dtype_supported(normalized_images[0], cv2.createMergeRobertson, "MergeRobertson")
     times_array = _require_valid_exposure_times(exposure_times, len(normalized_images))

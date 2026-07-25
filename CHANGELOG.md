@@ -236,29 +236,33 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   linear (Robertson) combination of the camera response -- the two are different algorithms, not
   interchangeable variants, and are not guaranteed to produce comparable absolute radiance scales for
   the same input. `images` share `fuse_exposures`' stack contract (real `Sequence`, at least 2,
-  identical shape/dtype, indexed error messages) but additionally accept `uint16` and `float32`
-  (`uint8`-only was reconsidered after further audit) -- `float32` values must be finite and within
-  `[0, 1]`, since verified directly that OpenCV silently clips out-of-range float32 values instead of
-  rejecting them. `uint16`/`float32` support in OpenCV's own HDR merge was verified directly to be
-  version-dependent -- absent on `4.9.0` (this project's documented minimum OpenCV, which raises a
-  raw, unindexed `CV_Assert(images[0].depth() == CV_8U)` for anything else), present on `4.13.0`/
-  `5.0.0`, with the exact version boundary not pinned down. Rather than guessing a version cutoff,
-  a new `improcv._compat.opencv.merge_hdr_supports_dtype` helper detects the real capability directly
-  (a minimal, cached probe call against the installed OpenCV build, checked independently for
+  identical shape/dtype, indexed error messages), except that **neither function supports grayscale
+  input -- both require 3-channel BGR only**, for two different reasons. `cv2.MergeRobertson` raises a
+  raw, unhelpful `cv2.error` for grayscale regardless of dtype, verified directly (an OpenCV
+  limitation not previously documented in this project's own HDR design work). `cv2.MergeDebevec`'s
+  own default (no explicit `response_curve`) linear-response construction has a confirmed bug in
+  OpenCV's own C++ source: it builds a correctly-1-channel response array for grayscale input, then
+  unconditionally writes through a hardcoded 3-channel accessor on the very next line, corrupting
+  memory -- undefined behavior that stayed silent through this project's own local verification (3
+  OpenCV builds, all macOS) but caused a real, reproducible process crash (a non-catchable native
+  abort, not a raisable error) in this project's own Linux CI. Both functions therefore reject
+  grayscale input unconditionally, before ever reaching OpenCV, rather than only in the specific
+  triggering case. BGR input additionally accepts `uint16` and `float32` (`uint8`-only was
+  reconsidered after further audit) -- `float32` values must be finite and within `[0, 1]`, since
+  verified directly that OpenCV silently clips out-of-range float32 values instead of rejecting them.
+  `uint16`/`float32` support in OpenCV's own HDR merge was verified directly to be version-dependent
+  -- absent on `4.9.0` (this project's documented minimum OpenCV, which raises a raw, unindexed
+  `CV_Assert(images[0].depth() == CV_8U)` for anything else), present on `4.13.0`/`5.0.0`, with the
+  exact version boundary not pinned down. Rather than guessing a version cutoff, a new
+  `improcv._compat.opencv.merge_hdr_supports_dtype` helper detects the real capability directly (a
+  minimal, cached probe call against the installed OpenCV build, checked independently for
   `MergeDebevec` and `MergeRobertson` since the two are not assumed to have gained the capability
   together), and `merge_hdr_debevec`/`merge_hdr_robertson` raise a clear `ValueError` instead of
-  letting that raw assertion surface on an older OpenCV build. Verified directly that
-  `cv2.MergeRobertson` raises a raw, unhelpful error for grayscale input regardless of dtype (an
-  OpenCV limitation not previously documented in this project's own HDR design work) --
-  `merge_hdr_robertson` rejects grayscale explicitly with a message pointing at `merge_hdr_debevec`,
-  which supports grayscale, but only for `uint8`: a grayscale `uint16`/`float32` stack was observed
-  directly to crash the OpenCV process outright (a non-catchable native abort, not a `cv2.error`) on
-  at least one supported platform/OpenCV build, so `merge_hdr_debevec` rejects that combination
-  explicitly too, before ever reaching OpenCV -- `uint16`/`float32` remain supported for a BGR stack.
+  letting that raw assertion surface on an older OpenCV build.
   `exposure_times` must contain exactly one positive, finite value per image, paired by index; always
-  rebuilt into a fresh, contiguous `float32`
-  array before reaching OpenCV -- verified directly that passing a `float64` array with numerically
-  identical values can silently produce a fully non-finite (`inf`) result via OpenCV's own Python
+  rebuilt into a fresh, contiguous `float32` array before reaching OpenCV -- verified directly that
+  passing a `float64` array with numerically identical values can silently produce a fully non-finite
+  (`inf`) result via OpenCV's own Python
   binding, with no error, and that OpenCV performs no validation on exposure times at all (zero,
   negative, and non-finite values are all silently accepted otherwise). An optional `response_curve`
   is validated structurally (dtype `float32`, finite, shape depending on the image stack's dtype --

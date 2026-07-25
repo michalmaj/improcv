@@ -370,18 +370,20 @@ constant factor rescales the entire output radiance map by the reciprocal of tha
 `response_curve` does **not** calibrate anything -- OpenCV uses a fixed linear response instead. The
 output is a raw radiance map (`float32`, typically ranging far beyond `[0, 1]`, not clipped or
 normalized) -- it is **not** display-ready and needs tone mapping (not yet implemented) before it can
-be saved or shown; do not write it directly as a `uint8` image. `merge_hdr_debevec` accepts grayscale
-or BGR; `merge_hdr_robertson` accepts **BGR only** -- verified directly that OpenCV's own
-`MergeRobertson` raises a raw error for grayscale input, regardless of dtype. `uint8`, `uint16`, and
-`float32` are all accepted for BGR (`float32` values must be finite and within `[0, 1]`); grayscale is
-**`uint8`-only** for both functions -- a grayscale `uint16`/`float32` stack was observed to crash the
-OpenCV process outright (a non-catchable native abort, not a raisable error) on at least one
-supported platform/OpenCV build. `uint16`/`float32` stacks use a 65536-entry response curve, `uint8` a
-256-entry one -- a future calibration step will be `uint8`-only, so its output will pair directly with
-a `uint8` merge, not automatically with `uint16`/`float32`. `uint16`/`float32` (BGR) additionally
-require an OpenCV build that supports them for HDR merge -- verified directly that OpenCV `4.9.0`
-(this project's documented minimum) only supports `uint8` here; a clear `ValueError` is raised instead
-of a raw OpenCV error on an older build.
+be saved or shown; do not write it directly as a `uint8` image. **Both functions accept BGR only --
+grayscale is not supported by either.** `merge_hdr_robertson` raises a raw `cv2.error` for grayscale
+regardless of dtype, verified directly. `merge_hdr_debevec`'s own default (no explicit
+`response_curve`) linear-response construction has a confirmed bug in OpenCV's own C++ source that
+corrupts memory for a genuinely 1-channel array -- undefined behavior that happens not to crash on
+some platforms but crashed the process outright (a non-catchable native abort) in this project's own
+CI on another, so grayscale is rejected unconditionally for both functions rather than only in the
+specific triggering case. `uint8`, `uint16`, and `float32` are all accepted for BGR (`float32` values
+must be finite and within `[0, 1]`). `uint16`/`float32` stacks use a 65536-entry response curve,
+`uint8` a 256-entry one -- a future calibration step will be `uint8`-only, so its output will pair
+directly with a `uint8` merge, not automatically with `uint16`/`float32`. `uint16`/`float32`
+additionally require an OpenCV build that supports them for HDR merge -- verified directly that
+OpenCV `4.9.0` (this project's documented minimum) only supports `uint8` here; a clear `ValueError`
+is raised instead of a raw OpenCV error on an older build.
 Exposure alignment and ghost removal are not performed -- the input stack is assumed already aligned.
 
 Non-local means denoising:
