@@ -70,7 +70,8 @@ def _validated_h(value: object, name: str) -> float:
     OpenCV will receive.
 
     Unlike `photo.py`'s `sigma_s`/`sigma_r`, `0` is a legal value here (a
-    documented no-op for grayscale denoising), so this requires non-negative,
+    verified no-op for grayscale denoising -- OpenCV's own documentation
+    does not state this explicitly), so this requires non-negative,
     not strictly positive. `h` has no OpenCV-documented upper bound, so
     (unlike `photo.py`'s parameters) an extreme value can overflow to `inf`
     once converted to `float32` -- both the conversion and the finiteness
@@ -152,8 +153,9 @@ def nl_means_denoise(
     h : float, optional
         Filter strength: larger values remove more noise but also more
         image detail; smaller values preserve detail but also more noise.
-        Must be finite and non-negative. `0` is a legal, documented no-op --
-        verified directly that `h=0` returns a result identical to `image`.
+        Must be finite and non-negative. `0` is a legal, verified no-op --
+        verified directly that `h=0` returns a result identical to `image`;
+        OpenCV's own documentation does not state this guarantee explicitly.
         No upper bound is enforced (OpenCV documents none), only that the
         value must not overflow to `inf` once converted to `float32`.
         Default `3.0`, OpenCV's own default.

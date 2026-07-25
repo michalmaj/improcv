@@ -291,6 +291,32 @@ verified directly that `sigma_r=0` leads to division by zero internally, and tha
 these ranges are unsupported by OpenCV's own contract (the parameters are stored as a C++ `float`,
 so extreme values can silently degrade to a useless result).
 
+Seamless cloning (Poisson image editing):
+
+```python
+import improcv as im
+
+result = im.seamless_clone(
+    source,
+    destination,
+    mask,
+    center=(x, y),
+    mode="normal",
+)
+```
+
+`source`/`destination` are `uint8` BGR `(H, W, 3)` -- no automatic conversion, and they don't need
+to be the same size. `mask` is a `uint8` `(H, W)` array matching `source`'s spatial size, with only
+`0`/`255` accepted. OpenCV always ignores `mask`'s outermost 1-pixel border, and the bounding box of
+what remains (after that border is zeroed) must be at least `3x3` pixels. `center=(x, y)` is in
+`destination`'s coordinate system and is where that bounding box's center is placed -- not the
+center of all of `source` or all of `mask`. There is no automatic alpha handling. Seamless cloning
+reconstructs the pasted region from *gradients*, not by copying pixels -- so a flat-colored `source`
+region can produce little or no visible change, unlike the "cut and paste" effect of alpha blending.
+`"mixed"` picks whichever of `source`'s/`destination`'s gradient is stronger at each pixel (useful
+for loosely-drawn masks); `"monochrome_transfer"` transfers `source`'s luminance structure rather
+than its color. The result always has `destination`'s shape and dtype.
+
 Non-local means denoising:
 
 ```python

@@ -147,7 +147,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   silently replaces the output's alpha channel with a constant `255` regardless of the input alpha's
   actual content; improcv rejects BGRA outright rather than silently discarding it this way. `h`
   (and `h_luminance`/`h_color` for the colored function) must be non-negative and finite -- `0` is a
-  legal, documented no-op for grayscale denoising (verified: `h=0` reproduces the input exactly), but
+  legal, verified no-op for grayscale denoising (verified: `h=0` reproduces the input exactly; OpenCV's
+  own documentation does not state this guarantee explicitly), but
   for the colored function `h_luminance=0`/`h_color=0` does **not** guarantee an identical result,
   since the BGR/CIELAB round trip alone can shift values by a few of the smallest bits regardless of
   filtering strength. No OpenCV-documented upper bound exists for `h`, so (unlike `photo.py`'s
@@ -168,6 +169,39 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `pencil_sketch`/`stylize`/`detail_enhance`: the error message for a 2D grayscale image now points
   at `improcv.ensure_bgr(image)`, instead of only stating the dimension-count mismatch. No new
   runtime dependency.
+- `improcv.photo.seamless_clone`, Phase 4 slice 5 (Poisson image editing): wraps
+  `cv2.seamlessClone`, in base `opencv-python`, no contrib. `SeamlessCloneMode` exposes the three
+  base modes (`"normal"`, `"mixed"`, `"monochrome_transfer"`); the `*_WIDE` variants are not
+  exposed in this slice, since they use a different ROI-placement geometry (verified directly, both
+  source and empirically, on both OpenCV versions). `source`/`destination` require exactly `uint8`
+  `(H, W, 3)` BGR, with no automatic conversion and no size relationship required between them --
+  only the region selected by `mask` matters. Verified directly that a 1-channel `destination` can
+  crash the OpenCV process outright (a raw, non-Python-catchable segfault on OpenCV 4.13;
+  nondeterministically a crash or a raw `cv2.error` on 5.0), so channel count is validated before
+  ever reaching OpenCV. `mask` must be `uint8`, 2D, matching `source`'s spatial shape, with only `0`
+  and `255` accepted -- OpenCV's own contract describes the mask as binary, matching improcv's
+  existing `Mask` type convention, even though the underlying implementation happens to use the
+  mask's raw value as a continuous blend weight internally. `seamless_clone` always passes a copy of
+  `mask` to OpenCV: verified directly that OpenCV's own implementation mutates a single-channel mask
+  array in place (zeroing its outer 1-pixel border, then eroding its active region), which the
+  caller's own array must never be exposed to. That same border-zeroing is replicated before
+  computing the mask's active bounding box, whose width and height must each be at least `3x3`
+  pixels -- verified directly that a smaller active region makes `cv2.seamlessClone` raise an
+  opaque, unhelpful native exception (sometimes just the string `"vector"`, with no file/line
+  information) on both OpenCV versions. `center=(x, y)` is validated as a genuinely integral,
+  `int32`-range point (rejecting `bool` and any `float`, even a whole number) via a new local
+  validator, since the existing `require_point_2d` accepts floats; it is the point in
+  `destination`'s coordinate system where the mask's active bounding-box center is placed (not the
+  center of `source` or of all of `mask`), and its placement is validated against `destination`'s
+  bounds before ever calling OpenCV, raising a `ValueError` naming the specific edge crossed rather
+  than a raw `cv2.error`. An all-zero mask (or one active only on the border, which OpenCV always
+  ignores) returns an exact copy of `destination` directly, without calling OpenCV. This is Poisson
+  gradient-domain cloning, not alpha blending or pixel copying -- a flat-colored `source` region can
+  produce little or no visible change, and even a fully `255` mask does not reproduce `source`
+  exactly. `_require_valid_photo_image` (shared with `pencil_sketch`/`stylize`/`detail_enhance`) now
+  takes an optional `name` keyword to customize its error messages for `seamless_clone`'s two
+  image-shaped parameters (`source`/`destination`); existing callers are unaffected, since it
+  defaults to `"image"`. No new runtime dependency.
 
 ### Changed
 
@@ -175,9 +209,9 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 - `nl_means_denoise`/`nl_means_denoise_colored`: removed the incorrect requirement that
   `search_window_size >= template_window_size` -- the original justification (that OpenCV silently
   no-ops for a smaller search window) was false; verified directly with `h=100` that
-  `search_window_size < template_window_size` produces real, different output (1019/1024 pixels
-  differ from the input, max difference 156, and differs from the `search_window_size=7` result
-  too), so this is no longer rejected, documented, or tested as an error case -- instead covered by
+  `search_window_size < template_window_size` can produce real, substantial filtering, matching a
+  direct `cv2` call with the same arguments exactly rather than reproducing the input unchanged, so
+  this is no longer rejected, documented, or tested as an error case -- instead covered by
   integration tests comparing the wrapper's output exactly against a direct `cv2` call for this
   parameter combination. Also corrected the justification for still rejecting an even window size:
   OpenCV does not silently no-op for one, it silently canonicalizes it to the next odd value (e.g.
