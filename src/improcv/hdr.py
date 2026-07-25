@@ -459,16 +459,21 @@ def merge_hdr_debevec(
         rejected. dtype must be `uint8`, `uint16`, or `float32` -- for
         `float32`, every value must be finite and within ``[0, 1]``
         (verified directly that OpenCV silently clips values outside this
-        range instead of rejecting them). `uint16`/`float32` additionally
-        require an OpenCV build that supports them: verified directly that
-        OpenCV `4.9.0` (this project's documented minimum) only supports
-        `uint8` for HDR merge, raising a raw `CV_Assert` for anything else,
-        while `4.13.0`/`5.0.0` support all three -- the exact version this
-        was added is not pinned down, so the real capability is probed
-        directly instead (see `improcv._compat.opencv.merge_hdr_supports_dtype`),
-        raising a clear `ValueError` rather than letting that raw assertion
-        surface on an older build. Not modified, nor is the `images`
-        container itself.
+        range instead of rejecting them). **`uint16`/`float32` grayscale is
+        not supported**: observed directly to crash the OpenCV process
+        outright (a non-catchable native abort, not a `cv2.error`) on at
+        least one supported platform/OpenCV build; use a `uint8` grayscale
+        stack, or `uint16`/`float32` with a 3-channel BGR stack instead.
+        `uint16`/`float32` (BGR) additionally require an OpenCV build that
+        supports them: verified directly that OpenCV `4.9.0` (this
+        project's documented minimum) only supports `uint8` for HDR merge,
+        raising a raw `CV_Assert` for anything else, while `4.13.0`/`5.0.0`
+        support all three -- the exact version this was added is not
+        pinned down, so the real capability is probed directly instead
+        (see `improcv._compat.opencv.merge_hdr_supports_dtype`), raising a
+        clear `ValueError` rather than letting that raw assertion surface
+        on an older build. Not modified, nor is the `images` container
+        itself.
     exposure_times : Sequence[float]
         Exactly as many values as `images`, paired by index (``images[i]``
         was taken with `exposure_times[i]`) -- no automatic reordering of
@@ -517,13 +522,14 @@ def merge_hdr_debevec(
     ValueError
         If `images` has fewer than 2 elements, an element is empty, has a
         shape or dtype different from `images[0]`, an unsupported channel
-        count, (for `float32`) a non-finite or out-of-``[0, 1]`` value, or a
-        dtype the installed OpenCV build's HDR merge does not support; if
-        `exposure_times` does not have exactly `len(images)` values, or a
-        value is non-positive, non-finite, or too small to remain positive
-        once converted to `float32`; if `response_curve` has the wrong
-        shape for `images[0]`'s dtype/channels, contains a non-finite value,
-        or contains a zero or negative value.
+        count, (for `float32`) a non-finite or out-of-``[0, 1]`` value, a
+        `uint16`/`float32` grayscale stack, or a dtype the installed OpenCV
+        build's HDR merge does not support; if `exposure_times` does not
+        have exactly `len(images)` values, or a value is non-positive,
+        non-finite, or too small to remain positive once converted to
+        `float32`; if `response_curve` has the wrong shape for `images[0]`'s
+        dtype/channels, contains a non-finite value, or contains a zero or
+        negative value.
     TypeError
         If `images`/`exposure_times` is not a `Sequence` (rejecting a
         single array, `str`, `bytes`, or a generator/iterator), an image
@@ -546,6 +552,14 @@ def merge_hdr_debevec(
     numerically finite but is not verified to be physically meaningful.
     """
     normalized_images = _require_valid_exposure_stack(images, allowed_dtypes=_MERGE_DTYPES)
+    if normalized_images[0].ndim == 2 and normalized_images[0].dtype != np.uint8:
+        raise ValueError(
+            f"images[0] has dtype {normalized_images[0].dtype}, but merge_hdr_debevec only "
+            "supports uint8 for grayscale input -- a grayscale uint16/float32 stack was "
+            "observed to crash the OpenCV process outright (a non-catchable native abort) "
+            "on at least one supported platform/OpenCV build -- use a uint8 grayscale "
+            "stack, or uint16/float32 with a 3-channel BGR stack instead"
+        )
     _require_merge_dtype_supported(normalized_images[0], cv2.createMergeDebevec, "MergeDebevec")
     times_array = _require_valid_exposure_times(exposure_times, len(normalized_images))
     if response_curve is not None:

@@ -250,9 +250,13 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   letting that raw assertion surface on an older OpenCV build. Verified directly that
   `cv2.MergeRobertson` raises a raw, unhelpful error for grayscale input regardless of dtype (an
   OpenCV limitation not previously documented in this project's own HDR design work) --
-  `merge_hdr_robertson` rejects grayscale explicitly with a message
-  pointing at `merge_hdr_debevec`, which does support it. `exposure_times` must contain exactly one
-  positive, finite value per image, paired by index; always rebuilt into a fresh, contiguous `float32`
+  `merge_hdr_robertson` rejects grayscale explicitly with a message pointing at `merge_hdr_debevec`,
+  which supports grayscale, but only for `uint8`: a grayscale `uint16`/`float32` stack was observed
+  directly to crash the OpenCV process outright (a non-catchable native abort, not a `cv2.error`) on
+  at least one supported platform/OpenCV build, so `merge_hdr_debevec` rejects that combination
+  explicitly too, before ever reaching OpenCV -- `uint16`/`float32` remain supported for a BGR stack.
+  `exposure_times` must contain exactly one positive, finite value per image, paired by index; always
+  rebuilt into a fresh, contiguous `float32`
   array before reaching OpenCV -- verified directly that passing a `float64` array with numerically
   identical values can silently produce a fully non-finite (`inf`) result via OpenCV's own Python
   binding, with no error, and that OpenCV performs no validation on exposure times at all (zero,

@@ -602,18 +602,49 @@ def test_merge_hdr_accepts_dtype_combinations_bgr(func, dtype) -> None:
     assert np.all(np.isfinite(result))
 
 
-@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.float32])
-def test_merge_hdr_debevec_accepts_dtype_combinations_grayscale(dtype) -> None:
-    if not hdr_module.merge_hdr_supports_dtype(cv2.createMergeDebevec, dtype):
-        pytest.skip(f"this OpenCV build's MergeDebevec does not support dtype {dtype}")
+def test_merge_hdr_debevec_accepts_uint8_grayscale() -> None:
     rng = np.random.default_rng(50)
-    images = _make_hdr_images(rng, dtype=dtype, channels=0)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=0)
 
     result = merge_hdr_debevec(images, _DEFAULT_TIMES)
 
     assert result.shape == images[0].shape
     assert result.dtype == np.float32
     assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("dtype", [np.uint16, np.float32])
+def test_merge_hdr_debevec_rejects_non_uint8_grayscale(dtype) -> None:
+    # A grayscale uint16/float32 stack was observed to crash the OpenCV
+    # process outright (a non-catchable native abort, not a cv2.error) on
+    # at least one supported platform/OpenCV build -- this must never be
+    # reachable through the public wrapper, regardless of what any single
+    # local environment's capability probe would otherwise report.
+    rng = np.random.default_rng(50)
+    images = _make_hdr_images(rng, dtype=dtype, channels=0)
+
+    with pytest.raises(ValueError, match="grayscale"):
+        merge_hdr_debevec(images, _DEFAULT_TIMES)
+
+
+@pytest.mark.parametrize("dtype", [np.uint16, np.float32])
+def test_merge_hdr_debevec_never_reaches_opencv_for_non_uint8_grayscale(
+    dtype, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    def boom():
+        nonlocal called
+        called = True
+        raise AssertionError("cv2 must not be called for a non-uint8 grayscale Debevec stack")
+
+    monkeypatch.setattr(cv2, "createMergeDebevec", boom)
+
+    rng = np.random.default_rng(50)
+    images = _make_hdr_images(rng, dtype=dtype, channels=0)
+    with pytest.raises(ValueError, match="grayscale"):
+        merge_hdr_debevec(images, _DEFAULT_TIMES)
+    assert not called
 
 
 @pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.float32])
