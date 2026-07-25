@@ -2253,6 +2253,115 @@ def test_calibrate_robertson_all_black_stack_actually_raises() -> None:
         calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
 
 
+# --- calibrate_camera_response_*: response-curve value postcondition ---
+#
+# Verified directly, with this exact deterministic counterexample, that
+# OpenCV's CalibrateDebevec can return a *finite* curve containing exact-
+# zero entries: it estimates in log-space and then exponentiates, so a
+# very negative but finite intermediate value can underflow float32 to
+# exactly 0.0. Such a curve passes a finiteness-only postcondition but is
+# unusable by merge_hdr_debevec, which takes the curve's logarithm. The
+# exact number of zero entries this specific counterexample produces is
+# not treated as a public contract -- only that it raises RuntimeError.
+# The remaining tests monkeypatch the calibrator to return controlled
+# values, to check the value postcondition itself without depending on a
+# specific seed/parameter combination to trigger it.
+
+
+def test_calibrate_debevec_deterministic_underflow_counterexample_raises() -> None:
+    rng = np.random.default_rng(11)
+    images = [rng.integers(0, 256, (32, 32, 3), dtype=np.uint8) for _ in range(3)]
+
+    with pytest.raises(RuntimeError, match="zero|positive|logarithm"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES, samples=1, smoothness=1e-4)
+
+
+class _FakeCalibrator:
+    def __init__(self, curve: np.ndarray) -> None:
+        self._curve = curve
+
+    def process(self, imgs, times):
+        return self._curve
+
+
+def test_calibrate_debevec_rejects_response_curve_with_zero_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    curve = np.full((256, 1, 3), 2.0, dtype=np.float32)
+    curve[0, 0, 0] = 0.0
+    monkeypatch.setattr(cv2, "createCalibrateDebevec", lambda *a, **kw: _FakeCalibrator(curve))
+    rng = np.random.default_rng(266)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(RuntimeError, match="zero|positive|logarithm"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES)
+
+
+def test_calibrate_debevec_rejects_response_curve_with_negative_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    curve = np.full((256, 1, 3), 2.0, dtype=np.float32)
+    curve[0, 0, 0] = -1.0
+    monkeypatch.setattr(cv2, "createCalibrateDebevec", lambda *a, **kw: _FakeCalibrator(curve))
+    rng = np.random.default_rng(267)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(RuntimeError, match="zero|positive|logarithm"):
+        calibrate_camera_response_debevec(images, _DEFAULT_TIMES)
+
+
+def test_calibrate_debevec_accepts_strictly_positive_response_curve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    curve = np.full((256, 1, 3), 2.0, dtype=np.float32)
+    monkeypatch.setattr(cv2, "createCalibrateDebevec", lambda *a, **kw: _FakeCalibrator(curve))
+    rng = np.random.default_rng(268)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_debevec(images, _DEFAULT_TIMES)
+
+    np.testing.assert_array_equal(result, curve)
+
+
+def test_calibrate_robertson_rejects_response_curve_with_negative_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    curve = np.full((256, 1, 3), 2.0, dtype=np.float32)
+    curve[0, 0, 0] = -1.0
+    monkeypatch.setattr(cv2, "createCalibrateRobertson", lambda *a, **kw: _FakeCalibrator(curve))
+    rng = np.random.default_rng(269)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(RuntimeError, match="negative"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+
+
+def test_calibrate_robertson_rejects_all_zero_response_curve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    curve = np.zeros((256, 1, 3), dtype=np.float32)
+    monkeypatch.setattr(cv2, "createCalibrateRobertson", lambda *a, **kw: _FakeCalibrator(curve))
+    rng = np.random.default_rng(270)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    with pytest.raises(RuntimeError, match="all-zero"):
+        calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+
+
+def test_calibrate_robertson_accepts_response_curve_with_partial_zeros(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    curve = np.zeros((256, 1, 3), dtype=np.float32)
+    curve[0, 0, 0] = 1.0
+    monkeypatch.setattr(cv2, "createCalibrateRobertson", lambda *a, **kw: _FakeCalibrator(curve))
+    rng = np.random.default_rng(271)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+
+    result = calibrate_camera_response_robertson(images, _DEFAULT_TIMES)
+
+    np.testing.assert_array_equal(result, curve)
+
+
 # --- calibrate + merge: end-to-end integration ---
 
 

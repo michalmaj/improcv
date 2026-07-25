@@ -310,16 +310,31 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `CalibrateRobertson`'s per-intensity-level histogram normalization divides by the count of pixels
   observed at each of the 256 levels across the whole stack, so any level that never appears yields
   `NaN` at that entry -- an all-black or all-white image stack (or one with very few distinct
-  intensity values) therefore can never produce a finite curve here, regardless of image size, while
-  `calibrate_camera_response_debevec`'s smoothness regularization handles the same stack finitely.
-  Neither degenerate case is heuristically rejected before calling OpenCV; both go through the same
-  `RuntimeError` postcondition as any other non-finite result. `exposure_times` reuses the existing,
-  already-verified validator shared with the merge functions (fresh, contiguous `float32` array;
-  strictly positive; no automatic reordering). No new runtime dependency.
+  intensity values) therefore can never produce a finite curve here, regardless of image size.
+  `calibrate_camera_response_debevec` is generally more robust to sparse or degenerate intensity
+  histograms because of its smoothness regularization, but a finite result is not guaranteed on every
+  supported OpenCV build. Neither degenerate case is heuristically rejected before calling OpenCV;
+  both go through the same `RuntimeError` postcondition as any other non-finite result.
+  `exposure_times` reuses the existing, already-verified validator shared with the merge functions
+  (fresh, contiguous `float32` array; strictly positive; no automatic reordering). No new runtime
+  dependency.
 
 ### Changed
 
 ### Fixed
+- `calibrate_camera_response_debevec`/`calibrate_camera_response_robertson`: the output postcondition
+  now also checks the returned curve's value compatibility with the corresponding merge function's
+  `response_curve` contract, not just dtype/shape/finiteness. **Real finding, not hypothetical**:
+  verified directly, with a deterministic counterexample (`samples=1, smoothness=1e-4` on a small
+  random stack), that `CalibrateDebevec` can return a *finite* curve containing exact-zero entries --
+  it estimates in log-space and then exponentiates, so a very negative but finite intermediate value
+  can underflow `float32` to exactly `0.0`. Such a curve previously passed the postcondition
+  unmodified, then failed less clearly downstream in `merge_hdr_debevec`, which takes the curve's
+  logarithm. `calibrate_camera_response_debevec` now additionally requires every entry to be strictly
+  positive, raising `RuntimeError` (never clipping or substituting a value) if not.
+  `calibrate_camera_response_robertson` now additionally requires every entry to be non-negative and
+  at least one entry to be positive, matching `merge_hdr_robertson`'s own, looser `response_curve`
+  contract.
 - `fuse_exposures`: strengthened the output postcondition to check, in order, that OpenCV's
   `MergeMertens` actually returned a `np.ndarray`, of dtype `float32`, of the expected shape, before
   checking finiteness -- previously only finiteness was checked, which would have raised a confusing

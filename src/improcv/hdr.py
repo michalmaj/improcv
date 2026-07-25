@@ -476,6 +476,56 @@ def _validated_float32_result(
     return cast(ImageFloat32, result)
 
 
+def _validated_calibration_result(
+    result: object, expected_shape: tuple[int, ...], *, method: Literal["debevec", "robertson"]
+) -> ImageFloat32:
+    """Raise RuntimeError unless `result` is a finite `float32` response
+    curve of `expected_shape` that also satisfies the value contract the
+    corresponding merge function's `response_curve` requires, else return
+    it cast to `ImageFloat32`.
+
+    First reuses `_validated_float32_result` for the shared ndarray/dtype/
+    shape/finiteness checks. Then applies the same value rule
+    `_require_valid_response_curve` enforces on a user-supplied curve --
+    but raises `RuntimeError`, not `ValueError`, since a curve failing this
+    check here is OpenCV's own calibration output, not a caller mistake.
+
+    Verified directly, with a deterministic counterexample, that OpenCV's
+    calibration can legally return a *finite* curve `merge_hdr_debevec`
+    still cannot use safely: `CalibrateDebevec` estimates in log-space and
+    then exponentiates, so a very negative (but finite) intermediate value
+    can underflow `float32` to exactly `0.0` -- silently passing the
+    existing finiteness check while still being unusable, since
+    `merge_hdr_debevec` takes the curve's logarithm. `CalibrateRobertson`'s
+    own merge counterpart tolerates zero entries (only a negative entry or
+    an all-zero curve is rejected), so its value rule is correspondingly
+    looser.
+    """
+    operation = "CalibrateDebevec" if method == "debevec" else "CalibrateRobertson"
+    validated = _validated_float32_result(result, expected_shape, operation)
+
+    if method == "debevec":
+        if not np.all(validated > 0.0):
+            raise RuntimeError(
+                f"{operation} returned a response curve containing zero or negative "
+                "values, which cannot be used safely by merge_hdr_debevec because it "
+                "takes the curve's logarithm"
+            )
+    else:
+        if np.any(validated < 0.0):
+            raise RuntimeError(
+                f"{operation} returned a response curve containing negative values, "
+                "which merge_hdr_robertson's own response_curve contract rejects"
+            )
+        if not np.any(validated > 0.0):
+            raise RuntimeError(
+                f"{operation} returned an all-zero response curve, which "
+                "merge_hdr_robertson's own response_curve contract rejects"
+            )
+
+    return validated
+
+
 def fuse_exposures(
     images: Sequence[ImageU8],
     *,
@@ -876,10 +926,13 @@ def calibrate_camera_response_debevec(
         ``(256, 1)`` for a grayscale `images` stack, ``(256, 1, 3)`` for
         BGR (calibration is always `uint8`-only, so always a 256-entry
         LUT). A new, independent array; never shares memory with any
-        input. Not guaranteed strictly positive or monotonic as a
-        postcondition -- not enough evidence to treat either as a
-        universal contract of every valid input's result, though a
-        legitimate curve is expected to be close to both in practice.
+        input. Guaranteed finite and strictly positive -- both are
+        enforced as a postcondition, since `merge_hdr_debevec` takes the
+        curve's logarithm and cannot use a curve containing a zero or
+        negative value. Not guaranteed monotonic -- not enough evidence to
+        treat that as a universal contract of every valid input's result,
+        though a legitimate curve is expected to be close to it in
+        practice.
 
     Raises
     ------
@@ -901,16 +954,23 @@ def calibrate_camera_response_debevec(
         not an integer (rejecting `bool`), `smoothness` is not a real
         number (rejecting `bool`), or `random_sampling` is not a `bool`.
     RuntimeError
-        If OpenCV does not return a finite `float32` array of the expected
-        shape for the given inputs -- verified directly that this is a
-        real, non-hypothetical outcome for a degenerate stack (e.g. a
-        single-intensity-level image), though `CalibrateDebevec`'s
-        smoothness regularization makes this markedly less likely than for
+        If OpenCV does not return a finite, strictly positive `float32`
+        array of the expected shape for the given inputs -- verified
+        directly that a non-finite result is a real, non-hypothetical
+        outcome for a degenerate stack (e.g. a single-intensity-level
+        image), though `CalibrateDebevec`'s smoothness regularization makes
+        this markedly less likely than for
         `calibrate_camera_response_robertson`; whether a specific
         degenerate stack triggers it is not necessarily the same across
         every supported OpenCV version (verified directly for one such
         case: finite on OpenCV 4.13.0/5.0.0, non-finite on 4.9.0, this
-        project's documented minimum).
+        project's documented minimum). Also verified directly, with a
+        deterministic counterexample, that OpenCV can return a *finite*
+        curve containing exact-zero entries -- `CalibrateDebevec` estimates
+        in log-space and then exponentiates, so a very negative but finite
+        intermediate value can underflow `float32` to exactly `0.0`; such a
+        curve is rejected here rather than passed through to
+        `merge_hdr_debevec`, where it would fail less clearly.
     """
     normalized_images = _require_valid_exposure_stack(images)
     times_array = _require_valid_exposure_times(exposure_times, len(normalized_images))
@@ -921,7 +981,7 @@ def calibrate_camera_response_debevec(
     calibrator = cv2.createCalibrateDebevec(samples, smoothness, random_sampling)
     result = calibrator.process(normalized_images, times_array)
     expected_shape = _expected_response_curve_shape(normalized_images[0])
-    return _validated_float32_result(result, expected_shape, "CalibrateDebevec")
+    return _validated_calibration_result(result, expected_shape, method="debevec")
 
 
 def calibrate_camera_response_robertson(
@@ -974,9 +1034,13 @@ def calibrate_camera_response_robertson(
         The estimated inverse camera response, dtype `float32`, shape
         ``(256, 1, 3)`` (calibration is always `uint8`-only, so always a
         256-entry LUT; grayscale is unsupported, so always 3 channels). A
-        new, independent array; never shares memory with any input. Not
-        guaranteed strictly positive or monotonic as a postcondition -- see
-        `calibrate_camera_response_debevec`'s `Returns`.
+        new, independent array; never shares memory with any input.
+        Guaranteed finite, non-negative, and containing at least one
+        strictly positive value -- all enforced as a postcondition, since
+        `merge_hdr_robertson`'s own `response_curve` contract rejects a
+        negative entry or an all-zero curve. Not guaranteed strictly
+        positive throughout (unlike `calibrate_camera_response_debevec`'s
+        curve) or monotonic.
 
     Raises
     ------
@@ -1007,7 +1071,10 @@ def calibrate_camera_response_robertson(
         produce a finite curve here, regardless of image size -- confirmed
         identically on OpenCV 4.9.0, 4.13.0, and 5.0.0. This is not
         heuristically rejected before calling OpenCV; it surfaces as this
-        `RuntimeError`.
+        `RuntimeError`. Also raised if OpenCV returns a finite curve
+        containing a negative entry, or an all-zero curve -- both would
+        otherwise be rejected downstream by `merge_hdr_robertson`'s own
+        `response_curve` contract.
 
     Notes
     -----
@@ -1038,4 +1105,4 @@ def calibrate_camera_response_robertson(
     calibrator = cv2.createCalibrateRobertson(max_iterations, threshold)
     result = calibrator.process(normalized_images, times_array)
     expected_shape = _expected_response_curve_shape(normalized_images[0])
-    return _validated_float32_result(result, expected_shape, "CalibrateRobertson")
+    return _validated_calibration_result(result, expected_shape, method="robertson")
