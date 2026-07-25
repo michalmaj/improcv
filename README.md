@@ -395,9 +395,11 @@ samples pixel locations randomly with no seed control in OpenCV's own API -- its
 guaranteed reproducible across calls. `calibrate_camera_response_robertson` needs a reasonably
 diverse intensity histogram to produce a finite curve at all: verified directly that an all-black or
 all-white image stack (or one with very few distinct intensity values) deterministically raises
-`RuntimeError` here, regardless of image size, while the same stack calibrates finitely with the
-Debevec algorithm. Neither calibrator performs exposure alignment or ghost removal -- the input stack
-is assumed already aligned, for both calibration and merge.
+`RuntimeError` here, regardless of image size. `calibrate_camera_response_debevec` is generally more
+robust to sparse or degenerate intensity histograms because of its smoothness regularization, but a
+finite result is not guaranteed on every supported OpenCV build. Non-finite or otherwise
+merge-incompatible curves raise `RuntimeError`. Neither calibrator performs exposure alignment or
+ghost removal -- the input stack is assumed already aligned, for both calibration and merge.
 
 Non-local means denoising:
 
