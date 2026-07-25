@@ -559,10 +559,10 @@ def test_rejects_negative_search_window_size(func) -> None:
 def test_search_smaller_than_template_matches_direct_cv2_call_grayscale() -> None:
     # search_window_size < template_window_size is not rejected: these are
     # two independent parameters (patch size for comparison vs. area
-    # searched for similar patch centers), and OpenCV produces real,
-    # different output for this combination -- verified directly it is not
-    # a no-op (1019/1024 pixels differ from the input, max diff 156, and
-    # differs from the search_window_size=7 result too).
+    # searched for similar patch centers), and OpenCV can perform real,
+    # substantial filtering for this combination -- verified directly it is
+    # not a no-op, matching a direct cv2 call exactly rather than
+    # reproducing the input unchanged.
     rng = np.random.default_rng(1)
     image = rng.integers(0, 256, (32, 32), dtype=np.uint8)
 

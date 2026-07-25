@@ -90,6 +90,7 @@ from improcv.filters import (
     median_blur,
 )
 from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm, average_hash, phash
+from improcv.hdr import fuse_exposures
 from improcv.hough import (
     Circle,
     HoughCircleMethod,
@@ -238,6 +239,7 @@ __all__ = [
     "find_homography",
     "flip",
     "flood_fill",
+    "fuse_exposures",
     "gamma_correction",
     "gaussian_blur",
     "gmsd",

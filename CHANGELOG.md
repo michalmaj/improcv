@@ -202,6 +202,32 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   takes an optional `name` keyword to customize its error messages for `seamless_clone`'s two
   image-shaped parameters (`source`/`destination`); existing callers are unaffected, since it
   defaults to `"image"`. No new runtime dependency.
+- New `improcv.hdr` module, Phase 4 slice 6 (exposure fusion, the first of three planned HDR-related
+  slices -- a future radiance HDR merge and tone mapping are separate, not-yet-designed slices):
+  `fuse_exposures`, wrapping `cv2.createMergeMertens`, in base `opencv-python`, no contrib. This
+  blends a stack of differently-exposed images directly (in the domain of a Laplacian pyramid,
+  weighted by local contrast/saturation/well-exposedness) -- it does not require exposure times and
+  does not reconstruct a physical HDR radiance map, unlike the future radiance-merge slice, so its
+  result does not need tone mapping. `images` must be a real `collections.abc.Sequence` (list, tuple,
+  or another actual `Sequence`) of at least 2 `uint8` images -- a single array (including a 4D stack,
+  which OpenCV's own Python binding happens to accept in place of a list), `str`/`bytes`, and a
+  generator/iterator are all rejected explicitly. Every image must be non-empty, `uint8`, and have
+  exactly the same shape as `images[0]`: either 2D grayscale or 3D BGR `(H, W, 3)` -- `(H, W, 1)`,
+  2-channel, BGRA, and mixing grayscale/BGR within one stack are all rejected, with every error
+  message naming the offending index (e.g. `images[3]`) rather than reaching an unindexed, raw
+  `cv2.error`. `contrast_weight`/`saturation_weight`/`exposure_weight` must be non-negative and
+  finite (validated on their `float32`-converted value, like `denoising.py`'s `h`, since there is no
+  OpenCV-documented upper bound and an extreme-but-finite value can overflow to `inf` after
+  conversion); `0` is legal for all three, matching `exposure_weight`'s own default. Verified directly
+  that an extreme but individually representable weight (e.g. `contrast_weight=1e10`) makes OpenCV
+  produce a silently non-finite (`NaN`) result on both OpenCV 4.13 and 5.0 -- `fuse_exposures` checks
+  the result with `np.all(np.isfinite(...))` and raises `RuntimeError` rather than returning it.
+  Output is `float32`, nominally close to `[0, 1]` but **not** guaranteed to lie exactly within it --
+  verified directly that the underlying Laplacian-pyramid reconstruction can produce a small
+  undershoot below `0` or overshoot above `1`; not clipped or quantized by this function. Verified
+  directly that two independent calls with identical arguments are not always bit-for-bit identical
+  (OpenCV's implementation uses internal parallel summation), on both OpenCV versions -- this is not
+  presented as a guarantee in either direction. No new runtime dependency.
 
 ### Changed
 
