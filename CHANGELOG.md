@@ -203,7 +203,7 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   image-shaped parameters (`source`/`destination`); existing callers are unaffected, since it
   defaults to `"image"`. No new runtime dependency.
 - New `improcv.hdr` module, Phase 4 slice 6 (exposure fusion, the first of three planned HDR-related
-  slices -- a future radiance HDR merge and tone mapping are separate, not-yet-designed slices):
+  slices -- radiance HDR merge is a separate, later slice below; tone mapping remains not-yet-designed):
   `fuse_exposures`, wrapping `cv2.createMergeMertens`, in base `opencv-python`, no contrib. This
   blends a stack of differently-exposed images directly (in the domain of a Laplacian pyramid,
   weighted by local contrast/saturation/well-exposedness) -- it does not require exposure times and
@@ -228,10 +228,64 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   directly that two independent calls with identical arguments are not always bit-for-bit identical
   (OpenCV's implementation uses internal parallel summation), on both OpenCV versions -- this is not
   presented as a guarantee in either direction. No new runtime dependency.
+- `improcv.hdr.merge_hdr_debevec`/`merge_hdr_robertson`, Phase 4 slice 7 (radiance HDR merge -- the
+  second of three planned HDR-related slices; camera-response calibration and tone mapping remain
+  separate, later slices): wrap `cv2.createMergeDebevec`/`cv2.createMergeRobertson`, in base
+  `opencv-python`, no contrib. Unlike `fuse_exposures`, this reconstructs a physical HDR radiance map
+  from the image stack **and** its exposure times, via a weighted log-average (Debevec) or weighted-
+  linear (Robertson) combination of the camera response -- the two are different algorithms, not
+  interchangeable variants, and are not guaranteed to produce comparable absolute radiance scales for
+  the same input. `images` share `fuse_exposures`' stack contract (real `Sequence`, at least 2,
+  identical shape/dtype, indexed error messages), except that **neither function supports grayscale
+  input -- both require 3-channel BGR only**, for two different reasons. `cv2.MergeRobertson` raises a
+  raw, unhelpful `cv2.error` for grayscale regardless of dtype, verified directly (an OpenCV
+  limitation not previously documented in this project's own HDR design work). `cv2.MergeDebevec`'s
+  own default (no explicit `response_curve`) linear-response construction has a confirmed bug in
+  OpenCV's own C++ source: it builds a correctly-1-channel response array for grayscale input, then
+  unconditionally writes through a hardcoded 3-channel accessor on the very next line, corrupting
+  memory -- undefined behavior that stayed silent through this project's own local verification (3
+  OpenCV builds, all macOS) but caused a real, reproducible process crash (a non-catchable native
+  abort, not a raisable error) in this project's own Linux CI. Both functions therefore reject
+  grayscale input unconditionally, before ever reaching OpenCV, rather than only in the specific
+  triggering case. BGR input additionally accepts `uint16` and `float32` (`uint8`-only was
+  reconsidered after further audit) -- `float32` values must be finite and within `[0, 1]`, since
+  verified directly that OpenCV silently clips out-of-range float32 values instead of rejecting them.
+  `uint16`/`float32` support in OpenCV's own HDR merge was verified directly to be version-dependent
+  -- absent on `4.9.0` (this project's documented minimum OpenCV, which raises a raw, unindexed
+  `CV_Assert(images[0].depth() == CV_8U)` for anything else), present on `4.13.0`/`5.0.0`, with the
+  exact version boundary not pinned down. Rather than guessing a version cutoff, a new
+  `improcv._compat.opencv.merge_hdr_supports_dtype` helper detects the real capability directly (a
+  minimal, cached probe call against the installed OpenCV build, checked independently for
+  `MergeDebevec` and `MergeRobertson` since the two are not assumed to have gained the capability
+  together), and `merge_hdr_debevec`/`merge_hdr_robertson` raise a clear `ValueError` instead of
+  letting that raw assertion surface on an older OpenCV build.
+  `exposure_times` must contain exactly one positive, finite value per image, paired by index; always
+  rebuilt into a fresh, contiguous `float32` array before reaching OpenCV -- verified directly that
+  passing a `float64` array with numerically identical values can silently produce a fully non-finite
+  (`inf`) result via OpenCV's own Python
+  binding, with no error, and that OpenCV performs no validation on exposure times at all (zero,
+  negative, and non-finite values are all silently accepted otherwise). An optional `response_curve`
+  is validated structurally (dtype `float32`, finite, shape depending on the image stack's dtype --
+  `256`-entry LUT for `uint8`, `65536`-entry for `uint16`/`float32`, not a universal `(256, 1, 3)`)
+  and per-algorithm: `merge_hdr_debevec` requires every entry strictly positive (its logarithm is used
+  internally), `merge_hdr_robertson` tolerates zero entries but rejects a negative one or an all-zero
+  curve -- verified directly that OpenCV enforces neither rule itself, instead silently producing
+  huge/corrupted-looking or outright `NaN` output. `response_curve=None` does not calibrate anything;
+  OpenCV uses its own fixed linear response. Output is a raw `float32` radiance map, not clipped,
+  normalized, or tone-mapped; checked for being a finite array of the expected shape/dtype, raising
+  `RuntimeError` otherwise (the same postcondition pattern now also applied to `fuse_exposures`, see
+  below). Unlike `fuse_exposures`, both merge algorithms are bit-deterministic across repeated calls
+  with identical arguments, verified directly on both OpenCV 4.13 and 5.0. No new runtime dependency.
 
 ### Changed
 
 ### Fixed
+- `fuse_exposures`: strengthened the output postcondition to check, in order, that OpenCV's
+  `MergeMertens` actually returned a `np.ndarray`, of dtype `float32`, of the expected shape, before
+  checking finiteness -- previously only finiteness was checked, which would have raised a confusing
+  low-level error (or silently returned a wrong result) had OpenCV ever returned something
+  unexpected on either of the earlier properties. Shared with the new `merge_hdr_debevec`/
+  `merge_hdr_robertson` (see above) via one common postcondition helper.
 - `nl_means_denoise`/`nl_means_denoise_colored`: removed the incorrect requirement that
   `search_window_size >= template_window_size` -- the original justification (that OpenCV silently
   no-ops for a smaller search window) was false; verified directly with `h=100` that

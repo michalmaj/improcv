@@ -90,7 +90,7 @@ from improcv.filters import (
     median_blur,
 )
 from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm, average_hash, phash
-from improcv.hdr import fuse_exposures
+from improcv.hdr import fuse_exposures, merge_hdr_debevec, merge_hdr_robertson
 from improcv.hough import (
     Circle,
     HoughCircleMethod,
@@ -259,6 +259,8 @@ __all__ = [
     "match_template",
     "mean_stddev",
     "median_blur",
+    "merge_hdr_debevec",
+    "merge_hdr_robertson",
     "min_area_rect",
     "min_max_loc",
     "moments",
