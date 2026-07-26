@@ -35,9 +35,12 @@ version decided at the time each is actually published, rather than mechanically
   classification-evaluation plots (confusion matrix, PR/ROC curves, class bar chart — closer to
   Phase 5's ML tooling) are deliberately out of scope here, not oversights; see
   [CHANGELOG.md](CHANGELOG.md) for the full reasoning.
-- [ ] **Phase 4** — Photo/creative operations, quality metrics, perceptual hashing. Quality metrics
-  (SSIM/GMSD/MSE) implemented natively in NumPy rather than depending on `opencv-contrib`, since
-  `cv2.quality`/`cv2.img_hash` are contrib-only. Release version to be decided when this phase ships.
+- [x] **Phase 4** — Quality metrics, perceptual hashing, photo/creative operations, non-local-means
+  denoising, HDR imaging (exposure fusion, radiance merge, camera-response calibration, and tone
+  mapping), and panorama/scan stitching. The quality metrics and perceptual hashes are implemented
+  in-project using NumPy and base OpenCV, without requiring `opencv-contrib`. Advanced Stitcher
+  masks/configuration, AlignMTB, seamless-clone `*_WIDE` modes, and contrib-only wrapper variants
+  remain deliberately out of scope. Target release: `0.2.0a1`.
 - [ ] **Phase 5** — Light ML: augmentation, dataset loading, `cv2.dnn` wrappers, gated behind an
   `improcv[ml]` extra. Release version to be decided when this phase ships.
 - [ ] **Phase 6** — Camera calibration and 3D geometry. Release version to be decided when this
