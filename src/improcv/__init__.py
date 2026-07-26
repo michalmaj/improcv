@@ -96,6 +96,10 @@ from improcv.hdr import (
     fuse_exposures,
     merge_hdr_debevec,
     merge_hdr_robertson,
+    tone_map,
+    tone_map_drago,
+    tone_map_mantiuk,
+    tone_map_reinhard,
 )
 from improcv.hough import (
     Circle,
@@ -296,6 +300,10 @@ __all__ = [
     "to_hsv",
     "to_lab",
     "to_ycrcb",
+    "tone_map",
+    "tone_map_drago",
+    "tone_map_mantiuk",
+    "tone_map_reinhard",
     "tophat",
     "translate",
     "warp_affine",

@@ -13,10 +13,12 @@ from improcv._compat.opencv import merge_hdr_supports_dtype
 from improcv._validation import (
     require_bool,
     require_dtype,
+    require_finite,
     require_fits_dtype,
     require_non_negative,
     require_positive,
     require_positive_integral,
+    require_range,
 )
 from improcv.types import Image, ImageFloat32, ImageU8
 
@@ -26,12 +28,17 @@ __all__ = [
     "fuse_exposures",
     "merge_hdr_debevec",
     "merge_hdr_robertson",
+    "tone_map",
+    "tone_map_drago",
+    "tone_map_mantiuk",
+    "tone_map_reinhard",
 ]
 
 _MIN_EXPOSURES = 2
 _LDR_LUT_LENGTH = 256
 _HDR_LUT_LENGTH = 65536
 _MERGE_DTYPES = (np.uint8, np.uint16, np.float32)
+_MANTIUK_MIN_DIM = 2
 
 
 def _require_valid_float32_exposure_values(image: np.ndarray, name: str) -> None:
@@ -925,8 +932,15 @@ def calibrate_camera_response_debevec(
         The estimated inverse camera response, dtype `float32`. Shape
         ``(256, 1)`` for a grayscale `images` stack, ``(256, 1, 3)`` for
         BGR (calibration is always `uint8`-only, so always a 256-entry
-        LUT). A new, independent array; never shares memory with any
-        input. Guaranteed finite and strictly positive -- both are
+        LUT). A BGR curve has a real, public consumer:
+        `merge_hdr_debevec`'s `response_curve` parameter. A grayscale
+        curve does not -- both `merge_hdr_debevec` and
+        `merge_hdr_robertson` are currently BGR-only, so there is no
+        existing end-to-end grayscale calibration-to-merge pipeline in
+        improcv today; grayscale calibration is still offered on its own
+        merits (e.g. inspecting the estimated curve directly), not as
+        half of a pipeline. A new, independent array; never shares memory
+        with any input. Guaranteed finite and strictly positive -- both are
         enforced as a postcondition, since `merge_hdr_debevec` takes the
         curve's logarithm and cannot use a curve containing a zero or
         negative value. Not guaranteed monotonic -- not enough evidence to
@@ -1106,3 +1120,636 @@ def calibrate_camera_response_robertson(
     result = calibrator.process(normalized_images, times_array)
     expected_shape = _expected_response_curve_shape(normalized_images[0])
     return _validated_calibration_result(result, expected_shape, method="robertson")
+
+
+def _require_valid_tonemap_hdr(hdr: object) -> ImageFloat32:
+    """Raise TypeError/ValueError unless `hdr` is a valid HDR image for tone
+    mapping, else return it unchanged (cast to `ImageFloat32`).
+
+    Must be a non-empty, `float32`, 3-channel BGR `(H, W, 3)` array with
+    only finite values -- verified directly, in OpenCV's own C++ source,
+    that the base `Tonemap` class asserts exactly `CV_32FC3` (2D,
+    `float32`, 3 channels), and that `TonemapDrago`/`TonemapReinhard`/
+    `TonemapMantiuk` each enforce the identical contract *indirectly*, by
+    calling the base `Tonemap` internally as their own first processing
+    step -- so grayscale, ``(H, W, 1)``, 2-channel, `uint8`/`uint16`/
+    `float64`, and BGRA are all rejected identically for all four
+    functions in this module. Negative values are explicitly allowed:
+    neither `merge_hdr_debevec` nor `merge_hdr_robertson` guarantees
+    non-negative radiance, and verified directly that OpenCV's base linear
+    tonemap normalizes purely by min/max regardless of sign, handling
+    negative input numerically safely. Not modified, and never copied
+    here -- verified directly that every tone-mapping operator accepts a
+    non-contiguous, read-only, or Fortran-order array safely.
+    """
+    if not isinstance(hdr, np.ndarray):
+        raise TypeError(f"hdr must be a NumPy array, got {type(hdr).__name__}")
+    if hdr.ndim != 3 or hdr.shape[2] != 3:
+        if hdr.ndim == 2:
+            raise ValueError(
+                f"hdr must be 3-channel BGR (H, W, 3), got a 2D grayscale array with shape "
+                f"{hdr.shape} -- tone mapping does not support grayscale input"
+            )
+        if hdr.ndim == 3 and hdr.shape[2] == 1:
+            raise ValueError(
+                f"hdr must be 3-channel BGR (H, W, 3), got a single-channel image with an "
+                f"explicit trailing axis, shape {hdr.shape} -- drop it first with "
+                "hdr[..., 0], though tone mapping does not support a genuinely grayscale "
+                "image either"
+            )
+        if hdr.ndim == 3 and hdr.shape[2] == 4:
+            raise ValueError(
+                f"hdr must be 3-channel BGR (H, W, 3), got a 4-channel (BGRA) image with "
+                f"shape {hdr.shape} -- explicitly drop or composite the alpha channel first"
+            )
+        raise ValueError(f"hdr must have shape (H, W, 3), got {hdr.shape}")
+    if hdr.size == 0:
+        raise ValueError(f"hdr must not be empty, got shape {hdr.shape}")
+    require_dtype(hdr, (np.float32,), "hdr")
+    if not np.all(np.isfinite(hdr)):
+        raise ValueError("hdr must contain only finite values")
+    return cast(ImageFloat32, hdr)
+
+
+def _validated_ranged_float32(value: object, low: float, high: float, name: str) -> float:
+    """Raise TypeError/ValueError unless `value` is a real number within
+    ``[low, high]``, else return its `float32` value as a plain `float`.
+
+    Shared by `tone_map_reinhard`'s `intensity`, `light_adaptation`, and
+    `color_adaptation`, and by `tone_map_drago`'s `bias` -- all four are
+    bounded ranges where both endpoints (including `0`) are legal OpenCV
+    values, so unlike `_validated_positive_float32`, a value underflowing
+    to `0.0f` is never a contract violation, and overflow to `inf` cannot
+    happen once the value is already confirmed within a finite range.
+    """
+    require_range(value, low, high, name)
+    original = float(value)  # type: ignore[arg-type]
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        converted = np.float32(original)
+    return float(converted)
+
+
+def _validated_nonzero_float32(value: object, name: str) -> float:
+    """Raise TypeError/ValueError unless `value` is a finite, nonzero real
+    number safely representable as OpenCV's `float32`, else return its
+    `float32` value as a plain `float`.
+
+    For `tone_map_mantiuk`'s `scale` -- unlike `_validated_positive_float32`,
+    both positive and negative values are legal (`TonemapMantiuk`'s own
+    `signedPow` explicitly preserves the sign of its contrast values, and
+    verified directly that a negative `scale` produces a normal, finite
+    result), but zero is not: verified directly that `scale=0`
+    deterministically produces a non-finite result (`NaN` or `inf`,
+    depending on the OpenCV version) on every supported OpenCV version. A
+    tiny nonzero value that underflows to positive or negative `0.0f` is
+    rejected the same way, since Python's `==` treats `-0.0` and `0.0` as
+    equal, making this check catch both signs of underflow.
+    """
+    require_finite(value, name)
+    if value == 0:  # type: ignore[operator]
+        raise ValueError(f"{name} must not be zero, got {value}")
+    original = float(value)  # type: ignore[arg-type]
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        converted = np.float32(original)
+    if not np.isfinite(converted):
+        raise ValueError(
+            f"{name} is too large to represent as OpenCV's float32 parameter, got {value}"
+        )
+    if converted == 0.0:
+        raise ValueError(
+            f"{name} must not be zero, got {value}, which is too small in magnitude to "
+            "remain nonzero once converted to OpenCV's float32 parameter"
+        )
+    return float(converted)
+
+
+def _require_mantiuk_min_size(hdr: np.ndarray) -> None:
+    """Raise ValueError unless `hdr` is at least ``2x2`` for `tone_map_mantiuk`.
+
+    Verified directly, in OpenCV's own C++ source, that `TonemapMantiuk`
+    builds a multiresolution contrast pyramid with
+    ``levels = int(log(min(rows, cols)) / log(2))`` levels; when the
+    smaller spatial dimension is `1`, this is `0`, leaving the pyramid
+    empty and producing a raw, low-level `cv2.error` from an unrelated
+    internal matrix operation rather than a clean, attributable one.
+    Confirmed identically on OpenCV 4.9.0, 4.13.0, and 5.0.0 for every
+    combination of `1xN`/`Nx1`/`1x1` tested. No other tone-mapping function
+    in this module has an equivalent minimum-size requirement.
+    """
+    height, width = hdr.shape[:2]
+    if height < _MANTIUK_MIN_DIM or width < _MANTIUK_MIN_DIM:
+        raise ValueError(
+            f"tone_map_mantiuk requires both height and width to be at least "
+            f"{_MANTIUK_MIN_DIM}, got shape {hdr.shape} -- verified directly, in OpenCV's "
+            "own C++ source, that its internal contrast pyramid has zero levels when the "
+            "smaller spatial dimension is 1, which otherwise surfaces as an unrelated, raw "
+            "cv2.error instead of a clear one"
+        )
+
+
+def _require_not_spatially_constant(hdr: np.ndarray, operation: str) -> None:
+    """Raise ValueError if every pixel of `hdr` is identical.
+
+    Shared by `tone_map_reinhard` and `tone_map_mantiuk` -- verified
+    directly, in OpenCV's own C++ source, that both compute a "key"/
+    contrast quantity that divides by ``(log_max - log_min)`` (Reinhard) or
+    builds a contrast pyramid that is entirely zero (Mantiuk) for a
+    perfectly constant image, in both cases producing a non-finite result
+    unconditionally -- verified for every constant value tested (`0`,
+    `1e-6`, `1`, `100`, `1e6`), not just black. `tone_map`/`tone_map_drago`
+    do not share this restriction: the base linear tonemap has a dedicated
+    branch for a constant image (copying the value through unchanged
+    rather than dividing by a zero range), and `tone_map_drago` only fails
+    for the specific zero-luminance case handled by
+    `_require_no_zero_luminance_pixel`.
+    """
+    if np.all(hdr == hdr[0, 0]):
+        raise ValueError(
+            f"{operation} does not support a spatially constant hdr image (every pixel "
+            f"equal to {tuple(float(c) for c in hdr[0, 0])}) -- verified directly, in "
+            "OpenCV's own C++ source, that its internal luminance-key computation divides "
+            "by a quantity that is exactly zero for a constant image, producing a "
+            "non-finite result unconditionally, regardless of parameters"
+        )
+
+
+def _require_no_zero_luminance_pixel(hdr: np.ndarray, operation: str) -> None:
+    """Raise ValueError if OpenCV's base linear tonemap normalization would
+    create a zero-luminance pixel in `hdr`.
+
+    Shared by `tone_map_drago` and `tone_map_mantiuk` -- both call
+    `hdr_common.cpp`'s `mapLuminance` internally, which divides each pixel's
+    channels by that same pixel's own luminance with no protection against
+    a zero denominator. Verified directly, in OpenCV's own C++ source and
+    empirically (identically on OpenCV 4.9.0, 4.13.0, and 5.0.0): both
+    operators first run `hdr` through the base linear tonemap, which
+    normalizes the image's global minimum value to exactly `0.0` (when the
+    image is not itself spatially constant) or copies a constant image
+    through unchanged. A pixel becomes a true `(0, 0, 0)` black pixel --
+    zero luminance -- either when all three of its channels already equal
+    `hdr`'s global minimum (for a non-constant image, since that channel's
+    value maps to exactly `0.0` after normalization), or when `hdr` is
+    itself exactly constant at `(0, 0, 0)`. Either way, this produces a
+    `NaN` at exactly that pixel, **independent of `bias`/`saturation`/
+    `scale`** -- confirmed directly that every tested `bias` value (`-0.5`
+    through `5.0`) reproduces the same `NaN` on the same zero-luminance
+    pixel. Verified directly that a plain "does `hdr` contain a `(0, 0, 0)`
+    pixel" test would be wrong: with a negative global minimum, an
+    already-`(0, 0, 0)` pixel in `hdr` does not necessarily end up at the
+    global minimum after normalization, and so does not necessarily become
+    zero-luminance.
+    """
+    global_min = float(hdr.min())
+    global_max = float(hdr.max())
+    if global_max - global_min > np.finfo(np.float64).eps:
+        zero_luminance_pixel_exists = bool(np.any(np.all(hdr == global_min, axis=-1)))
+    else:
+        zero_luminance_pixel_exists = bool(np.all(hdr[0, 0] == 0.0))
+    if zero_luminance_pixel_exists:
+        raise ValueError(
+            f"{operation} would divide by zero luminance for this hdr image -- verified "
+            "directly, in OpenCV's own C++ source, that its internal per-pixel luminance "
+            "normalization divides each channel by that same pixel's own luminance with no "
+            "protection against zero; OpenCV's base linear tonemap normalizes hdr's global "
+            "minimum value to exactly 0.0 first (or leaves a spatially constant hdr "
+            "unchanged), so a pixel whose three channels are all already at that global "
+            "minimum (or a constant hdr that is itself exactly (0, 0, 0)) becomes a true "
+            "zero-luminance black pixel, producing a NaN at exactly that pixel regardless "
+            "of parameters"
+        )
+
+
+def _run_tonemap(factory: Callable[[], cv2.Tonemap], hdr: np.ndarray, operation: str) -> object:
+    """Call ``factory().process(hdr)``, converting any raw `cv2.error` into a
+    `RuntimeError`.
+
+    Shared by all four tone-mapping functions, always given a freshly
+    created operator object -- verified directly, in OpenCV's own C++
+    source, that `TonemapReinhard.process()` mutates its own `intensity`
+    member in place (`intensity = exp(-intensity)`), so reusing the same
+    object across calls silently changes its behavior on every subsequent
+    call; a fresh object per call neutralizes this. Also verified directly
+    that each of the four OpenCV Tonemap classes can raise a raw, low-level
+    `cv2.error` for a specific value combination that still passes every
+    documented parameter/shape contract (e.g. an internal conjugate-
+    gradient solver assertion in `TonemapMantiuk`, or a `max > 0` assertion
+    in `TonemapDrago`) -- improcv only ever raises its own `ValueError`/
+    `TypeError` for a validation failure, so any `cv2.error` surviving that
+    validation is converted into a `RuntimeError` here instead of leaking
+    as a raw OpenCV error. The original exception is preserved as
+    `__cause__`.
+    """
+    try:
+        operator = factory()
+        return operator.process(hdr)
+    except cv2.error as exc:
+        raise RuntimeError(
+            f"{operation} failed inside OpenCV for an HDR image and parameters that passed "
+            "improcv's own validation"
+        ) from exc
+
+
+def tone_map(
+    hdr: ImageFloat32,
+    *,
+    gamma: float = 1.0,
+) -> ImageFloat32:
+    """Apply a simple linear tone-mapping curve with gamma correction.
+
+    Implemented via OpenCV's `cv2.createTonemap`. Normalizes `hdr` by its
+    global min/max (pooled across all 3 channels together, not per-channel
+    -- verified directly), then applies gamma correction. The other three
+    tone-mapping functions in this module (`tone_map_drago`,
+    `tone_map_reinhard`, `tone_map_mantiuk`) each call this exact operation
+    internally as their own first processing step, with `gamma=1.0`
+    (deferring gamma correction to their own final step) -- so this
+    function's `hdr` contract is identical to theirs, and is the contract
+    every tone-mapping function in this module enforces.
+
+    Parameters
+    ----------
+    hdr : np.ndarray
+        A non-empty `float32` array with shape ``(H, W, 3)`` (BGR). Values
+        may be negative -- neither `merge_hdr_debevec` nor
+        `merge_hdr_robertson` guarantees non-negative radiance, and
+        verified directly that OpenCV's min/max normalization handles
+        negative input numerically safely. All values must be finite.
+        Grayscale, ``(H, W, 1)``, 2-channel, BGRA, and any dtype other than
+        `float32` are all rejected, with no automatic conversion. Not
+        modified; no defensive copy is made (verified directly that a
+        non-contiguous, read-only, or Fortran-order array is handled
+        safely).
+    gamma : float, optional
+        Gamma-correction exponent (the output is raised to ``1/gamma``).
+        Must be a real number (Python or NumPy scalar, `bool` rejected),
+        strictly positive, finite, and safely representable as `float32`.
+        Verified directly that `gamma<=0` does not raise inside OpenCV, but
+        produces a meaningless result (`gamma=0` reliably introduces a
+        `NaN`, via `pow` applied to a tiny negative floating-point
+        rounding artifact that even a well-behaved normalized image can
+        contain; negative `gamma` silently produces enormous,
+        non-physical values without ever becoming non-finite) -- both are
+        rejected here rather than deferred to the output postcondition.
+        No OpenCV-documented upper bound. Default `1.0`, OpenCV's own
+        default (no correction).
+
+    Returns
+    -------
+    np.ndarray
+        Same shape as `hdr`, dtype `float32`. A new, independent array;
+        never shares memory with `hdr`. **Not guaranteed to lie within
+        ``[0, 1]``**, despite OpenCV's own documentation claiming that
+        range unconditionally: verified directly, in OpenCV's own C++
+        source, that a spatially constant `hdr` (``max - min`` within
+        `DBL_EPSILON`) takes a dedicated branch that copies the input
+        through unchanged rather than normalizing it, so e.g. a constant
+        `hdr` of `1e6` produces a constant output of `1e6`, not `1.0`.
+        Deterministic: verified directly that two calls with identical
+        arguments are bit-for-bit identical, on OpenCV 4.9.0, 4.13.0, and
+        5.0.0.
+
+    Raises
+    ------
+    ValueError
+        If `hdr` has an unsupported shape or channel count, is empty, or
+        contains a non-finite value; if `gamma` is non-positive,
+        non-finite, or too small/large to remain nonzero/finite once
+        converted to `float32`.
+    TypeError
+        If `hdr` is not a NumPy array or does not have dtype `float32`; if
+        `gamma` is not a real number (rejecting `bool`).
+    RuntimeError
+        If OpenCV's `Tonemap` does not return a finite `float32` array of
+        `hdr`'s shape for the given inputs, or if it raises a raw
+        `cv2.error` despite `hdr`/`gamma` passing improcv's own validation.
+        **A finite result is not unconditionally guaranteed even for
+        well-formed, non-degenerate `hdr`** whenever `1/gamma` is not an
+        exact integer (`gamma != 1.0`, or more generally any `gamma` whose
+        reciprocal has a fractional part): verified directly that OpenCV's
+        min/max normalization can leave the pixel at `hdr`'s global
+        minimum very slightly negative -- an ordinary floating-point
+        rounding artifact, not a data problem -- and raising a negative
+        base to a non-integer power is mathematically undefined,
+        producing `NaN` at exactly that pixel. Whether this actually
+        happens is CPU-architecture/SIMD-dispatch-dependent, not just
+        data-dependent: confirmed directly that the identical seed and
+        `gamma` value that tone-map finitely on Apple Silicon produced a
+        non-finite result (caught cleanly by this `RuntimeError`) on
+        x86_64 CI (both Linux and Windows).
+
+    Notes
+    -----
+    This does not clip or quantize its output -- convert explicitly before
+    saving as `uint8` (e.g. ``np.round(np.clip(result, 0.0, 1.0) *
+    255.0).astype(np.uint8)``; see the README).
+    """
+    hdr = _require_valid_tonemap_hdr(hdr)
+    gamma = _validated_positive_float32(gamma, "gamma")
+
+    result = _run_tonemap(lambda: cv2.createTonemap(gamma), hdr, "Tonemap")
+    return _validated_float32_result(result, hdr.shape, "Tonemap")
+
+
+def tone_map_drago(
+    hdr: ImageFloat32,
+    *,
+    gamma: float = 1.0,
+    saturation: float = 1.0,
+    bias: float = 0.85,
+) -> ImageFloat32:
+    """Apply Drago's adaptive logarithmic tone-mapping operator.
+
+    Implemented via OpenCV's `cv2.createTonemapDrago`. Internally, this
+    first runs `hdr` through the same linear normalization as `tone_map`
+    (with `gamma=1.0`), then compresses the resulting luminance
+    logarithmically (controlled by `bias`) before reapplying color via
+    `saturation` and gamma correction (controlled by `gamma`).
+
+    Parameters
+    ----------
+    hdr : np.ndarray
+        See `tone_map`. Additionally, `hdr` must not contain a
+        zero-luminance pixel once run through the same linear
+        normalization `tone_map` performs -- see `Raises` below.
+    gamma : float, optional
+        See `tone_map`.
+    saturation : float, optional
+        Positive saturation enhancement; `1.0` preserves saturation,
+        greater than `1.0` increases it, less than `1.0` decreases it.
+        Must be a real number, strictly positive, finite, and safely
+        representable as `float32` -- verified directly that an extreme
+        value (e.g. `1e6`) can produce a partially non-finite result. No
+        OpenCV-documented upper bound. Default `1.0`, OpenCV's own
+        default.
+    bias : float, optional
+        Bias for Drago's logarithmic base function. Must be a real number
+        within OpenCV's own documented ``[0, 1]`` range -- rejected
+        outside it, even though this specific build was empirically
+        observed to still return a finite result for some out-of-range
+        values on the test images used during development; that is not
+        treated as a stable, version-independent guarantee. `0` and `1`
+        are both legal, including a positive value that underflows to
+        `0.0f` once converted to `float32` (`0` is itself a legal
+        endpoint, not a hidden contract violation). Default `0.85`,
+        OpenCV's own default.
+
+    Returns
+    -------
+    np.ndarray
+        Same shape as `hdr`, dtype `float32`. A new, independent array;
+        never shares memory with `hdr`. **Not guaranteed to lie within
+        ``[0, 1]``** -- verified directly that a spatially constant,
+        non-zero-luminance `hdr` (e.g. a constant positive color) produces
+        an output scaled well outside ``[0, 1]`` (e.g. a constant `hdr` of
+        `1e6` produces a constant output around `3 * 10**5`). Deterministic:
+        verified directly that two calls with identical arguments are
+        bit-for-bit identical, on OpenCV 4.9.0, 4.13.0, and 5.0.0.
+
+    Raises
+    ------
+    ValueError
+        As `tone_map`, plus: if `saturation` is non-positive, non-finite,
+        or too small/large to remain nonzero/finite once converted to
+        `float32`; if `bias` is outside ``[0, 1]``; if `hdr`, once run
+        through OpenCV's base linear normalization, would contain a pixel
+        with all three channels at exactly zero (a true zero-luminance
+        black pixel) -- verified directly, in OpenCV's own C++ source,
+        that `TonemapDrago` divides each pixel's channels by that same
+        pixel's own luminance with no protection against a zero
+        denominator, and confirmed empirically that this reproduces
+        identically regardless of `bias`/`saturation`. This is a common,
+        not merely hypothetical, case: any `hdr` whose darkest pixel
+        (across all three channels combined) is a true black pixel
+        triggers it, including a large flat background or shadow region
+        at the image's darkest level.
+    TypeError
+        As `tone_map`, plus: if `saturation`/`bias` is not a real number
+        (rejecting `bool`).
+    RuntimeError
+        As `tone_map`'s `gamma`-driven case. `bias` carries an
+        independent, additional version of the same risk: `TonemapDrago`
+        raises each pixel's normalized luminance to an exponent derived
+        from `bias` (`log(bias) / log(0.5)`), which is only guaranteed an
+        integer at `bias=0.5` -- any other `bias` value shares `gamma`'s
+        architecture-dependent exposure to a `NaN` from a slightly
+        negative floating-point base, independent of whatever `gamma`
+        itself is set to.
+    """
+    hdr = _require_valid_tonemap_hdr(hdr)
+    saturation = _validated_positive_float32(saturation, "saturation")
+    bias = _validated_ranged_float32(bias, 0.0, 1.0, "bias")
+    gamma = _validated_positive_float32(gamma, "gamma")
+    _require_no_zero_luminance_pixel(hdr, "tone_map_drago")
+
+    result = _run_tonemap(
+        lambda: cv2.createTonemapDrago(gamma, saturation, bias), hdr, "TonemapDrago"
+    )
+    return _validated_float32_result(result, hdr.shape, "TonemapDrago")
+
+
+def tone_map_reinhard(
+    hdr: ImageFloat32,
+    *,
+    gamma: float = 1.0,
+    intensity: float = 0.0,
+    light_adaptation: float = 1.0,
+    color_adaptation: float = 0.0,
+) -> ImageFloat32:
+    """Apply Reinhard's photographic tone-mapping operator.
+
+    Implemented via OpenCV's `cv2.createTonemapReinhard`. Internally
+    computes a local adaptation luminance for each pixel, blended between a
+    purely per-pixel value and a global scene value by `light_adaptation`,
+    and between per-channel and shared-across-channels statistics by
+    `color_adaptation`, then compresses each channel against that
+    adaptation level before reapplying gamma correction.
+
+    OpenCV's own C++ API names the third and fourth parameters
+    `light_adapt`/`color_adapt` (matching its own getter/setter method
+    names, `getLightAdaptation`/`getColorAdaptation`); this wrapper spells
+    them out in full since the mapping is unambiguous.
+
+    Parameters
+    ----------
+    hdr : np.ndarray
+        See `tone_map`. Additionally, `hdr` must not be spatially
+        constant -- see `Raises` below.
+    gamma : float, optional
+        See `tone_map`.
+    intensity : float, optional
+        Result intensity; greater values produce a brighter result. Must
+        be a real number within OpenCV's own documented ``[-8, 8]``
+        range -- rejected outside it, even though this specific build was
+        empirically observed to still return a finite result beyond that
+        range on the test images used during development; that is not
+        treated as a stable, version-independent guarantee. Default `0.0`,
+        OpenCV's own default.
+    light_adaptation : float, optional
+        Light adaptation weight (OpenCV's own parameter name:
+        `light_adapt`). Must be a real number within ``[0, 1]``: `1.0`
+        adapts purely per-pixel, `0.0` purely globally, anything between
+        is a weighted blend. Verified directly that a value outside
+        ``[0, 1]`` is a genuine mathematical extrapolation of this blend
+        and can produce a partially non-finite result. Default `1.0`,
+        OpenCV's own default.
+    color_adaptation : float, optional
+        Chromatic adaptation weight (OpenCV's own parameter name:
+        `color_adapt`). Must be a real number within ``[0, 1]``: `1.0`
+        treats channels independently, `0.0` gives every channel the same
+        adaptation level. Verified directly that a value outside
+        ``[0, 1]`` can produce a partially non-finite result, the same as
+        `light_adaptation`. Default `0.0`, OpenCV's own default.
+
+    Returns
+    -------
+    np.ndarray
+        Same shape as `hdr`, dtype `float32`. A new, independent array;
+        never shares memory with `hdr`. Not guaranteed to lie within
+        ``[0, 1]`` (see `tone_map`'s `Returns`), though no case producing a
+        large excursion was found for this operator specifically.
+        Deterministic **as called by this function**: verified directly
+        that a fresh `cv2.TonemapReinhard` object is created on every call
+        (see `Notes`), so two calls with identical arguments are
+        bit-for-bit identical, on OpenCV 4.9.0, 4.13.0, and 5.0.0.
+
+    Raises
+    ------
+    ValueError
+        As `tone_map`, plus: if `intensity` is outside ``[-8, 8]`,
+        `light_adaptation`/`color_adaptation` is outside ``[0, 1]``; if
+        `hdr` is spatially constant (every pixel identical, including a
+        constant non-black color) -- verified directly, in OpenCV's own
+        C++ source, that `TonemapReinhard` computes a luminance "key" by
+        dividing by ``(log_max - log_min)``, which is exactly zero for a
+        constant image, producing a non-finite result unconditionally.
+    TypeError
+        As `tone_map`, plus: if `intensity`/`light_adaptation`/
+        `color_adaptation` is not a real number (rejecting `bool`).
+    RuntimeError
+        As `tone_map`'s `gamma`-driven case, applied to this function's own
+        final gamma-correction step. `TonemapReinhard`'s core computation
+        also raises values to two further exponents unrelated to `gamma`
+        (a fixed `1.4` power, and a data-derived "key" exponent) that are
+        not part of this function's public parameters and cannot be tuned
+        away -- a `NaN` from either is likewise architecture-dependent and
+        surfaces as this same `RuntimeError`.
+
+    Notes
+    -----
+    Verified directly, in OpenCV's own C++ source, that
+    `cv2.TonemapReinhard.process()` mutates its own object's `intensity`
+    field in place (``intensity = exp(-intensity)``) as a side effect --
+    confirmed empirically that calling `process()` repeatedly on the same
+    object silently changes its result on every call (`intensity` never
+    stabilizes; it keeps oscillating). This function always constructs a
+    fresh `cv2.TonemapReinhard` object for every call, which fully
+    neutralizes this: never cache or reuse a `Tonemap` object across
+    calls.
+    """
+    hdr = _require_valid_tonemap_hdr(hdr)
+    gamma = _validated_positive_float32(gamma, "gamma")
+    intensity = _validated_ranged_float32(intensity, -8.0, 8.0, "intensity")
+    light_adaptation = _validated_ranged_float32(light_adaptation, 0.0, 1.0, "light_adaptation")
+    color_adaptation = _validated_ranged_float32(color_adaptation, 0.0, 1.0, "color_adaptation")
+    _require_not_spatially_constant(hdr, "tone_map_reinhard")
+
+    result = _run_tonemap(
+        lambda: cv2.createTonemapReinhard(gamma, intensity, light_adaptation, color_adaptation),
+        hdr,
+        "TonemapReinhard",
+    )
+    return _validated_float32_result(result, hdr.shape, "TonemapReinhard")
+
+
+def tone_map_mantiuk(
+    hdr: ImageFloat32,
+    *,
+    gamma: float = 1.0,
+    scale: float = 0.7,
+    saturation: float = 1.0,
+) -> ImageFloat32:
+    """Apply Mantiuk's contrast-mapping tone-mapping operator.
+
+    Implemented via OpenCV's `cv2.createTonemapMantiuk`. Internally builds
+    a multiresolution contrast pyramid of `hdr`'s log-luminance, compresses
+    each level's contrast (scaled by `scale`), then reconstructs the image
+    via an iterative conjugate-gradient solver before reapplying color via
+    `saturation` and gamma correction. Markedly more expensive than the
+    other three tone-mapping functions in this module -- measured roughly
+    5-15x the cost of `tone_map_reinhard`/`tone_map_drago` and 20-100x the
+    cost of `tone_map`, for the same image size (exact multipliers vary by
+    OpenCV version and are not a contract).
+
+    Parameters
+    ----------
+    hdr : np.ndarray
+        See `tone_map`. Additionally: both `hdr.shape[0]` and
+        `hdr.shape[1]` must be at least `2`, `hdr` must not be spatially
+        constant, and `hdr` must not contain a zero-luminance pixel once
+        run through OpenCV's base linear normalization -- see `Raises`
+        below.
+    gamma : float, optional
+        See `tone_map`.
+    scale : float, optional
+        Contrast scale factor; the perceptual contrast response is
+        multiplied by this value, compressing dynamic range. Must be a
+        real number, finite, safely representable as `float32`, and
+        nonzero -- both positive and negative values are legal (verified
+        directly that `TonemapMantiuk`'s internal `signedPow` explicitly
+        preserves sign, so a negative `scale` produces a normal, finite,
+        if visually inverted-contrast, result), but `scale=0`
+        deterministically produces a non-finite result on every supported
+        OpenCV version, so it is rejected here along with any nonzero
+        value that underflows to positive or negative `0.0f` once
+        converted to `float32`. No OpenCV-documented upper bound, though
+        an extreme value (e.g. `10.0`) was observed to produce a partially
+        non-finite result. Default `0.7`, OpenCV's own default.
+    saturation : float, optional
+        See `tone_map_drago`'s `saturation`.
+
+    Returns
+    -------
+    np.ndarray
+        Same shape as `hdr`, dtype `float32`. A new, independent array;
+        never shares memory with `hdr`. Not guaranteed to lie within
+        ``[0, 1]`` (see `tone_map`'s `Returns`). Deterministic: verified
+        directly that two calls with identical arguments are bit-for-bit
+        identical, on OpenCV 4.9.0, 4.13.0, and 5.0.0.
+
+    Raises
+    ------
+    ValueError
+        As `tone_map`, plus: if `scale` is zero, non-finite, or too
+        small/large in magnitude to remain nonzero/finite once converted
+        to `float32`; if `saturation` is non-positive, non-finite, or too
+        small/large to remain nonzero/finite once converted to `float32`;
+        if `hdr.shape[0]` or `hdr.shape[1]` is `1` -- verified directly, in
+        OpenCV's own C++ source, that `TonemapMantiuk`'s contrast pyramid
+        has zero levels in that case, otherwise surfacing as an unrelated,
+        raw `cv2.error`; if `hdr` is spatially constant, or would contain a
+        zero-luminance pixel once run through OpenCV's base linear
+        normalization -- see `tone_map_drago`'s `Raises` for the latter
+        (the same underlying mechanism; `TonemapMantiuk` shares OpenCV's
+        `mapLuminance` helper with `TonemapDrago`).
+    TypeError
+        As `tone_map`, plus: if `scale`/`saturation` is not a real number
+        (rejecting `bool`).
+    RuntimeError
+        As `tone_map`'s `gamma`-driven case, applied to this function's own
+        final gamma-correction step. `TonemapMantiuk`'s contrast-mapping
+        itself explicitly preserves sign via its own `signedPow` (verified
+        directly that a negative `scale` does not trigger this), so `scale`
+        does not carry the same risk `bias` does for `tone_map_drago`.
+    """
+    hdr = _require_valid_tonemap_hdr(hdr)
+    _require_mantiuk_min_size(hdr)
+    gamma = _validated_positive_float32(gamma, "gamma")
+    scale = _validated_nonzero_float32(scale, "scale")
+    saturation = _validated_positive_float32(saturation, "saturation")
+    _require_not_spatially_constant(hdr, "tone_map_mantiuk")
+    _require_no_zero_luminance_pixel(hdr, "tone_map_mantiuk")
+
+    result = _run_tonemap(
+        lambda: cv2.createTonemapMantiuk(gamma, scale, saturation), hdr, "TonemapMantiuk"
+    )
+    return _validated_float32_result(result, hdr.shape, "TonemapMantiuk")

@@ -13,6 +13,10 @@ from improcv.hdr import (
     fuse_exposures,
     merge_hdr_debevec,
     merge_hdr_robertson,
+    tone_map,
+    tone_map_drago,
+    tone_map_mantiuk,
+    tone_map_reinhard,
 )
 
 _WEIGHT_NAMES = ["contrast_weight", "saturation_weight", "exposure_weight"]
@@ -48,6 +52,23 @@ def _make_stack(
     rng: np.random.Generator, count: int = 3, height: int = 20, width: int = 24
 ) -> list[np.ndarray]:
     return [rng.integers(0, 256, (height, width, 3), dtype=np.uint8) for _ in range(count)]
+
+
+def _make_hdr(
+    rng: np.random.Generator,
+    height: int = 32,
+    width: int = 32,
+    low: float = 0.5,
+    high: float = 10.0,
+) -> np.ndarray:
+    """A random, strictly-positive, non-constant `float32` HDR image with no
+    pixel tied to the array's global minimum across all 3 channels --
+    avoids every degenerate case handled by `tone_map_drago`/
+    `tone_map_reinhard`/`tone_map_mantiuk`'s own preconditions, so it is
+    safe as a generic happy-path fixture for all four tone-mapping
+    functions.
+    """
+    return rng.uniform(low, high, (height, width, 3)).astype(np.float32)
 
 
 class _CustomSequence(Sequence):
@@ -2431,6 +2452,945 @@ def test_calibrate_output_does_not_share_memory_with_inputs(func) -> None:
         assert not np.shares_memory(result, image)
 
 
+# --- tone mapping: shared setup ---
+
+_TONE_MAP_FUNCS = [tone_map, tone_map_drago, tone_map_reinhard, tone_map_mantiuk]
+_TONE_MAP_FUNC_NAMES = ["tone_map", "tone_map_drago", "tone_map_reinhard", "tone_map_mantiuk"]
+_CV2_TONEMAP_FACTORY = {
+    tone_map: cv2.createTonemap,
+    tone_map_drago: cv2.createTonemapDrago,
+    tone_map_reinhard: cv2.createTonemapReinhard,
+    tone_map_mantiuk: cv2.createTonemapMantiuk,
+}
+
+
+def _assert_tone_maps_or_raises_controlled_runtime_error(func, hdr, **kwargs) -> None:
+    """Real, verified finding (not hypothetical): OpenCV's own `pow`/`log`
+    calls inside these operators can receive a base that floating-point
+    rounding leaves very slightly negative (an ordinary artifact of
+    ``(src - min) / (max - min)`` normalization, present even for
+    well-formed, non-degenerate `hdr`) at a non-integer exponent -- which
+    is mathematically undefined and produces `NaN`. Whether this actually
+    happens is architecture/SIMD-dispatch-dependent: confirmed directly
+    that the identical seed/parameters that tone-map finitely on Apple
+    Silicon produced a non-finite result on x86_64 CI (both Linux and
+    Windows). This checks the documented contract itself (a finite
+    result, or a controlled RuntimeError) rather than assuming one
+    specific, architecture-dependent outcome -- mirroring
+    `_assert_calibrates_or_raises_controlled_runtime_error` above.
+    """
+    try:
+        result = func(hdr, **kwargs)
+    except RuntimeError as error:
+        assert "finite" in str(error)
+        return
+    assert isinstance(result, np.ndarray)
+    assert result.dtype == np.float32
+    assert np.all(np.isfinite(result))
+
+
+# --- tone mapping: shared hdr contract ---
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_accepts_valid_hdr(func) -> None:
+    rng = np.random.default_rng(300)
+    hdr = _make_hdr(rng)
+
+    result = func(hdr)
+
+    assert result.shape == hdr.shape
+    assert result.dtype == np.float32
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_non_ndarray(func) -> None:
+    with pytest.raises(TypeError, match="NumPy array"):
+        func([[1.0, 1.0, 1.0]])
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.float64])
+def test_tone_map_rejects_wrong_dtype(func, dtype) -> None:
+    hdr = np.ones((8, 8, 3), dtype=dtype)
+    with pytest.raises(TypeError, match="float32"):
+        func(hdr)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_grayscale(func) -> None:
+    hdr = np.ones((8, 8), dtype=np.float32)
+    with pytest.raises(ValueError, match="grayscale"):
+        func(hdr)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_single_channel_with_trailing_axis(func) -> None:
+    hdr = np.ones((8, 8, 1), dtype=np.float32)
+    with pytest.raises(ValueError, match="single-channel"):
+        func(hdr)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_bgra(func) -> None:
+    hdr = np.ones((8, 8, 4), dtype=np.float32)
+    with pytest.raises(ValueError, match="BGRA"):
+        func(hdr)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_two_channels(func) -> None:
+    hdr = np.ones((8, 8, 2), dtype=np.float32)
+    with pytest.raises(ValueError, match=r"shape \(H, W, 3\)"):
+        func(hdr)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_empty(func) -> None:
+    hdr = np.zeros((0, 0, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match="empty"):
+        func(hdr)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+def test_tone_map_rejects_non_finite_hdr(func, bad_value) -> None:
+    rng = np.random.default_rng(301)
+    hdr = _make_hdr(rng)
+    hdr[0, 0, 0] = bad_value
+    with pytest.raises(ValueError, match="finite"):
+        func(hdr)
+
+
+def test_tone_map_accepts_negative_values() -> None:
+    # Base `tone_map`/`tone_map_drago` place no non-negativity requirement
+    # on `hdr` -- neither merge function guarantees non-negative radiance.
+    rng = np.random.default_rng(302)
+    hdr = _make_hdr(rng, low=-10.0, high=10.0)
+
+    result = tone_map(hdr)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_tone_map_drago_accepts_negative_values() -> None:
+    rng = np.random.default_rng(303)
+    hdr = _make_hdr(rng, low=-10.0, high=10.0)
+
+    result = tone_map_drago(hdr)
+
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_accepts_non_contiguous_view(func) -> None:
+    rng = np.random.default_rng(304)
+    base = _make_hdr(rng, height=16, width=16)
+    view = base[::2, ::2, :]
+    assert not view.flags["C_CONTIGUOUS"]
+
+    result = func(view)
+
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_accepts_read_only_array(func) -> None:
+    rng = np.random.default_rng(305)
+    hdr = _make_hdr(rng)
+    hdr.flags.writeable = False
+
+    result = func(hdr)
+
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_accepts_fortran_order(func) -> None:
+    rng = np.random.default_rng(306)
+    hdr = np.asfortranarray(_make_hdr(rng))
+    assert hdr.flags["F_CONTIGUOUS"]
+
+    result = func(hdr)
+
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_does_not_mutate_hdr(func) -> None:
+    rng = np.random.default_rng(307)
+    hdr = _make_hdr(rng)
+    before = hdr.copy()
+
+    func(hdr)
+
+    np.testing.assert_array_equal(hdr, before)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_output_does_not_share_memory_with_hdr(func) -> None:
+    rng = np.random.default_rng(308)
+    hdr = _make_hdr(rng)
+
+    result = func(hdr)
+
+    assert not np.shares_memory(result, hdr)
+
+
+# --- tone mapping: gamma ---
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_accepts_numpy_real_scalar_gamma(func) -> None:
+    # gamma=0.5 (not the default 1.0) proves a NumPy scalar is genuinely
+    # accepted and used, while keeping 1/gamma an exact integer (2) --
+    # deliberately avoiding a fractional exponent here, since that is a
+    # separate, already-covered numerical-fragility concern (see
+    # _assert_tone_maps_or_raises_controlled_runtime_error).
+    rng = np.random.default_rng(309)
+    hdr = _make_hdr(rng)
+
+    result = func(hdr, gamma=np.float64(0.5))
+
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_bool_gamma(func) -> None:
+    rng = np.random.default_rng(310)
+    hdr = _make_hdr(rng)
+    with pytest.raises(TypeError, match="real number"):
+        func(hdr, gamma=True)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+@pytest.mark.parametrize("bad_gamma", [0.0, -1.0, math.nan, math.inf, -math.inf])
+def test_tone_map_rejects_invalid_gamma(func, bad_gamma) -> None:
+    rng = np.random.default_rng(311)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError):
+        func(hdr, gamma=bad_gamma)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_gamma_underflowing_to_zero(func) -> None:
+    rng = np.random.default_rng(312)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="too small"):
+        func(hdr, gamma=1e-46)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_gamma_overflowing_to_inf(func) -> None:
+    rng = np.random.default_rng(313)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="too large"):
+        func(hdr, gamma=1e300)
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_rejects_huge_int_gamma_with_controlled_value_error(func) -> None:
+    rng = np.random.default_rng(3130)
+    hdr = _make_hdr(rng)
+    try:
+        func(hdr, gamma=10**400)
+    except OverflowError:
+        pytest.fail("a raw OverflowError propagated for an oversized int gamma")
+    except ValueError:
+        pass
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+def test_tone_map_accepts_huge_python_int_gamma(func) -> None:
+    # A huge but float32-representable-as-inf-free int (not the overflow
+    # case above): converts to a large, finite float32 value without
+    # raising ValueError/TypeError. Whether the resulting *tone-mapping*
+    # itself stays finite is a separate, architecture-dependent concern
+    # (see _assert_tone_maps_or_raises_controlled_runtime_error) -- an
+    # extreme 1/gamma exponent close to 0 is especially exposed to it.
+    rng = np.random.default_rng(314)
+    hdr = _make_hdr(rng)
+
+    _assert_tone_maps_or_raises_controlled_runtime_error(func, hdr, gamma=10**6)
+
+
+# --- tone mapping: exact converted values reach the factory ---
+
+
+# These tests only check which exact values reach the OpenCV factory --
+# deliberately decoupled from whether `.process()` itself then succeeds,
+# since that is a separate, architecture-dependent numerical-fragility
+# concern (see _assert_tone_maps_or_raises_controlled_runtime_error): the
+# fake factory still delegates to the real one so the call shape stays
+# realistic, but a RuntimeError from the postcondition afterward is
+# irrelevant to what this test is checking and is swallowed here.
+
+
+def test_tone_map_passes_exact_gamma_to_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, float] = {}
+    real_factory = cv2.createTonemap
+
+    def fake_factory(gamma):
+        captured["gamma"] = gamma
+        return real_factory(gamma)
+
+    monkeypatch.setattr(cv2, "createTonemap", fake_factory)
+    rng = np.random.default_rng(315)
+    hdr = _make_hdr(rng)
+
+    try:
+        tone_map(hdr, gamma=np.float64(2.2))
+    except RuntimeError:
+        pass
+
+    assert captured["gamma"] == np.float32(2.2)
+
+
+def test_tone_map_drago_passes_exact_parameters_to_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, float] = {}
+    real_factory = cv2.createTonemapDrago
+
+    def fake_factory(gamma, saturation, bias):
+        captured["gamma"] = gamma
+        captured["saturation"] = saturation
+        captured["bias"] = bias
+        return real_factory(gamma, saturation, bias)
+
+    monkeypatch.setattr(cv2, "createTonemapDrago", fake_factory)
+    rng = np.random.default_rng(316)
+    hdr = _make_hdr(rng)
+
+    try:
+        tone_map_drago(hdr, gamma=np.float64(1.5), saturation=np.float64(1.2), bias=np.float64(0.7))
+    except RuntimeError:
+        pass
+
+    assert captured["gamma"] == np.float32(1.5)
+    assert captured["saturation"] == np.float32(1.2)
+    assert captured["bias"] == np.float32(0.7)
+
+
+def test_tone_map_reinhard_passes_exact_parameters_to_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, float] = {}
+    real_factory = cv2.createTonemapReinhard
+
+    def fake_factory(gamma, intensity, light_adapt, color_adapt):
+        captured["gamma"] = gamma
+        captured["intensity"] = intensity
+        captured["light_adapt"] = light_adapt
+        captured["color_adapt"] = color_adapt
+        return real_factory(gamma, intensity, light_adapt, color_adapt)
+
+    monkeypatch.setattr(cv2, "createTonemapReinhard", fake_factory)
+    rng = np.random.default_rng(317)
+    hdr = _make_hdr(rng)
+
+    try:
+        tone_map_reinhard(
+            hdr,
+            gamma=np.float64(1.1),
+            intensity=np.float64(3.0),
+            light_adaptation=np.float64(0.4),
+            color_adaptation=np.float64(0.6),
+        )
+    except RuntimeError:
+        pass
+
+    assert captured["gamma"] == np.float32(1.1)
+    assert captured["intensity"] == np.float32(3.0)
+    assert captured["light_adapt"] == np.float32(0.4)
+    assert captured["color_adapt"] == np.float32(0.6)
+
+
+def test_tone_map_mantiuk_passes_exact_parameters_to_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, float] = {}
+    real_factory = cv2.createTonemapMantiuk
+
+    def fake_factory(gamma, scale, saturation):
+        captured["gamma"] = gamma
+        captured["scale"] = scale
+        captured["saturation"] = saturation
+        return real_factory(gamma, scale, saturation)
+
+    monkeypatch.setattr(cv2, "createTonemapMantiuk", fake_factory)
+    rng = np.random.default_rng(318)
+    hdr = _make_hdr(rng)
+
+    try:
+        tone_map_mantiuk(
+            hdr, gamma=np.float64(1.3), scale=np.float64(-0.5), saturation=np.float64(1.4)
+        )
+    except RuntimeError:
+        pass
+
+    assert captured["gamma"] == np.float32(1.3)
+    assert captured["scale"] == np.float32(-0.5)
+    assert captured["saturation"] == np.float32(1.4)
+
+
+# --- tone_map: output range not guaranteed [0, 1] ---
+
+
+def test_tone_map_all_zero_is_finite() -> None:
+    hdr = np.zeros((8, 8, 3), dtype=np.float32)
+
+    result = tone_map(hdr)
+
+    assert np.all(np.isfinite(result))
+    np.testing.assert_array_equal(result, hdr)
+
+
+def test_tone_map_constant_positive_is_not_normalized_to_one() -> None:
+    # Pinned, verified behavior: OpenCV's base Tonemap has a dedicated
+    # branch for a spatially constant image (max - min within
+    # DBL_EPSILON) that copies the input through unchanged rather than
+    # normalizing it -- so the output is NOT the documented [0, 1] range.
+    hdr = np.full((8, 8, 3), 1e6, dtype=np.float32)
+
+    result = tone_map(hdr)
+
+    assert np.all(np.isfinite(result))
+    np.testing.assert_array_equal(result, hdr)
+
+
+def test_tone_map_gradient_can_exceed_normalized_range_bounds() -> None:
+    rng = np.random.default_rng(319)
+    hdr = _make_hdr(rng, low=0.0, high=1000.0)
+
+    result = tone_map(hdr)
+
+    assert np.all(np.isfinite(result))
+    assert result.min() >= -1e-6
+    assert result.max() <= 1.0 + 1e-6
+
+
+def test_tone_map_non_finite_output_raises_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeTonemap:
+        def process(self, hdr):
+            return np.full(hdr.shape, np.nan, dtype=np.float32)
+
+    monkeypatch.setattr(cv2, "createTonemap", lambda gamma: _FakeTonemap())
+    rng = np.random.default_rng(320)
+    hdr = _make_hdr(rng)
+
+    with pytest.raises(RuntimeError, match="finite"):
+        tone_map(hdr)
+
+
+# --- tone_map_drago: saturation/bias ---
+
+
+def test_tone_map_drago_rejects_bool_saturation() -> None:
+    rng = np.random.default_rng(321)
+    hdr = _make_hdr(rng)
+    with pytest.raises(TypeError, match="real number"):
+        tone_map_drago(hdr, saturation=True)
+
+
+@pytest.mark.parametrize("bad_saturation", [0.0, -1.0, math.nan, math.inf])
+def test_tone_map_drago_rejects_invalid_saturation(bad_saturation) -> None:
+    rng = np.random.default_rng(322)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError):
+        tone_map_drago(hdr, saturation=bad_saturation)
+
+
+def test_tone_map_drago_rejects_saturation_underflowing_to_zero() -> None:
+    rng = np.random.default_rng(323)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="too small"):
+        tone_map_drago(hdr, saturation=1e-46)
+
+
+def test_tone_map_drago_rejects_saturation_overflowing_to_inf() -> None:
+    rng = np.random.default_rng(324)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="too large"):
+        tone_map_drago(hdr, saturation=1e300)
+
+
+def test_tone_map_drago_rejects_huge_int_saturation_with_controlled_value_error() -> None:
+    rng = np.random.default_rng(3240)
+    hdr = _make_hdr(rng)
+    try:
+        tone_map_drago(hdr, saturation=10**400)
+    except OverflowError:
+        pytest.fail("a raw OverflowError propagated for an oversized int saturation")
+    except ValueError:
+        pass
+
+
+def test_tone_map_drago_rejects_bool_bias() -> None:
+    rng = np.random.default_rng(325)
+    hdr = _make_hdr(rng)
+    with pytest.raises(TypeError, match="real number"):
+        tone_map_drago(hdr, bias=True)
+
+
+@pytest.mark.parametrize("bad_bias", [-0.0001, 1.0001, -1.0, 2.0, math.nan, math.inf, -math.inf])
+def test_tone_map_drago_rejects_bias_outside_range(bad_bias) -> None:
+    rng = np.random.default_rng(326)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+        tone_map_drago(hdr, bias=bad_bias)
+
+
+@pytest.mark.parametrize("boundary_bias", [0.0, 1.0])
+def test_tone_map_drago_accepts_bias_boundaries(boundary_bias) -> None:
+    # bias=0 drives TonemapDrago's internal exponent to +inf (logf(0) is
+    # -inf); whether that produces a finite result is architecture-
+    # dependent for the same reason as _assert_tone_maps_or_raises_
+    # controlled_runtime_error -- this only checks that the boundary
+    # value itself is accepted (not rejected as out-of-range), not that
+    # OpenCV's own numerics succeed.
+    rng = np.random.default_rng(327)
+    hdr = _make_hdr(rng)
+
+    _assert_tone_maps_or_raises_controlled_runtime_error(tone_map_drago, hdr, bias=boundary_bias)
+
+
+def test_tone_map_drago_accepts_bias_underflowing_to_zero() -> None:
+    # Unlike saturation/gamma, a positive bias underflowing to 0.0f is a
+    # legal endpoint, not a hidden contract violation -- see the boundary
+    # test above for why finiteness itself isn't asserted here.
+    rng = np.random.default_rng(328)
+    hdr = _make_hdr(rng)
+
+    _assert_tone_maps_or_raises_controlled_runtime_error(tone_map_drago, hdr, bias=1e-46)
+
+
+# --- tone_map_drago: degenerate data ---
+
+
+def test_tone_map_drago_accepts_constant_positive_color() -> None:
+    hdr = np.full((8, 8, 3), 5.0, dtype=np.float32)
+
+    result = tone_map_drago(hdr)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_tone_map_drago_rejects_all_zero() -> None:
+    hdr = np.zeros((8, 8, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match="zero luminance"):
+        tone_map_drago(hdr)
+
+
+def test_tone_map_drago_rejects_non_constant_image_with_tied_global_minimum() -> None:
+    rng = np.random.default_rng(329)
+    hdr = _make_hdr(rng, low=0.5, high=10.0)
+    global_min = hdr.min()
+    hdr[5, 5, :] = global_min
+
+    with pytest.raises(ValueError, match="zero luminance"):
+        tone_map_drago(hdr)
+
+
+def test_tone_map_drago_does_not_use_a_black_pixel_heuristic() -> None:
+    # A genuine (0, 0, 0) pixel is safe as long as it is not tied to the
+    # array's post-normalization global minimum -- verified directly that
+    # a negative global minimum elsewhere means an existing (0, 0, 0)
+    # pixel does not necessarily become zero-luminance after OpenCV's own
+    # linear normalization.
+    rng = np.random.default_rng(330)
+    hdr = _make_hdr(rng, low=1.0, high=10.0)
+    hdr[2, 2, :] = 0.0  # a genuine (0, 0, 0) pixel
+    hdr[7, 7, 0] = -5.0  # array's true global minimum, but only in one channel -- not
+    # tied across all 3 channels at (7, 7), so this pixel does not become zero-luminance
+
+    # The point here is that this does NOT raise ValueError (our own
+    # precondition correctly lets it through); if it happens to, an
+    # uncaught ValueError fails this test as intended. Whether OpenCV's
+    # own numerics then succeed is the separate, architecture-dependent
+    # concern this helper already covers elsewhere.
+    _assert_tone_maps_or_raises_controlled_runtime_error(tone_map_drago, hdr)
+
+
+def test_tone_map_drago_zero_luminance_rejected_regardless_of_bias() -> None:
+    rng = np.random.default_rng(331)
+    hdr = _make_hdr(rng, low=0.5, high=10.0)
+    hdr[3, 3, :] = hdr.min()
+
+    for bias in (0.0, 0.5, 0.85, 1.0):
+        with pytest.raises(ValueError, match="zero luminance"):
+            tone_map_drago(hdr, bias=bias)
+
+
+def test_tone_map_drago_cv2_error_becomes_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(gamma, saturation, bias):
+        raise cv2.error("synthetic failure")
+
+    monkeypatch.setattr(cv2, "createTonemapDrago", boom)
+    rng = np.random.default_rng(332)
+    hdr = _make_hdr(rng)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tone_map_drago(hdr)
+    assert isinstance(exc_info.value.__cause__, cv2.error)
+
+
+# --- tone_map_reinhard: intensity/light_adaptation/color_adaptation ---
+
+
+@pytest.mark.parametrize("name", ["intensity", "light_adaptation", "color_adaptation"])
+def test_tone_map_reinhard_rejects_bool_parameter(name) -> None:
+    rng = np.random.default_rng(333)
+    hdr = _make_hdr(rng)
+    with pytest.raises(TypeError, match="real number"):
+        tone_map_reinhard(hdr, **{name: True})
+
+
+@pytest.mark.parametrize("bad_intensity", [-8.0001, 8.0001, -20.0, 20.0, math.nan, math.inf])
+def test_tone_map_reinhard_rejects_intensity_outside_range(bad_intensity) -> None:
+    rng = np.random.default_rng(334)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="between -8.0 and 8.0"):
+        tone_map_reinhard(hdr, intensity=bad_intensity)
+
+
+@pytest.mark.parametrize("boundary_intensity", [-8.0, 8.0])
+def test_tone_map_reinhard_accepts_intensity_boundaries(boundary_intensity) -> None:
+    rng = np.random.default_rng(335)
+    hdr = _make_hdr(rng)
+
+    result = tone_map_reinhard(hdr, intensity=boundary_intensity)
+
+    assert np.all(np.isfinite(result))
+
+
+@pytest.mark.parametrize("name", ["light_adaptation", "color_adaptation"])
+@pytest.mark.parametrize("bad_value", [-0.0001, 1.0001, -1.0, 2.0, math.nan, math.inf])
+def test_tone_map_reinhard_rejects_adaptation_outside_range(name, bad_value) -> None:
+    rng = np.random.default_rng(336)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+        tone_map_reinhard(hdr, **{name: bad_value})
+
+
+@pytest.mark.parametrize("name", ["light_adaptation", "color_adaptation"])
+@pytest.mark.parametrize("boundary_value", [0.0, 1.0])
+def test_tone_map_reinhard_accepts_adaptation_boundaries(name, boundary_value) -> None:
+    rng = np.random.default_rng(337)
+    hdr = _make_hdr(rng)
+
+    result = tone_map_reinhard(hdr, **{name: boundary_value})
+
+    assert np.all(np.isfinite(result))
+
+
+# --- tone_map_reinhard: degenerate data ---
+
+
+def test_tone_map_reinhard_rejects_constant_gray() -> None:
+    hdr = np.full((8, 8, 3), 3.0, dtype=np.float32)
+    with pytest.raises(ValueError, match="spatially constant"):
+        tone_map_reinhard(hdr)
+
+
+def test_tone_map_reinhard_rejects_constant_color() -> None:
+    hdr = np.empty((8, 8, 3), dtype=np.float32)
+    hdr[:] = (1.0, 2.0, 3.0)
+    with pytest.raises(ValueError, match="spatially constant"):
+        tone_map_reinhard(hdr)
+
+
+def test_tone_map_reinhard_accepts_thin_non_constant_image() -> None:
+    rng = np.random.default_rng(338)
+    hdr = _make_hdr(rng, height=1, width=64)
+
+    result = tone_map_reinhard(hdr)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_tone_map_reinhard_two_wrapper_calls_are_bit_identical() -> None:
+    rng = np.random.default_rng(339)
+    hdr = _make_hdr(rng)
+
+    try:
+        result1 = tone_map_reinhard(hdr)
+    except RuntimeError:
+        # Still a meaningful determinism check: a fresh object per call
+        # (see tone_map_reinhard's Notes) must fail the same way twice,
+        # not succeed once and fail once.
+        with pytest.raises(RuntimeError):
+            tone_map_reinhard(hdr)
+        return
+    result2 = tone_map_reinhard(hdr)
+
+    np.testing.assert_array_equal(result1, result2)
+
+
+def test_tone_map_reinhard_creates_a_fresh_factory_object_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call_count = 0
+    real_factory = cv2.createTonemapReinhard
+
+    def counting_factory(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_factory(*args, **kwargs)
+
+    monkeypatch.setattr(cv2, "createTonemapReinhard", counting_factory)
+    rng = np.random.default_rng(340)
+    hdr = _make_hdr(rng)
+
+    for _ in range(3):
+        try:
+            tone_map_reinhard(hdr)
+        except RuntimeError:
+            pass  # irrelevant here -- this only checks the factory call count
+
+    assert call_count == 3
+
+
+def test_tone_map_reinhard_cv2_error_becomes_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(gamma, intensity, light_adapt, color_adapt):
+        raise cv2.error("synthetic failure")
+
+    monkeypatch.setattr(cv2, "createTonemapReinhard", boom)
+    rng = np.random.default_rng(341)
+    hdr = _make_hdr(rng)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tone_map_reinhard(hdr)
+    assert isinstance(exc_info.value.__cause__, cv2.error)
+
+
+# --- tone_map_mantiuk: scale/saturation ---
+
+
+def test_tone_map_mantiuk_rejects_bool_scale() -> None:
+    rng = np.random.default_rng(342)
+    hdr = _make_hdr(rng)
+    with pytest.raises(TypeError, match="real number"):
+        tone_map_mantiuk(hdr, scale=True)
+
+
+def test_tone_map_mantiuk_rejects_zero_scale() -> None:
+    rng = np.random.default_rng(343)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="zero"):
+        tone_map_mantiuk(hdr, scale=0.0)
+
+
+@pytest.mark.parametrize("bad_scale", [math.nan, math.inf, -math.inf])
+def test_tone_map_mantiuk_rejects_non_finite_scale(bad_scale) -> None:
+    rng = np.random.default_rng(344)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError):
+        tone_map_mantiuk(hdr, scale=bad_scale)
+
+
+@pytest.mark.parametrize("tiny_scale", [1e-46, -1e-46])
+def test_tone_map_mantiuk_rejects_scale_underflowing_to_zero(tiny_scale) -> None:
+    rng = np.random.default_rng(345)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="too small"):
+        tone_map_mantiuk(hdr, scale=tiny_scale)
+
+
+def test_tone_map_mantiuk_rejects_scale_overflowing_to_inf() -> None:
+    rng = np.random.default_rng(346)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError, match="too large"):
+        tone_map_mantiuk(hdr, scale=1e300)
+
+
+def test_tone_map_mantiuk_rejects_huge_int_scale_with_controlled_value_error() -> None:
+    rng = np.random.default_rng(3460)
+    hdr = _make_hdr(rng)
+    try:
+        tone_map_mantiuk(hdr, scale=10**400)
+    except OverflowError:
+        pytest.fail("a raw OverflowError propagated for an oversized int scale")
+    except ValueError:
+        pass
+
+
+def test_tone_map_mantiuk_accepts_negative_scale() -> None:
+    rng = np.random.default_rng(347)
+    hdr = _make_hdr(rng)
+
+    result = tone_map_mantiuk(hdr, scale=-0.5)
+
+    assert np.all(np.isfinite(result))
+
+
+def test_tone_map_mantiuk_rejects_bool_saturation() -> None:
+    rng = np.random.default_rng(348)
+    hdr = _make_hdr(rng)
+    with pytest.raises(TypeError, match="real number"):
+        tone_map_mantiuk(hdr, saturation=True)
+
+
+@pytest.mark.parametrize("bad_saturation", [0.0, -1.0, math.nan, math.inf])
+def test_tone_map_mantiuk_rejects_invalid_saturation(bad_saturation) -> None:
+    rng = np.random.default_rng(349)
+    hdr = _make_hdr(rng)
+    with pytest.raises(ValueError):
+        tone_map_mantiuk(hdr, saturation=bad_saturation)
+
+
+# --- tone_map_mantiuk: minimal size and degenerate data ---
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 3), (1, 5, 3), (5, 1, 3)])
+def test_tone_map_mantiuk_rejects_too_small_shapes(shape) -> None:
+    hdr = np.ones(shape, dtype=np.float32)
+    with pytest.raises(ValueError, match="at least 2"):
+        tone_map_mantiuk(hdr)
+
+
+def test_tone_map_mantiuk_accepts_2x2() -> None:
+    hdr = np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [[7.0, 8.0, 9.0], [1.5, 2.5, 3.5]]]).astype(
+        np.float32
+    )
+
+    result = tone_map_mantiuk(hdr)
+
+    assert result.shape == (2, 2, 3)
+    assert np.all(np.isfinite(result))
+
+
+def test_tone_map_mantiuk_rejects_constant_image() -> None:
+    hdr = np.full((8, 8, 3), 3.0, dtype=np.float32)
+    with pytest.raises(ValueError, match="spatially constant"):
+        tone_map_mantiuk(hdr)
+
+
+def test_tone_map_mantiuk_rejects_zero_luminance_pixel() -> None:
+    rng = np.random.default_rng(350)
+    hdr = _make_hdr(rng, low=0.5, high=10.0)
+    hdr[3, 3, :] = hdr.min()
+
+    with pytest.raises(ValueError, match="zero luminance"):
+        tone_map_mantiuk(hdr)
+
+
+def test_tone_map_mantiuk_cv2_error_becomes_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(gamma, scale, saturation):
+        raise cv2.error("synthetic failure")
+
+    monkeypatch.setattr(cv2, "createTonemapMantiuk", boom)
+    rng = np.random.default_rng(351)
+    hdr = _make_hdr(rng)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tone_map_mantiuk(hdr)
+    assert isinstance(exc_info.value.__cause__, cv2.error)
+
+
+# --- tone mapping: cross-check against direct OpenCV ---
+
+
+@pytest.mark.parametrize("func", _TONE_MAP_FUNCS, ids=_TONE_MAP_FUNC_NAMES)
+# Each cross-check below computes the direct OpenCV result first (the raw
+# `cv2.Tonemap*.process()` call itself never raises for this data --
+# only improcv's own postcondition does, for a non-finite result). If the
+# wrapper then raises RuntimeError, that is only "matching" behavior if
+# the direct result is indeed non-finite too -- confirming the wrapper
+# faithfully reports what OpenCV itself produced rather than diverging
+# from it, architecture-dependent numerics and all (see
+# _assert_tone_maps_or_raises_controlled_runtime_error).
+
+
+def test_tone_map_matches_direct_opencv_defaults(func) -> None:
+    rng = np.random.default_rng(352)
+    hdr = _make_hdr(rng)
+
+    direct_result = _CV2_TONEMAP_FACTORY[func]().process(hdr)
+    try:
+        wrapper_result = func(hdr)
+    except RuntimeError:
+        assert not np.all(np.isfinite(direct_result))
+        return
+
+    np.testing.assert_array_equal(wrapper_result, direct_result)
+
+
+def test_tone_map_drago_matches_direct_opencv_explicit_parameters() -> None:
+    rng = np.random.default_rng(353)
+    hdr = _make_hdr(rng)
+
+    direct_result = cv2.createTonemapDrago(1.8, 1.3, 0.7).process(hdr)
+    try:
+        wrapper_result = tone_map_drago(hdr, gamma=1.8, saturation=1.3, bias=0.7)
+    except RuntimeError:
+        assert not np.all(np.isfinite(direct_result))
+        return
+
+    np.testing.assert_array_equal(wrapper_result, direct_result)
+
+
+def test_tone_map_reinhard_matches_direct_opencv_explicit_parameters() -> None:
+    rng = np.random.default_rng(354)
+    hdr = _make_hdr(rng)
+
+    direct_result = cv2.createTonemapReinhard(1.2, 1.0, 0.6, 0.4).process(hdr)
+    try:
+        wrapper_result = tone_map_reinhard(
+            hdr, gamma=1.2, intensity=1.0, light_adaptation=0.6, color_adaptation=0.4
+        )
+    except RuntimeError:
+        assert not np.all(np.isfinite(direct_result))
+        return
+
+    np.testing.assert_array_equal(wrapper_result, direct_result)
+
+
+def test_tone_map_mantiuk_matches_direct_opencv_explicit_parameters() -> None:
+    rng = np.random.default_rng(355)
+    hdr = _make_hdr(rng)
+
+    direct_result = cv2.createTonemapMantiuk(1.1, 0.8, 1.2).process(hdr)
+    try:
+        wrapper_result = tone_map_mantiuk(hdr, gamma=1.1, scale=0.8, saturation=1.2)
+    except RuntimeError:
+        assert not np.all(np.isfinite(direct_result))
+        return
+
+    np.testing.assert_array_equal(wrapper_result, direct_result)
+
+
+# --- tone mapping: end-to-end pipeline ---
+
+
+def test_calibrate_merge_tone_map_end_to_end_pipeline() -> None:
+    rng = np.random.default_rng(356)
+    images = _make_hdr_images(rng, dtype=np.uint8, channels=3, height=64, width=64)
+    times = list(_DEFAULT_TIMES)
+
+    response = calibrate_camera_response_debevec(images, times)
+    hdr = merge_hdr_debevec(images, times, response_curve=response)
+
+    assert hdr.shape == images[0].shape
+    assert hdr.dtype == np.float32
+
+    try:
+        ldr = tone_map_reinhard(hdr)
+    except RuntimeError as error:
+        # See _assert_tone_maps_or_raises_controlled_runtime_error: real
+        # merged radiance can still trigger this architecture-dependent
+        # OpenCV numerical fragility on some platforms.
+        assert "finite" in str(error)
+        return
+
+    display = np.round(np.clip(ldr, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+    assert ldr.shape == images[0].shape
+    assert ldr.dtype == np.float32
+    assert display.shape == images[0].shape
+    assert display.dtype == np.uint8
+    assert np.all(np.isfinite(ldr))
+
+
 # --- public exports ---
 
 
@@ -2440,3 +3400,7 @@ def test_public_exports() -> None:
     assert im.merge_hdr_robertson is merge_hdr_robertson
     assert im.calibrate_camera_response_debevec is calibrate_camera_response_debevec
     assert im.calibrate_camera_response_robertson is calibrate_camera_response_robertson
+    assert im.tone_map is tone_map
+    assert im.tone_map_drago is tone_map_drago
+    assert im.tone_map_reinhard is tone_map_reinhard
+    assert im.tone_map_mantiuk is tone_map_mantiuk

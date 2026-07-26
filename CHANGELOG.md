@@ -318,6 +318,62 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `exposure_times` reuses the existing, already-verified validator shared with the merge functions
   (fresh, contiguous `float32` array; strictly positive; no automatic reordering). No new runtime
   dependency.
+- `improcv.hdr.tone_map`/`tone_map_drago`/`tone_map_reinhard`/`tone_map_mantiuk`, Phase 4 slice 9
+  (tone mapping — the last of this phase's HDR-related slices, and a distinct operation from Mertens
+  exposure fusion, radiance merge, and camera-response calibration above): wrap OpenCV's
+  `cv2.createTonemap`/`createTonemapDrago`/`createTonemapReinhard`/`createTonemapMantiuk`, in base
+  `opencv-python`, no contrib. Four separate functions rather than one dispatcher, since each operator
+  has its own parameter set with no shared meaning across operators. `hdr` must be a non-empty,
+  finite, `float32`, 3-channel BGR `(H, W, 3)` array for all four — verified directly, in OpenCV's own
+  C++ source, that the base `Tonemap` class asserts exactly this, and that `TonemapDrago`/
+  `TonemapReinhard`/`TonemapMantiuk` each enforce it identically, indirectly, by calling the base
+  `Tonemap` internally as their own first step. Negative values are explicitly allowed (neither merge
+  function guarantees non-negative radiance). `gamma` (shared by all four) must be strictly positive,
+  finite, and `float32`-safe — verified directly that `gamma<=0` does not raise inside OpenCV, but
+  silently produces a meaningless result (`gamma=0` reliably introduces `NaN` via `pow` applied to a
+  tiny negative floating-point rounding artifact present even in well-behaved normalized output;
+  negative `gamma` produces enormous, non-physical, but still finite values). `tone_map_drago`'s
+  `saturation` must be strictly positive; its `bias` must be within OpenCV's own documented `[0, 1]`
+  range (rejected outside it, even though specific out-of-range values were empirically observed to
+  still return finite output on some test images — not treated as a stable, version-independent
+  guarantee). `tone_map_reinhard`'s `intensity` must be within `[-8, 8]`, `light_adaptation`/
+  `color_adaptation` (OpenCV's own parameter names: `light_adapt`/`color_adapt`, spelled out in full
+  here since the mapping is unambiguous) within `[0, 1]`. `tone_map_mantiuk`'s `scale` must be nonzero
+  and `float32`-safe (both positive and negative values are legal — verified directly that
+  `TonemapMantiuk`'s internal `signedPow` explicitly preserves sign — but `scale=0` deterministically
+  produces a non-finite result on every supported OpenCV version); its `saturation` follows the same
+  contract as Drago's. **Real, non-hypothetical findings from a full four-class audit across OpenCV
+  4.9.0, 4.13.0, and 5.0.0** (identical behavior across all three versions except where noted):
+  a spatially constant `hdr` deterministically produces a non-finite result for `tone_map_reinhard`
+  (any constant value, not just black) and `tone_map_mantiuk` (a raw, low-level `cv2.error`), so both
+  reject it with a clear `ValueError` before calling OpenCV; `tone_map_drago` and `tone_map_mantiuk`
+  share OpenCV's `mapLuminance` helper, which divides each pixel's channels by that same pixel's own
+  luminance with no protection against zero — since OpenCV's base linear normalization maps `hdr`'s
+  global minimum to exactly `0.0`, any pixel whose three channels are all already at that global
+  minimum (a common case: any `hdr` whose darkest point is a true black pixel, not a synthetic corner
+  case) is detected and rejected with a `ValueError` before calling OpenCV, rather than surfacing as a
+  `NaN` at that exact pixel; `tone_map_mantiuk` additionally requires both spatial dimensions to be at
+  least `2` (verified directly that its internal contrast pyramid has zero levels otherwise, surfacing
+  as an unrelated raw `cv2.error`). Verified directly, in OpenCV's own C++ source, that
+  `cv2.TonemapReinhard.process()` mutates its own object's `intensity` field in place as a side
+  effect, so a fresh operator object is constructed on every call for all four functions (never
+  cached or reused) — this alone neutralizes that bug for every caller of this module. Any `cv2.error`
+  that still reaches OpenCV despite passing every documented validation (e.g. an internal
+  conjugate-gradient solver assertion in `TonemapMantiuk`) is converted into a `RuntimeError` with the
+  original exception preserved as `__cause__`, rather than leaking as a raw OpenCV error. Output is
+  raw `float32`, same shape as `hdr`, never clipped or normalized — verified directly, in OpenCV's own
+  C++ source, that a spatially constant, non-degenerate `hdr` bypasses `tone_map`/`tone_map_drago`'s
+  own normalization branch entirely and passes the input value straight through, so OpenCV's own
+  documented `[0, 1]` output range is not an unconditional guarantee. **Real, cross-architecture
+  finding**: a finite result is not unconditionally guaranteed even for well-formed, non-degenerate
+  `hdr` whenever an operator's internal exponent (`gamma`, `tone_map_drago`'s `bias`, or an internal,
+  non-parametrized exponent for `tone_map_reinhard`/`tone_map_mantiuk`) is not an exact integer —
+  OpenCV's own floating-point rounding can leave the raised value very slightly negative, and a
+  negative base to a non-integer power is `NaN`. Confirmed directly that this is CPU-architecture/
+  SIMD-dispatch-dependent, not just data-dependent: identical seeds and parameters that tone-map
+  finitely on Apple Silicon produced a non-finite result, correctly caught by this `RuntimeError`, on
+  x86_64 CI (both Linux and Windows) — this project's full CI matrix (not just local, single-
+  architecture verification) is what surfaced it. No new runtime dependency.
 
 ### Changed
 
