@@ -374,10 +374,53 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   finitely on Apple Silicon produced a non-finite result, correctly caught by this `RuntimeError`, on
   x86_64 CI (both Linux and Windows) — this project's full CI matrix (not just local, single-
   architecture verification) is what surfaced it. No new runtime dependency.
+- New `improcv.stitching` module, Phase 4 slice 10 (panorama/scan stitching — the last candidate
+  slice of Phase 4): `stitch_images`, wrapping OpenCV's high-level `cv2.Stitcher`, in base
+  `opencv-python`, no contrib. One function with a `mode: Literal["panorama", "scans"]` parameter
+  rather than two separate functions or a status-carrying result type, since both modes share an
+  identical input/output contract and differ only in the internal geometric model (homography/
+  perspective for `"panorama"`, affine for `"scans"` — verified directly that `"scans"` is not limited
+  to pure translation). `images` must be a real `Sequence` of at least 2 `uint8`, 3-channel BGR
+  `(H, W, 3)` arrays — a single `np.ndarray` (including a 4D stack), `str`/`bytes`/`bytearray`, and a
+  generator/iterator are all rejected explicitly, as are grayscale, `(H, W, 1)`, 2-channel, BGRA,
+  `uint16`, `float32`, and `float64` elements, with a message naming the offending index. **Real
+  findings from a full audit across OpenCV 4.9.0, 4.13.0, and 5.0.0** (identical behavior on all
+  three): grayscale/`(H, W, 1)`/2-channel/BGRA each raise a different, unindexed, low-level
+  `cv2.error` from deep inside the stitching pipeline; `uint16`/`float32` are silently accepted by the
+  Python binding but produce a misleading generic "not enough images" failure instead of any error —
+  both categories are now caught before ever reaching OpenCV. Images may have different spatial
+  shapes — verified directly that OpenCV stitches differently-sized images without complaint, so this
+  is not required to match. `cv2.Stitcher`'s four status codes (`OK`, `ERR_NEED_MORE_IMGS`,
+  `ERR_HOMOGRAPHY_EST_FAIL`, `ERR_CAMERA_PARAMS_ADJUST_FAIL`) are stable across all three audited
+  versions; a non-`OK` status raises `RuntimeError` naming the symbolic status, its numeric code, and
+  a short category — **never `ValueError`, even for insufficient overlap**, since the input images are
+  structurally valid and the algorithm simply could not relate them. Output postcondition (`RuntimeError`
+  on violation): a non-empty `uint8` `(H, W, 3)` array — no specific shape, aspect ratio, or relationship
+  to the input sizes is required, since verified directly that a successful panorama can be smaller
+  than either input and is not exactly reproducible across repeated calls with identical arguments.
+  **Not deterministic, even within a single process**: verified directly that OpenCV's RANSAC-based
+  feature matching and geometry estimation draw from OpenCV's global RNG, so the same input images at
+  a borderline amount of overlap can succeed on one call and fail on the next; `stitch_images` never
+  calls `cv2.setRNGSeed` itself, since that would be a silent, global side effect on every other OpenCV
+  call in the process. **Real, verified finding**: a poorly-conditioned geometry estimate (structurally
+  valid images, just an orientation `mode` does not expect) can make OpenCV allocate — and report as a
+  *successful* result — a panorama and internal buffers many times larger than the inputs; since that
+  allocation happens inside OpenCV before this wrapper ever sees a return value, no check on the
+  returned array could prevent it, so none is attempted (documented honestly in the docstring/README
+  instead). A fresh `Stitcher` object is created for every call; no per-image feature masks and no
+  `cv2.Stitcher` registration/seam/compositing/confidence settings are exposed in this first version.
+  No new runtime dependency.
 
 ### Changed
 
 ### Fixed
+- `tone_map_drago`/`tone_map_mantiuk`: fixed `_require_no_zero_luminance_pixel`'s copy-through branch
+  (when `hdr` is spatially constant to within `DBL_EPSILON`, which OpenCV passes through unnormalized)
+  to check every pixel for zero luminance, not only `hdr[0, 0]` — a near-constant (but not
+  bit-identical) `hdr` can have its zero-luminance pixel anywhere. Confirmed with a deterministic
+  counterexample (`hdr = np.full((4, 4, 3), 1e-20, dtype=np.float32); hdr[2, 2] = 0.0`) that previously
+  reached OpenCV and surfaced only as this module's own `RuntimeError` postcondition instead of the
+  intended `ValueError` precondition.
 - `calibrate_camera_response_debevec`/`calibrate_camera_response_robertson`: the output postcondition
   now also checks the returned curve's value compatibility with the corresponding merge function's
   `response_curve` contract, not just dtype/shape/finiteness. **Real finding, not hypothetical**:
