@@ -364,7 +364,16 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   raw `float32`, same shape as `hdr`, never clipped or normalized — verified directly, in OpenCV's own
   C++ source, that a spatially constant, non-degenerate `hdr` bypasses `tone_map`/`tone_map_drago`'s
   own normalization branch entirely and passes the input value straight through, so OpenCV's own
-  documented `[0, 1]` output range is not an unconditional guarantee. No new runtime dependency.
+  documented `[0, 1]` output range is not an unconditional guarantee. **Real, cross-architecture
+  finding**: a finite result is not unconditionally guaranteed even for well-formed, non-degenerate
+  `hdr` whenever an operator's internal exponent (`gamma`, `tone_map_drago`'s `bias`, or an internal,
+  non-parametrized exponent for `tone_map_reinhard`/`tone_map_mantiuk`) is not an exact integer —
+  OpenCV's own floating-point rounding can leave the raised value very slightly negative, and a
+  negative base to a non-integer power is `NaN`. Confirmed directly that this is CPU-architecture/
+  SIMD-dispatch-dependent, not just data-dependent: identical seeds and parameters that tone-map
+  finitely on Apple Silicon produced a non-finite result, correctly caught by this `RuntimeError`, on
+  x86_64 CI (both Linux and Windows) — this project's full CI matrix (not just local, single-
+  architecture verification) is what surfaced it. No new runtime dependency.
 
 ### Changed
 

@@ -444,6 +444,17 @@ three channels is a true black pixel triggers it). `tone_map_mantiuk` additional
 `hdr` dimensions to be at least `2`. See each function's docstring for the full parameter contract
 and exact value ranges.
 
+**A finite result is not unconditionally guaranteed even for well-formed, non-degenerate `hdr`.**
+All four operators internally raise a normalized value to some exponent (`gamma`, `tone_map_drago`'s
+`bias`, or an internal, non-parametrized exponent for `tone_map_reinhard`/`tone_map_mantiuk`);
+OpenCV's own floating-point rounding can occasionally leave that value very slightly negative -- an
+ordinary artifact of min/max normalization, not a data problem -- and raising a negative number to a
+non-integer power is mathematically undefined, producing `NaN`. Whether this actually happens is
+CPU-architecture/SIMD-dispatch-dependent, not just data-dependent: verified directly that the same
+seed and parameters that tone-map finitely on Apple Silicon produced a non-finite result (cleanly
+caught by `RuntimeError`) on x86_64 CI. Treat `RuntimeError` from any tone-mapping function as a real,
+expected possibility for otherwise-ordinary input, not only for the degenerate cases listed above.
+
 Mertens exposure fusion (`fuse_exposures`, above) is a different operation and does **not** produce a
 radiance map -- do not run its output through any of the tone-mapping functions; its result is already
 close to display-ready (see its own section above).

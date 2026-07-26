@@ -1422,6 +1422,20 @@ def tone_map(
         If OpenCV's `Tonemap` does not return a finite `float32` array of
         `hdr`'s shape for the given inputs, or if it raises a raw
         `cv2.error` despite `hdr`/`gamma` passing improcv's own validation.
+        **A finite result is not unconditionally guaranteed even for
+        well-formed, non-degenerate `hdr`** whenever `1/gamma` is not an
+        exact integer (`gamma != 1.0`, or more generally any `gamma` whose
+        reciprocal has a fractional part): verified directly that OpenCV's
+        min/max normalization can leave the pixel at `hdr`'s global
+        minimum very slightly negative -- an ordinary floating-point
+        rounding artifact, not a data problem -- and raising a negative
+        base to a non-integer power is mathematically undefined,
+        producing `NaN` at exactly that pixel. Whether this actually
+        happens is CPU-architecture/SIMD-dispatch-dependent, not just
+        data-dependent: confirmed directly that the identical seed and
+        `gamma` value that tone-map finitely on Apple Silicon produced a
+        non-finite result (caught cleanly by this `RuntimeError`) on
+        x86_64 CI (both Linux and Windows).
 
     Notes
     -----
@@ -1512,7 +1526,14 @@ def tone_map_drago(
         As `tone_map`, plus: if `saturation`/`bias` is not a real number
         (rejecting `bool`).
     RuntimeError
-        As `tone_map`.
+        As `tone_map`'s `gamma`-driven case. `bias` carries an
+        independent, additional version of the same risk: `TonemapDrago`
+        raises each pixel's normalized luminance to an exponent derived
+        from `bias` (`log(bias) / log(0.5)`), which is only guaranteed an
+        integer at `bias=0.5` -- any other `bias` value shares `gamma`'s
+        architecture-dependent exposure to a `NaN` from a slightly
+        negative floating-point base, independent of whatever `gamma`
+        itself is set to.
     """
     hdr = _require_valid_tonemap_hdr(hdr)
     saturation = _validated_positive_float32(saturation, "saturation")
@@ -1605,7 +1626,13 @@ def tone_map_reinhard(
         As `tone_map`, plus: if `intensity`/`light_adaptation`/
         `color_adaptation` is not a real number (rejecting `bool`).
     RuntimeError
-        As `tone_map`.
+        As `tone_map`'s `gamma`-driven case, applied to this function's own
+        final gamma-correction step. `TonemapReinhard`'s core computation
+        also raises values to two further exponents unrelated to `gamma`
+        (a fixed `1.4` power, and a data-derived "key" exponent) that are
+        not part of this function's public parameters and cannot be tuned
+        away -- a `NaN` from either is likewise architecture-dependent and
+        surfaces as this same `RuntimeError`.
 
     Notes
     -----
@@ -1708,7 +1735,11 @@ def tone_map_mantiuk(
         As `tone_map`, plus: if `scale`/`saturation` is not a real number
         (rejecting `bool`).
     RuntimeError
-        As `tone_map`.
+        As `tone_map`'s `gamma`-driven case, applied to this function's own
+        final gamma-correction step. `TonemapMantiuk`'s contrast-mapping
+        itself explicitly preserves sign via its own `signedPow` (verified
+        directly that a negative `scale` does not trigger this), so `scale`
+        does not carry the same risk `bias` does for `tone_map_drago`.
     """
     hdr = _require_valid_tonemap_hdr(hdr)
     _require_mantiuk_min_size(hdr)
