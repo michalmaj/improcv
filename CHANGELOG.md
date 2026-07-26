@@ -10,6 +10,12 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.2.0a1] - 2026-07-26
+
+Phase 4 release: quality metrics, perceptual hashing, photo and creative
+operations, non-local-means denoising, HDR imaging, and panorama/scan
+stitching.
+
 ### Added
 - New `improcv.quality` module, Phase 4 slice 1 (quality metrics — core): `mse`, `psnr`, `ssim`.
   `mse` is the mean squared error over every element (including channels), always finite and
@@ -410,8 +416,6 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   instead). A fresh `Stitcher` object is created for every call; no per-image feature masks and no
   `cv2.Stitcher` registration/seam/compositing/confidence settings are exposed in this first version.
   No new runtime dependency.
-
-### Changed
 
 ### Fixed
 - `tone_map_drago`/`tone_map_mantiuk`: fixed `_require_no_zero_luminance_pixel`'s copy-through branch
