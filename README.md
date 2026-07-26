@@ -374,8 +374,8 @@ constant factor rescales the entire output radiance map by the reciprocal of tha
 `response_curve` does **not** calibrate anything -- calibration is always an explicit, separate step
 you call yourself; OpenCV uses a fixed linear response instead if you don't. The output is a raw
 radiance map (`float32`, typically ranging far beyond `[0, 1]`, not clipped or normalized) -- it is
-**not** display-ready and needs tone mapping (not yet implemented) before it can be saved or shown;
-do not write it directly as a `uint8` image. **Both merge functions accept BGR only -- grayscale is
+**not** display-ready and needs tone mapping (see below) before it can be saved or shown; do not
+write it directly as a `uint8` image. **Both merge functions accept BGR only -- grayscale is
 not supported by either.** `merge_hdr_robertson` raises a raw `cv2.error` for grayscale regardless of
 dtype, verified directly. `merge_hdr_debevec`'s own default (no explicit `response_curve`)
 linear-response construction has a confirmed bug in OpenCV's own C++ source that corrupts memory for
@@ -400,6 +400,53 @@ robust to sparse or degenerate intensity histograms because of its smoothness re
 finite result is not guaranteed on every supported OpenCV build. Non-finite or otherwise
 merge-incompatible curves raise `RuntimeError`. Neither calibrator performs exposure alignment or
 ghost removal -- the input stack is assumed already aligned, for both calibration and merge.
+
+Tone mapping -- compressing a radiance map down to a display-ready image:
+
+```python
+import numpy as np
+import improcv as im
+
+response = im.calibrate_camera_response_debevec(images, exposure_times)
+hdr = im.merge_hdr_debevec(
+    images,
+    exposure_times,
+    response_curve=response,
+)
+tone_mapped = im.tone_map_reinhard(hdr)
+
+display_u8 = np.round(
+    np.clip(tone_mapped, 0.0, 1.0) * 255.0
+).astype(np.uint8)
+```
+
+A radiance map from `merge_hdr_debevec`/`merge_hdr_robertson` is not display-ready -- its values
+typically extend far beyond `[0, 1]` and are not clipped or normalized. Tone mapping compresses that
+dynamic range back down to something a display or `uint8` file can represent. Four operators are
+provided, wrapping OpenCV's own `cv2.createTonemap`/`createTonemapDrago`/`createTonemapReinhard`/
+`createTonemapMantiuk`: `tone_map` (simple linear normalization with gamma correction), `tone_map_drago`
+(adaptive logarithmic compression), `tone_map_reinhard` (photographic, local/global adaptation blend),
+and `tone_map_mantiuk` (contrast-domain compression via an iterative solver -- markedly more
+expensive than the other three). Each has its own parameters and produces a visibly different look;
+none is a drop-in replacement for another. All four return raw `float32` -- **none of them clip,
+normalize, or quantize their output**, even though OpenCV's own documentation describes the result as
+`[0, 1]`: verified directly that a spatially constant input (e.g. a flat, saturated region) can
+produce output well outside that range. Always clip explicitly (`np.clip(..., 0.0, 1.0)`) before
+converting to `uint8`, as in the example above. `hdr` must be `float32`, shape `(H, W, 3)` (BGR --
+tone mapping never converts to RGB), finite, and non-empty for all four functions; negative values are
+allowed, since neither merge function guarantees non-negative radiance. `tone_map_reinhard` and
+`tone_map_mantiuk` additionally reject a spatially constant `hdr` (`ValueError`) -- verified directly,
+in OpenCV's own C++ source, that both divide by a quantity that is exactly zero for a constant image,
+regardless of parameters. `tone_map_drago` and `tone_map_mantiuk` additionally reject an `hdr` that
+would produce a true zero-luminance (black) pixel once run through OpenCV's own internal
+normalization -- a common case, not just a synthetic one (any `hdr` whose darkest point across all
+three channels is a true black pixel triggers it). `tone_map_mantiuk` additionally requires both
+`hdr` dimensions to be at least `2`. See each function's docstring for the full parameter contract
+and exact value ranges.
+
+Mertens exposure fusion (`fuse_exposures`, above) is a different operation and does **not** produce a
+radiance map -- do not run its output through any of the tone-mapping functions; its result is already
+close to display-ready (see its own section above).
 
 Non-local means denoising:
 
