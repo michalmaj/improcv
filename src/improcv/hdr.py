@@ -1283,28 +1283,42 @@ def _require_no_zero_luminance_pixel(hdr: np.ndarray, operation: str) -> None:
     a zero denominator. Verified directly, in OpenCV's own C++ source and
     empirically (identically on OpenCV 4.9.0, 4.13.0, and 5.0.0): both
     operators first run `hdr` through the base linear tonemap, which
-    normalizes the image's global minimum value to exactly `0.0` (when the
-    image is not itself spatially constant) or copies a constant image
-    through unchanged. A pixel becomes a true `(0, 0, 0)` black pixel --
-    zero luminance -- either when all three of its channels already equal
-    `hdr`'s global minimum (for a non-constant image, since that channel's
-    value maps to exactly `0.0` after normalization), or when `hdr` is
-    itself exactly constant at `(0, 0, 0)`. Either way, this produces a
-    `NaN` at exactly that pixel, **independent of `bias`/`saturation`/
-    `scale`** -- confirmed directly that every tested `bias` value (`-0.5`
-    through `5.0`) reproduces the same `NaN` on the same zero-luminance
-    pixel. Verified directly that a plain "does `hdr` contain a `(0, 0, 0)`
-    pixel" test would be wrong: with a negative global minimum, an
-    already-`(0, 0, 0)` pixel in `hdr` does not necessarily end up at the
-    global minimum after normalization, and so does not necessarily become
-    zero-luminance.
+    normalizes the image's global minimum value to exactly `0.0` (when
+    ``global_max - global_min > DBL_EPSILON``) or copies `hdr` through
+    entirely unchanged, with no normalization at all, otherwise. A pixel
+    becomes a true `(0, 0, 0)` black pixel -- zero luminance -- either when
+    all three of its channels already equal `hdr`'s global minimum (in the
+    normalizing case, since that channel's value maps to exactly `0.0`),
+    or, in the copy-through case, when *any* pixel anywhere in `hdr` is
+    itself exactly `(0, 0, 0)` -- not only `hdr[0, 0]`: OpenCV's
+    ``max - min <= DBL_EPSILON`` check does not mean every pixel is
+    bit-identical to `hdr[0, 0]`, only that they are all within
+    `DBL_EPSILON` of each other, so a zero-luminance pixel elsewhere in an
+    otherwise near-constant (but not exactly constant) `hdr` was
+    previously missed entirely. Confirmed with a deterministic
+    counterexample: ``hdr = np.full((4, 4, 3), 1e-20,
+    dtype=np.float32); hdr[2, 2] = 0.0`` has `hdr[0, 0] == 1e-20`
+    (nonzero) but a true zero-luminance pixel at `(2, 2)` -- the previous,
+    single-pixel check let this reach OpenCV, which produced `NaN`
+    (`TonemapDrago`) or a raw solver `cv2.error` (`TonemapMantiuk`),
+    surfacing only as this module's own `RuntimeError` postcondition
+    instead of being caught here first. Either way (normalizing or
+    copy-through), a zero-luminance pixel produces a `NaN` at exactly that
+    pixel, **independent of `bias`/`saturation`/`scale`** -- confirmed
+    directly that every tested `bias` value (`-0.5` through `5.0`)
+    reproduces the same `NaN` on the same zero-luminance pixel. Verified
+    directly that a plain "does `hdr` contain a `(0, 0, 0)` pixel" test
+    would be wrong for the *normalizing* case: with a negative global
+    minimum, an already-`(0, 0, 0)` pixel in `hdr` does not necessarily
+    end up at the global minimum after normalization, and so does not
+    necessarily become zero-luminance.
     """
     global_min = float(hdr.min())
     global_max = float(hdr.max())
     if global_max - global_min > np.finfo(np.float64).eps:
         zero_luminance_pixel_exists = bool(np.any(np.all(hdr == global_min, axis=-1)))
     else:
-        zero_luminance_pixel_exists = bool(np.all(hdr[0, 0] == 0.0))
+        zero_luminance_pixel_exists = bool(np.any(np.all(hdr == 0.0, axis=-1)))
     if zero_luminance_pixel_exists:
         raise ValueError(
             f"{operation} would divide by zero luminance for this hdr image -- verified "

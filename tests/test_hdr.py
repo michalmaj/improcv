@@ -3011,6 +3011,33 @@ def test_tone_map_drago_does_not_use_a_black_pixel_heuristic() -> None:
     _assert_tone_maps_or_raises_controlled_runtime_error(tone_map_drago, hdr)
 
 
+def test_tone_map_drago_rejects_zero_luminance_pixel_in_near_constant_hdr() -> None:
+    # Regression: _require_no_zero_luminance_pixel's copy-through branch
+    # (OpenCV: max - min <= DBL_EPSILON) previously only checked hdr[0, 0]
+    # for an exact (0, 0, 0), missing a zero-luminance pixel elsewhere in
+    # an otherwise near-constant (but not bit-identical) hdr. Before the
+    # fix, this deterministic counterexample reached OpenCV and produced
+    # NaN (TonemapDrago), surfacing only as this module's own RuntimeError
+    # postcondition instead of being caught here first.
+    hdr = np.full((4, 4, 3), 1e-20, dtype=np.float32)
+    hdr[2, 2] = 0.0
+
+    with pytest.raises(ValueError, match="zero luminance"):
+        tone_map_drago(hdr)
+
+
+def test_tone_map_mantiuk_rejects_zero_luminance_pixel_in_near_constant_hdr() -> None:
+    # See test_tone_map_drago_rejects_zero_luminance_pixel_in_near_constant_hdr
+    # -- before the fix, this reached OpenCV and produced a raw solver
+    # cv2.error (TonemapMantiuk), surfacing only as this module's own
+    # RuntimeError postcondition instead of being caught here first.
+    hdr = np.full((4, 4, 3), 1e-20, dtype=np.float32)
+    hdr[2, 2] = 0.0
+
+    with pytest.raises(ValueError, match="zero luminance"):
+        tone_map_mantiuk(hdr)
+
+
 def test_tone_map_drago_zero_luminance_rejected_regardless_of_bias() -> None:
     rng = np.random.default_rng(331)
     hdr = _make_hdr(rng, low=0.5, high=10.0)

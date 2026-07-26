@@ -155,6 +155,7 @@ from improcv.regions import (
 )
 from improcv.restoration import InpaintMethod, inpaint
 from improcv.segmentation import grabcut_rect, watershed
+from improcv.stitching import StitchMode, stitch_images
 from improcv.transforms import (
     center_crop,
     crop,
@@ -208,6 +209,7 @@ __all__ = [
     "RotatedRect",
     "SeamlessCloneMode",
     "SortOrder",
+    "StitchMode",
     "TemplateMatchMethod",
     "TransformMatrix",
     "__version__",
@@ -295,6 +297,7 @@ __all__ = [
     "sobel_edge",
     "sort_contours",
     "ssim",
+    "stitch_images",
     "stylize",
     "threshold",
     "to_hsv",

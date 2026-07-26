@@ -479,6 +479,61 @@ Larger `search_window_size` values can substantially increase execution time; `7
 `template_window_size` and `search_window_size` are independent parameters -- there is no
 requirement that `search_window_size` be at least `template_window_size`.
 
+Panorama and scan stitching:
+
+```python
+import improcv as im
+
+panorama = im.stitch_images(
+    images,
+    mode="panorama",
+)
+
+# flat scans / documents captured under a simpler planar transformation:
+scan = im.stitch_images(images, mode="scans")
+```
+
+`stitch_images` wraps OpenCV's high-level `cv2.Stitcher`. `images` must be a real `Sequence` (list,
+tuple, or another `collections.abc.Sequence`) of at least 2 `uint8` BGR `(H, W, 3)` images -- a single
+stacked array (including 4D), `str`/`bytes`/`bytearray`, and a generator/iterator are all rejected
+explicitly, as are grayscale, `(H, W, 1)`, 2-channel, BGRA, `uint16`, `float32`, and `float64` images,
+with no automatic conversion. Images may have different spatial shapes -- there is no requirement that
+they match. `mode="panorama"` (the default) uses a homography/perspective model, suited to photos
+taken by rotating a camera; `mode="scans"` uses an affine model, suited to flat scans or documents --
+**`"scans"` is not limited to pure translational sliding**, it is a broader affine model, just not
+projective/perspective. Both modes share the identical input/output contract.
+
+On success, the result is a new, independent `uint8` BGR array -- not cropped, and not guaranteed any
+particular shape, aspect ratio, or relationship to the input sizes. Insufficient overlap, too few
+usable features, or an algorithmic failure of homography/camera-parameter estimation all raise
+`RuntimeError` (never `ValueError` -- the input images are structurally fine, the algorithm simply
+could not relate them), naming the specific OpenCV status and its numeric code.
+
+**Neither the outcome nor the exact result is guaranteed deterministic, even within a single process.**
+OpenCV's feature matching and geometry estimation use RANSAC internally, drawing from OpenCV's global
+RNG -- verified directly that, for a borderline amount of overlap, the same input images can succeed
+on one call and fail with `RuntimeError` on the next, in the same process, and that even a reliably
+successful stitch is not guaranteed to produce the same output shape or pixel values across repeated
+calls. `stitch_images` never calls `cv2.setRNGSeed` itself -- that would silently change OpenCV's
+global RNG state for every other OpenCV call in the process, not just this one. You can call
+`cv2.setRNGSeed` yourself before calling `stitch_images` if reproducibility matters for your own
+experiments, but that is a process-global setting, not a per-call one, and it does not promise
+identical results across different OpenCV builds or platforms.
+
+**Stitching can be expensive in both time and memory, in a way this wrapper cannot safely bound.**
+OpenCV allocates the output panorama and its internal intermediate buffers *inside* `stitch()`, before
+control returns to Python -- verified directly that a poorly-conditioned geometry estimate (e.g. two
+images whose relative orientation does not match what `mode` expects) can make OpenCV allocate, and
+report as a *successful* result, a panorama and intermediate buffers many times larger than the
+inputs. Because the large allocation already happens before this wrapper ever sees a return value, no
+check on the returned array could have prevented it, so `stitch_images` does not attempt one. For
+untrusted or unpredictable input sets, consider running this function in an isolated process with its
+own resource limits, or use OpenCV's lower-level stitching pipeline directly for finer control.
+
+Per-image feature masks supported by the lower-level OpenCV Stitcher API are not exposed by this
+wrapper. This first version also does not expose any of `cv2.Stitcher`'s registration/seam/
+compositing/confidence settings -- it always uses OpenCV's own defaults.
+
 ## Status
 
 `improcv` is in early development. `0.1.0a1` is designated as the first public release and covers
