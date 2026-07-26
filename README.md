@@ -317,12 +317,12 @@ region can produce little or no visible change, unlike the "cut and paste" effec
 for loosely-drawn masks); `"monochrome_transfer"` transfers `source`'s luminance structure rather
 than its color. The result always has `destination`'s shape and dtype.
 
-HDR-related operations (`improcv.hdr`) are split into three distinct techniques, not one "HDR"
-feature: **exposure fusion** blends a stack of differently-exposed images directly, without
-reconstructing any physical light measurement; **radiance HDR merge** reconstructs an actual HDR
-radiance map from a stack plus its exposure times; a future **tone mapping** will compress that
-radiance map's dynamic range back down for display. Exposure fusion and radiance merge are
-implemented; tone mapping is not yet.
+HDR-related operations (`improcv.hdr`) are split into distinct techniques, not one "HDR" feature:
+**Mertens exposure fusion** directly combines aligned LDR images into a display-oriented `float32`
+result without reconstructing physical radiance; **radiance HDR merge** reconstructs an actual HDR
+radiance map from a stack plus its exposure times; **camera-response calibration** estimates the
+response curve that merge can use instead of its default fixed linear one; **tone mapping** then
+compresses that radiance map's dynamic range back down for display. All four are implemented below.
 
 Exposure fusion:
 

@@ -46,6 +46,28 @@ def _overlapping_pair(seed: int = 1) -> tuple[np.ndarray, np.ndarray]:
     return left, right
 
 
+def _non_contiguous_view(image: np.ndarray) -> np.ndarray:
+    """A genuinely non-contiguous view with the same shape as `image`.
+
+    Regression: an earlier version of this helper used
+    `np.ascontiguousarray(image)[:, ::1]`, which is a no-op slice (step 1)
+    and therefore still C-contiguous -- it never exercised the declared
+    non-contiguous-input contract at all. Interleaving `image` into every
+    other column of a wider buffer and slicing back every other column
+    produces a real stride-2 view.
+    """
+    storage = np.empty(
+        (image.shape[0], image.shape[1] * 2, image.shape[2]),
+        dtype=image.dtype,
+    )
+    storage[:, ::2] = image
+    view = storage[:, ::2]
+
+    assert view.shape == image.shape
+    assert not view.flags.c_contiguous
+    return view
+
+
 class _CustomSequence(Sequence):
     """A minimal, real `collections.abc.Sequence` that is neither list nor tuple."""
 
@@ -159,8 +181,10 @@ def test_stitch_images_does_not_mutate_container() -> None:
 
 def test_stitch_images_accepts_non_contiguous_view() -> None:
     left, right = _overlapping_pair(seed=1)
-    left_nc = np.ascontiguousarray(left)[:, ::1]
-    right_nc = np.ascontiguousarray(right)[:, ::1]
+    left_nc = _non_contiguous_view(left)
+    right_nc = _non_contiguous_view(right)
+    assert not left_nc.flags.c_contiguous
+    assert not right_nc.flags.c_contiguous
 
     result = stitch_images([left_nc, right_nc])
 
