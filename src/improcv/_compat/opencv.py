@@ -69,6 +69,51 @@ def _normalize_calc_hist_output(raw: np.ndarray, bins: int) -> np.ndarray:
     return raw.reshape(bins)
 
 
+def read_onnx_net_from_path(path: str) -> cv2.dnn.Net:
+    """Call `cv2.dnn.readNetFromONNX(path)`, requesting `ENGINE_CLASSIC` if available.
+
+    `ENGINE_CLASSIC`/`ENGINE_NEW`/`ENGINE_AUTO`/`ENGINE_ORT` only exist on
+    OpenCV >= 5.0 (verified directly: absent from `cv2.dnn` on 4.9.0/4.13.0,
+    and calling `readNetFromONNX` with an `engine=` keyword on those versions
+    raises a raw `cv2.error` -- "takes at most 1 argument" -- not a
+    `TypeError`, so this is detected by capability, not by a version check,
+    and the keyword is only ever passed when the capability is present.
+    Requesting `ENGINE_CLASSIC` asks OpenCV 5.x to use the same engine that
+    is the *only* engine on 4.9.0/4.13.0, for the closest achievable
+    behavioral parity across the whole supported range -- this is a request,
+    not a guarantee: verified directly that the `OPENCV_FORCE_DNN_ENGINE`
+    process-level environment variable silences this and forces its own
+    numeric engine choice regardless of what is passed here. This function
+    does not read, clear, or otherwise touch that environment variable.
+    """
+    engine = getattr(cv2.dnn, "ENGINE_CLASSIC", None)
+    kwargs: dict[str, int] = {} if engine is None else {"engine": engine}
+    return cv2.dnn.readNetFromONNX(path, **kwargs)
+
+
+def read_onnx_net_from_buffer(buffer: np.ndarray) -> cv2.dnn.Net:
+    """Call `cv2.dnn.readNetFromONNX(buffer=...)`, requesting `ENGINE_CLASSIC` if available.
+
+    `buffer` is always passed by keyword, never positionally -- verified
+    directly that a `bytes` object passed positionally as the sole argument
+    is silently routed to the *path* overload (`onnxFile: str`) rather than
+    the buffer overload on OpenCV 4.13.0/5.0.0 (raising a confusing "Can't
+    read ONNX file: <binary content>" `cv2.error`), while OpenCV 4.9.0
+    resolves the same positional call to the buffer overload correctly --
+    an actual behavioral regression between those versions, not a
+    hypothetical one. Passing `buffer=` by keyword resolves to the correct
+    overload identically on all three versions; the caller of this function
+    is expected to already have converted its input to a `uint8` `ndarray`
+    (see `dnn.load_onnx_network_from_bytes`), which is unambiguous for
+    pybind's overload resolution on every supported version, positionally
+    or by keyword. See `read_onnx_net_from_path` for the `ENGINE_CLASSIC`
+    capability-detection rationale, which applies identically here.
+    """
+    engine = getattr(cv2.dnn, "ENGINE_CLASSIC", None)
+    kwargs: dict[str, int] = {} if engine is None else {"engine": engine}
+    return cv2.dnn.readNetFromONNX(buffer=buffer, **kwargs)
+
+
 def _normalize_hough_lines_p_output(raw: np.ndarray) -> np.ndarray:
     """Normalize cv2.HoughLinesP's output to a flat ``(N, 4)`` int32 array.
 

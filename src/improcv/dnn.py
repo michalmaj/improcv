@@ -11,12 +11,16 @@ specific finding it exists to guard against.
 from __future__ import annotations
 
 import numbers
+import os
+import stat
 import warnings
 from collections.abc import Sequence
+from pathlib import Path
 
 import cv2
 import numpy as np
 
+from improcv._compat.opencv import read_onnx_net_from_buffer, read_onnx_net_from_path
 from improcv._validation import (
     require_bool,
     require_dtype,
@@ -25,7 +29,21 @@ from improcv._validation import (
 )
 from improcv.types import Image, ImageFloat32
 
-__all__ = ["create_dnn_batch_blob", "create_dnn_blob"]
+__all__ = [
+    "create_dnn_batch_blob",
+    "create_dnn_blob",
+    "load_onnx_network",
+    "load_onnx_network_from_bytes",
+]
+
+StrPath = str | os.PathLike[str]
+"""A file path given as `str` or an `os.PathLike[str]` (e.g. `pathlib.Path`).
+
+Deliberately narrower than a hypothetical "any path-like" alias: a
+`PathLike` whose `__fspath__()` returns `bytes` is not accepted here (see
+`_normalize_onnx_path`), so this module's own type parameter is `str`, not
+`str | bytes`, on the `os.PathLike` side too.
+"""
 
 _ALLOWED_DTYPES = (np.uint8, np.float32)
 _ALLOWED_CHANNELS = (1, 3, 4)
@@ -229,6 +247,131 @@ def create_dnn_batch_blob(
         expected_height=expected_height,
         expected_width=expected_width,
     )
+
+
+def load_onnx_network(path: StrPath) -> cv2.dnn.Net:
+    """Load an ONNX network from a file into a `cv2.dnn.Net`.
+
+    `path` must reference an existing, non-empty, regular file -- a
+    directory, a special file (FIFO/socket/device), or an empty file are
+    all rejected before OpenCV ever sees them. The file's *content* is
+    what's parsed as ONNX; there is no extension check, and a valid ONNX
+    file without a `.onnx` extension (or with an unusual one) is accepted
+    -- verified directly that `cv2.dnn.readNetFromONNX` itself never
+    inspects the extension. A symlink to a valid regular file is followed
+    and accepted; a broken symlink raises `FileNotFoundError`, the same as
+    a path that doesn't exist at all.
+
+    **A path containing non-ASCII characters is not guaranteed to work on
+    every platform.** Verified directly (via CI): the same accented-Unicode
+    path that opens correctly on Linux/macOS makes OpenCV's own
+    file-opening code fail on Windows, surfacing here as `RuntimeError`
+    (OpenCV's `cv2.error`, not a bug in this wrapper's own validation,
+    which has already confirmed the file exists, is a non-empty regular
+    file). Prefer an ASCII-only path if you need this to work identically
+    across platforms.
+
+    This function only loads the network -- it never calls `setInput`,
+    `forward`, reads layer names, inspects input/output shapes, or sets a
+    backend/target. Every call parses the file again and returns a new,
+    independent `cv2.dnn.Net`; nothing is cached.
+
+    On OpenCV 5, improcv requests `ENGINE_CLASSIC` as the common behavior
+    shared with OpenCV 4.x. OpenCV process configuration, including
+    `OPENCV_FORCE_DNN_ENGINE`, may override that request.
+
+    The returned `Net` is a stateful object: calling `setInput()` on it
+    later mutates it, backend/target configuration is the caller's
+    responsibility, and this function makes no thread-safety promise about
+    it.
+
+    Raises
+    ------
+    TypeError
+        If `path` is not a `str` or `os.PathLike[str]` (including a
+        `PathLike` whose `__fspath__()` returns `bytes`).
+    ValueError
+        If `path` is an empty string, or resolves to a file that is not a
+        regular file (e.g. a FIFO or device), or is a regular file of size
+        zero.
+    FileNotFoundError
+        If `path` does not exist, or is a symlink whose target does not
+        exist.
+    IsADirectoryError
+        If `path` is a directory.
+    PermissionError
+        If checking `path` itself is denied (e.g. missing traversal
+        permission on a parent directory). A file that exists and is
+        stat-able but not readable is a different case -- verified
+        directly that `stat()` needs no read permission on the file's own
+        content, so that denial only surfaces once OpenCV itself tries to
+        open the file, as `RuntimeError` (below), not `PermissionError`.
+    RuntimeError
+        If OpenCV fails to open or parse the file's content as ONNX
+        (including a permission or ACL denial that only manifests when
+        OpenCV opens the file, a TOCTOU race, or a network filesystem
+        issue), or if the loaded network fails this function's own
+        postconditions
+        (wrong type, or an empty network).
+    """
+    normalized_path = _normalize_onnx_path(path)
+    try:
+        net = read_onnx_net_from_path(normalized_path)
+    except cv2.error as exc:
+        raise RuntimeError("OpenCV failed to load the ONNX network") from exc
+    return _check_net_postconditions(net)
+
+
+def load_onnx_network_from_bytes(data: bytes) -> cv2.dnn.Net:
+    """Load an ONNX network from an in-memory buffer into a `cv2.dnn.Net`.
+
+    `data` must be a `bytes` object -- `bytearray`, `memoryview`, an
+    `ndarray`, a `list`/`tuple` of ints, and a `str`/`Path` are all
+    rejected, even though the raw `cv2.dnn.readNetFromONNX` buffer overload
+    happens to accept several of them. `bytes` is deliberately the only
+    accepted type: it gives the simplest possible buffer-ownership
+    contract (immutable, so there's nothing to reason about regarding a
+    caller mutating it after the call), and -- verified directly -- OpenCV
+    5.0.0's own type stubs for the buffer overload only declare
+    `numpy.ndarray[Any, numpy.dtype[numpy.uint8]]`, never `bytes`, so this
+    function converts internally rather than exposing that mismatch.
+
+    Internally, `data` is wrapped (not copied) via
+    `np.frombuffer(data, dtype=np.uint8)` and passed to OpenCV by the
+    `buffer=` keyword, never positionally -- verified directly that a
+    `bytes` object passed positionally as the sole argument is silently
+    routed to the *path* overload rather than the buffer overload on
+    OpenCV 4.13.0/5.0.0 (see `improcv._compat.opencv.read_onnx_net_from_buffer`).
+    The returned `Net` does not depend on the local buffer or `data`
+    staying alive -- OpenCV's ONNX parser consumes the buffer's content
+    synchronously, inside the call.
+
+    See `load_onnx_network` for what this function does and does not do
+    beyond loading (no inference, no caching, best-effort `ENGINE_CLASSIC`
+    on OpenCV 5, a stateful, non-thread-safe result).
+
+    Raises
+    ------
+    TypeError
+        If `data` is not exactly a `bytes` object.
+    ValueError
+        If `data` is empty.
+    RuntimeError
+        If OpenCV fails to parse `data` as ONNX, or if the loaded network
+        fails this function's own postconditions (wrong type, or an empty
+        network).
+    """
+    if not isinstance(data, bytes):
+        raise TypeError(f"data must be bytes, got {type(data).__name__}")
+    if len(data) == 0:
+        raise ValueError("data must not be empty")
+
+    buffer = np.frombuffer(data, dtype=np.uint8)
+    try:
+        net = read_onnx_net_from_buffer(buffer)
+    except cv2.error as exc:
+        raise RuntimeError("OpenCV failed to load the ONNX network") from exc
+    return _check_net_postconditions(net)
 
 
 def _channel_count(image: np.ndarray) -> int:
@@ -453,3 +596,65 @@ def _check_blob_postconditions(
     if not np.all(np.isfinite(result)):
         raise RuntimeError("OpenCV DNN blob preprocessing returned a blob with NaN/Inf values")
     return result
+
+
+def _normalize_onnx_path(path: object) -> str:
+    """Raise TypeError/ValueError unless `path` is a valid ONNX file path, else return it as `str`.
+
+    A single, explicit pass: `os.fspath()` (never a bare `str(path)`, which
+    would silently stringify an arbitrary object instead of rejecting it),
+    then exactly one `stat()` call, whose result decides between
+    `IsADirectoryError`/`ValueError`(irregular file)/`ValueError`(empty
+    file). `Path.stat()` follows symlinks by default, so a symlink to a
+    valid regular file is accepted transparently, and a broken symlink
+    raises `FileNotFoundError` the same way a missing path does --
+    verified directly. `FileNotFoundError`/`PermissionError`/other `OSError`
+    subclasses from `stat()` itself are allowed to propagate unmodified;
+    this function does not attempt to guess every possible filesystem
+    failure in advance (see `load_onnx_network`'s docstring on TOCTOU).
+    """
+    try:
+        raw_path = os.fspath(path)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise TypeError(
+            f"path must be a str or os.PathLike[str], got {type(path).__name__}"
+        ) from exc
+    if not isinstance(raw_path, str):
+        raise TypeError(
+            f"path must resolve to a str, got {type(raw_path).__name__} from os.fspath() "
+            "-- a PathLike whose __fspath__() returns bytes is not accepted"
+        )
+    if raw_path == "":
+        raise ValueError("path must not be an empty string")
+
+    file_stat = Path(raw_path).stat()
+    if stat.S_ISDIR(file_stat.st_mode):
+        raise IsADirectoryError(f"path must reference a file, not a directory: {raw_path!r}")
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise ValueError(f"path must reference a regular file, got {raw_path!r}")
+    if file_stat.st_size == 0:
+        raise ValueError(f"path must reference a non-empty file, got an empty file: {raw_path!r}")
+
+    return raw_path
+
+
+def _check_net_postconditions(net: object) -> cv2.dnn.Net:
+    """Raise RuntimeError unless `net` is a non-empty `cv2.dnn.Net`.
+
+    Guards against OpenCV returning something other than a working network
+    -- an unexpected type, or a `Net` that loaded without raising but is
+    still empty (`net.empty()` is a plain query, verified directly not to
+    raise for a successfully-loaded network, but is still wrapped here in
+    case a future/patched OpenCV build raises from it instead).
+    """
+    if not isinstance(net, cv2.dnn.Net):
+        raise RuntimeError(
+            f"OpenCV ONNX loading returned {type(net).__name__} instead of a cv2.dnn.Net"
+        )
+    try:
+        is_empty = net.empty()
+    except cv2.error as exc:
+        raise RuntimeError("OpenCV failed to load the ONNX network") from exc
+    if is_empty:
+        raise RuntimeError("OpenCV loaded an empty ONNX network")
+    return net
