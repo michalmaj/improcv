@@ -1,11 +1,14 @@
-"""OpenCV DNN blob preprocessing: turn image(s) into NCHW `float32` blobs for `cv2.dnn`.
+"""OpenCV DNN utilities for deterministic blob preprocessing and ONNX-only network loading.
 
-This module wraps `cv2.dnn.blobFromImage`/`blobFromImages` -- it does not load
-models, create a `cv2.dnn.Net`, or run inference. Verified directly (source and
-empirically, across OpenCV 4.9/4.13/5.0) that the raw OpenCV functions behave
-inconsistently across that version range for several inputs that this module
-restricts or validates explicitly; see each private helper's docstring for the
-specific finding it exists to guard against.
+This module wraps `cv2.dnn.blobFromImage`/`blobFromImages` (image(s) -> NCHW
+`float32` blobs) and `cv2.dnn.readNetFromONNX` (a file or an in-memory buffer
+-> a `cv2.dnn.Net`), stabilizing validated behavior across OpenCV 4.9-5.x for
+both. It does not run inference, configure a backend/target, interpret a
+model's output, or load any format other than ONNX. Verified directly
+(source and empirically, across OpenCV 4.9/4.13/5.0) that the raw OpenCV
+functions behave inconsistently across that version range for several inputs
+that this module restricts or validates explicitly; see each private
+helper's docstring for the specific finding it exists to guard against.
 """
 
 from __future__ import annotations
@@ -348,7 +351,8 @@ def load_onnx_network_from_bytes(data: bytes) -> cv2.dnn.Net:
 
     See `load_onnx_network` for what this function does and does not do
     beyond loading (no inference, no caching, best-effort `ENGINE_CLASSIC`
-    on OpenCV 5, a stateful, non-thread-safe result).
+    on OpenCV 5, a stateful result with no thread-safety guarantee from
+    this wrapper).
 
     Raises
     ------

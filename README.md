@@ -599,7 +599,8 @@ input requirements, not arbitrarily large values.
 
 No DNN inference or `cv2.dnn.Net` configuration (backend/target) is included in this slice, and no
 new dependency (or `improcv[ml]` extra) was introduced for it -- both functions run on the same base
-OpenCV install as the rest of `improcv`. ONNX model loading (below) is a separate, later slice.
+OpenCV install as the rest of `improcv`. ONNX model loading is implemented below as a separate
+Phase 5 slice.
 
 ONNX model loading:
 
