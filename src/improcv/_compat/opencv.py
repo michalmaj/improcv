@@ -87,9 +87,8 @@ def read_onnx_net_from_path(path: str) -> cv2.dnn.Net:
     does not read, clear, or otherwise touch that environment variable.
     """
     engine = getattr(cv2.dnn, "ENGINE_CLASSIC", None)
-    if engine is not None:
-        return cv2.dnn.readNetFromONNX(path, engine=engine)
-    return cv2.dnn.readNetFromONNX(path)
+    kwargs: dict[str, int] = {} if engine is None else {"engine": engine}
+    return cv2.dnn.readNetFromONNX(path, **kwargs)
 
 
 def read_onnx_net_from_buffer(buffer: np.ndarray) -> cv2.dnn.Net:
@@ -111,9 +110,8 @@ def read_onnx_net_from_buffer(buffer: np.ndarray) -> cv2.dnn.Net:
     capability-detection rationale, which applies identically here.
     """
     engine = getattr(cv2.dnn, "ENGINE_CLASSIC", None)
-    if engine is not None:
-        return cv2.dnn.readNetFromONNX(buffer=buffer, engine=engine)
-    return cv2.dnn.readNetFromONNX(buffer=buffer)
+    kwargs: dict[str, int] = {} if engine is None else {"engine": engine}
+    return cv2.dnn.readNetFromONNX(buffer=buffer, **kwargs)
 
 
 def _normalize_hough_lines_p_output(raw: np.ndarray) -> np.ndarray:
