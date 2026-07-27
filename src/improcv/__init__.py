@@ -69,7 +69,12 @@ from improcv.detectors import (
     detect_fast_keypoints,
     detect_mser_regions,
 )
-from improcv.dnn import create_dnn_batch_blob, create_dnn_blob
+from improcv.dnn import (
+    create_dnn_batch_blob,
+    create_dnn_blob,
+    load_onnx_network,
+    load_onnx_network_from_bytes,
+)
 from improcv.drawing import draw_bounding_boxes, draw_contours, montage
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.features import (
@@ -271,6 +276,8 @@ __all__ = [
     "inpaint",
     "invert",
     "laplacian_edge",
+    "load_onnx_network",
+    "load_onnx_network_from_bytes",
     "match_features",
     "match_features_ratio",
     "match_template",

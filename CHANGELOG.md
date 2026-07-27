@@ -33,6 +33,28 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   runtime dependency and no `improcv[ml]` extra were introduced -- `cv2.dnn` is part of the base
   OpenCV install already required by the existing `cv`/`cv-headless`/`cv-contrib`/
   `cv-contrib-headless` extras.
+- `improcv.dnn`, Phase 5 slice (ONNX-only model loading): `load_onnx_network` (from a path) and
+  `load_onnx_network_from_bytes` (from an immutable `bytes` buffer), both returning a `cv2.dnn.Net`.
+  ONNX-only, not a general "load any DNN model" function -- other formats are out of scope. Two
+  separate functions rather than one polymorphic function, because a bare `bytes` argument is
+  genuinely ambiguous to raw OpenCV: verified directly that `cv2.dnn.readNetFromONNX(some_bytes)`
+  (positional) is silently routed to the *path* overload on OpenCV 4.13/5.0 but to the *buffer*
+  overload on OpenCV 4.9 -- a real behavioral difference between supported versions, stabilized here
+  by always passing the buffer overload by keyword as a `uint8` array. `path` similarly stabilizes a
+  real difference: a bare `pathlib.Path` is accepted directly by OpenCV 4.13/5.0 but raises a
+  `cv2.error` on OpenCV 4.9, so this wrapper normalizes to `str` internally regardless of the
+  installed version. Filesystem problems Python can detect directly (missing file, a directory, an
+  empty file) raise native exceptions (`FileNotFoundError`, `IsADirectoryError`, `ValueError`) rather
+  than OpenCV's own generic, often-indistinguishable error messages; anything OpenCV's parser itself
+  rejects (a corrupt model, or a permission/ACL problem only visible once OpenCV opens the file)
+  raises `RuntimeError` with the original `cv2.error` as `__cause__`. A successful load is checked
+  against a `not net.empty()` postcondition. On OpenCV 5, this slice requests `ENGINE_CLASSIC` (the
+  only engine that exists on 4.x) as a best-effort common behavior across the whole 4.9-5.x range --
+  not a guarantee, since the process-level `OPENCV_FORCE_DNN_ENGINE` environment variable can override
+  it; there is no public `engine` parameter. Every call loads a fresh, independent `Net` -- nothing is
+  cached. This slice covers loading only: no `setInput`/`forward` wrapper, no backend/target API, no
+  model-specific postprocessing, and no new dependency (`onnx` is used only to regenerate the test
+  fixture in a throwaway environment, never a project or CI dependency).
 
 ## [0.2.0a1] - 2026-07-26
 

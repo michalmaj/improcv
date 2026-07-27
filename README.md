@@ -597,9 +597,68 @@ limit in OpenCV's own blob-construction code), but that says nothing about wheth
 allocation is a *reasonable* size for the machine running it -- pick `size` based on your actual model
 input requirements, not arbitrarily large values.
 
-No model loading, DNN inference, or `cv2.dnn.Net` handling is included in this first slice, and no
+No DNN inference or `cv2.dnn.Net` configuration (backend/target) is included in this slice, and no
 new dependency (or `improcv[ml]` extra) was introduced for it -- both functions run on the same base
-OpenCV install as the rest of `improcv`.
+OpenCV install as the rest of `improcv`. ONNX model loading (below) is a separate, later slice.
+
+ONNX model loading:
+
+```python
+import improcv as im
+
+net = im.load_onnx_network("model.onnx")
+
+blob = im.create_dnn_blob(
+    image,
+    size=(224, 224),
+    scale=1.0 / 255.0,
+    swap_rb=True,
+)
+
+net.setInput(blob)
+output = net.forward()
+```
+
+`load_onnx_network`/`load_onnx_network_from_bytes` load an ONNX file (from a path or from an
+in-memory `bytes` buffer, respectively) into a `cv2.dnn.Net` -- they are **ONNX-only**, not a
+generic "load any DNN model" function; other formats (TensorFlow, Caffe, Darknet, Torch, OpenVINO)
+are out of scope. Preprocessing (`create_dnn_blob`/`create_dnn_batch_blob`, above) and model loading
+are both `improcv` API; `Net.setInput`/`Net.forward` (shown above) remain raw OpenCV API, not wrapped
+-- this slice does not add an inference function, model-specific postprocessing, or a backend/target
+API.
+
+The path and bytes loaders are two separate functions, not one function accepting either, because a
+bare `bytes` argument is genuinely ambiguous to raw OpenCV: verified directly that
+`cv2.dnn.readNetFromONNX(some_bytes)` (positional) is silently routed to the *path* overload on
+OpenCV 4.13/5.0 (interpreting the bytes as a file path and failing to find it) but to the *buffer*
+overload on OpenCV 4.9 -- an actual behavioral difference between supported versions, not a
+hypothetical one. `load_onnx_network_from_bytes` only accepts `bytes` (not `bytearray`, `memoryview`,
+or an `ndarray`) and internally converts to a `uint8` array before calling OpenCV by keyword, which
+resolves correctly and identically on every supported version.
+
+`load_onnx_network`'s `path` accepts a `str` or `os.PathLike[str]` (e.g. `pathlib.Path`); its content,
+not its extension, is what's parsed -- a valid ONNX file with no `.onnx` extension is accepted.
+Filesystem problems that Python can detect directly give native exceptions (`FileNotFoundError`,
+`IsADirectoryError`, an empty file raises `ValueError`); a problem OpenCV's own parser hits (a
+corrupt/invalid model, or a permission/ACL issue that only surfaces once OpenCV tries to open the
+file) raises `RuntimeError` with the original error attached as `__cause__`.
+
+Every call to either loader parses the model again and returns a new, independent `cv2.dnn.Net` --
+**nothing is cached**, and repeated loading of a large model is exactly as expensive as it looks. The
+returned `Net` is a stateful object: calling `setInput()` mutates it, backend/target configuration is
+your responsibility, and this wrapper makes no thread-safety promise about it.
+
+On OpenCV 5, `improcv` requests `ENGINE_CLASSIC` as the common behavior shared with OpenCV 4.x, since
+4.x has no other engine. OpenCV process configuration, including `OPENCV_FORCE_DNN_ENGINE`, may
+override that request -- this is a best-effort request, not a guarantee.
+
+**ONNX models are parsed by OpenCV's native (C++) code, with no sandboxing from this wrapper.** There
+is no file-size limit, and no attempt is made to validate the ONNX format beyond what OpenCV's own
+parser does. A malicious or merely corrupted model can exploit a parser bug, and a very large model
+can consume a large amount of memory or end the process outright -- the same risk as parsing any
+untrusted binary format. Do not load models from untrusted sources in-process; isolate them in a
+separate process with its own resource limits instead. This slice does not download models from
+anywhere -- you provide the path or bytes.
 
 ## Status
 

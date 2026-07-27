@@ -46,12 +46,14 @@ version decided at the time each is actually published, rather than mechanically
   a scope/architecture audit (2026-07-27) found that premature -- no slice identified so far actually
   needs a dependency beyond base OpenCV/NumPy and the existing `viz` extra, so no `improcv[ml]` extra
   exists or is currently planned). Slices, not all necessarily shipped in the same release: DNN
-  preprocessing/model-loading (`cv2.dnn` wrappers -- DNN preprocessing implemented; model loading
-  remains planned, see [CHANGELOG.md](CHANGELOG.md)), image augmentation, dataset discovery, and
+  preprocessing/model-loading (`cv2.dnn` wrappers -- DNN preprocessing implemented; ONNX-only model
+  loading implemented; generic inference and backend/target wrappers are out of scope for now, not
+  started, see [CHANGELOG.md](CHANGELOG.md)), image augmentation, dataset discovery, and
   classification-evaluation utilities deferred from Phase 3 (confusion matrix, precision/recall, ROC,
-  class-distribution plots).
-  Bounding boxes/keypoints in augmentation, dataset manifests/batching, and DNN inference/model-
-  specific wrappers are deferred, not approved. Release version(s) to be decided as each slice ships.
+  class-distribution plots) -- augmentation, dataset discovery, and evaluation remain planned, not
+  started. Bounding boxes/keypoints in augmentation, dataset manifests/batching, and DNN inference/
+  model-specific wrappers are deferred, not approved. Release version(s) to be decided as each slice
+  ships.
 - [ ] **Phase 6** — Camera calibration and 3D geometry. Release version to be decided when this
   phase ships.
 - [ ] **Phase 7** — Video/camera capture and tracking (a lightweight IoU tracker only; SORT/

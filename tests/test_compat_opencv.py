@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
@@ -6,7 +8,11 @@ from improcv._compat.opencv import (
     _normalize_calc_hist_output,
     _normalize_hough_lines_p_output,
     merge_hdr_supports_dtype,
+    read_onnx_net_from_buffer,
+    read_onnx_net_from_path,
 )
+
+_FIXTURE_PATH = str(Path(__file__).parent / "data" / "tiny_identity.onnx")
 
 
 def test_normalize_calc_hist_output_from_column_shape() -> None:
@@ -133,3 +139,110 @@ def test_merge_hdr_supports_dtype_caches_debevec_and_robertson_independently() -
     # together across OpenCV versions.
     assert isinstance(debevec_result, bool)
     assert isinstance(robertson_result, bool)
+
+
+# --- read_onnx_net_from_path / read_onnx_net_from_buffer ---
+# `ENGINE_CLASSIC` only exists on OpenCV >= 5.0 -- these tests force both
+# branches via monkeypatch rather than depending on which OpenCV happens to
+# be installed, so the capability-detection logic itself is verified on
+# every supported version, not just whichever one CI happens to run this on.
+
+
+def test_read_onnx_net_from_path_passes_engine_when_capability_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_engine = object()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cv2.dnn, "ENGINE_CLASSIC", sentinel_engine, raising=False)
+
+    def fake_read(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(cv2.dnn, "readNetFromONNX", fake_read)
+
+    read_onnx_net_from_path("some/path.onnx")
+
+    assert captured["args"] == ("some/path.onnx",)
+    assert captured["kwargs"] == {"engine": sentinel_engine}
+
+
+def test_read_onnx_net_from_path_omits_engine_when_capability_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.delattr(cv2.dnn, "ENGINE_CLASSIC", raising=False)
+
+    def fake_read(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(cv2.dnn, "readNetFromONNX", fake_read)
+
+    read_onnx_net_from_path("some/path.onnx")
+
+    assert captured["args"] == ("some/path.onnx",)
+    assert captured["kwargs"] == {}
+
+
+def test_read_onnx_net_from_buffer_passes_engine_when_capability_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_engine = object()
+    captured_args: tuple[object, ...] = ()
+    captured_kwargs: dict[str, object] = {}
+    buffer = np.zeros(8, dtype=np.uint8)
+    monkeypatch.setattr(cv2.dnn, "ENGINE_CLASSIC", sentinel_engine, raising=False)
+
+    def fake_read(*args, **kwargs):
+        nonlocal captured_args
+        captured_args = args
+        captured_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cv2.dnn, "readNetFromONNX", fake_read)
+
+    read_onnx_net_from_buffer(buffer)
+
+    assert captured_args == ()
+    assert captured_kwargs["buffer"] is buffer
+    assert captured_kwargs["engine"] is sentinel_engine
+
+
+def test_read_onnx_net_from_buffer_omits_engine_when_capability_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    buffer = np.zeros(8, dtype=np.uint8)
+    monkeypatch.delattr(cv2.dnn, "ENGINE_CLASSIC", raising=False)
+
+    def fake_read(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(cv2.dnn, "readNetFromONNX", fake_read)
+
+    read_onnx_net_from_buffer(buffer)
+
+    assert captured["args"] == ()
+    assert captured["kwargs"] == {"buffer": buffer}
+
+
+def test_read_onnx_net_from_path_loads_real_fixture() -> None:
+    net = read_onnx_net_from_path(_FIXTURE_PATH)
+
+    assert isinstance(net, cv2.dnn.Net)
+    assert not net.empty()
+
+
+def test_read_onnx_net_from_buffer_loads_real_fixture() -> None:
+    data = Path(_FIXTURE_PATH).read_bytes()
+    buffer = np.frombuffer(data, dtype=np.uint8)
+
+    net = read_onnx_net_from_buffer(buffer)
+
+    assert isinstance(net, cv2.dnn.Net)
+    assert not net.empty()
