@@ -45,11 +45,14 @@ from improcv.analysis import (
     moments,
 )
 from improcv.augmentation import (
+    AffineParameters,
     AugmentedImageMask,
     CropParameters,
     FlipParameters,
+    apply_affine,
     apply_crop,
     apply_flip,
+    sample_affine,
     sample_crop,
     sample_flip,
 )
@@ -193,6 +196,7 @@ from improcv.transforms import (
 from improcv.types import Image, ImageFloat32, ImageU8, Mask, TransformMatrix
 
 __all__ = [
+    "AffineParameters",
     "ApproxMethod",
     "AugmentedImageMask",
     "Barcode",
@@ -243,6 +247,7 @@ __all__ = [
     "adjust_brightness",
     "adjust_contrast",
     "alpha_blend",
+    "apply_affine",
     "apply_crop",
     "apply_flip",
     "apply_lut",
@@ -329,6 +334,7 @@ __all__ = [
     "rgb_to_bgr",
     "rotate",
     "rotate_bound",
+    "sample_affine",
     "sample_crop",
     "sample_flip",
     "seamless_clone",

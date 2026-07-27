@@ -763,20 +763,57 @@ crop_params = im.sample_crop(
 pair = im.apply_crop(image, crop_params, mask=mask)
 ```
 
-`sample_flip`/`sample_crop` take an explicit `rng: np.random.Generator` and return a small,
-independent result (`FlipParameters`/`CropParameters`) -- there is no global/implicit RNG anywhere
-in `improcv`. That result can be stored and replayed any number of times through `apply_flip`/
-`apply_crop`, always producing the same output for the same input. `CropParameters` carries the
-`source_size` it was sampled for; `apply_crop` requires the image (and mask, if given) to match
-that size exactly, so parameters sampled for one image can't be silently misapplied to a
-differently-sized one. Passing `mask=` applies the identical flip/crop to the mask, returning both
-as an `AugmentedImageMask` instead of a bare array; a segmentation mask is restricted to `uint8`/
-`uint16`/`int16` in this slice (not `bool`/`int32`/`int64`/floating-point, and not one-hot/
-multi-channel encodings).
+Augmentation sampling and replay -- affine (rotation, translation, isotropic scale):
 
-This slice covers flip and crop only: no affine transforms (rotation, translation, scale, shear),
-no perspective warp, no photometric augmentation (brightness/contrast/blur/noise), no bounding
-box/keypoint/polygon support, and no `Compose`-style augmentation pipeline.
+```python
+affine_params = im.sample_affine(
+    rng,
+    source_size=(image.shape[1], image.shape[0]),
+    angle_range=(-10.0, 10.0),
+    translation_x_range=(-8.0, 8.0),
+    translation_y_range=(-8.0, 8.0),
+    scale_range=(0.9, 1.1),
+)
+
+pair = im.apply_affine(
+    image,
+    affine_params,
+    mask=mask,
+    mask_border_value=255,
+)
+```
+
+`sample_flip`/`sample_crop`/`sample_affine` take an explicit `rng: np.random.Generator` and return
+a small, independent result (`FlipParameters`/`CropParameters`/`AffineParameters`) -- there is no
+global/implicit RNG anywhere in `improcv`. That result can be stored and replayed any number of
+times through `apply_flip`/`apply_crop`/`apply_affine`, always producing the same output for the
+same input. `CropParameters`/`AffineParameters` carry the `source_size` they were sampled for;
+`apply_crop`/`apply_affine` require the image (and mask, if given) to match that size exactly, so
+parameters sampled for one image can't be silently misapplied to a differently-sized one. Passing
+`mask=` applies the identical transform to the mask, returning both as an `AugmentedImageMask`
+instead of a bare array; a segmentation mask is restricted to `uint8`/`uint16`/`int16` in this
+slice (not `bool`/`int32`/`int64`/floating-point, and not one-hot/multi-channel encodings).
+
+For `sample_affine`/`apply_affine` specifically: `angle_range` is in degrees (positive =
+counter-clockwise, matching `im.rotate`); `translation_x_range`/`translation_y_range` are in pixels
+(positive `x` moves content right, positive `y` moves it down, matching `im.translate`);
+`scale_range` is a positive, dimensionless, isotropic multiplier. Each `*_range` is a `(low, high)`
+tuple sampled independently via `Generator.uniform` -- `low` is always reachable, equal endpoints
+sample that exact constant, but hitting `high` itself is not guaranteed for a non-degenerate range
+(an ordinary property of continuous floating-point sampling). The transform is always rotation +
+isotropic scale around the image center, then translated -- this composition order is fixed and
+documented, not an implementation detail, since translation does not commute with rotation/scaling.
+`AffineParameters.matrix` (the `(2, 3)` matrix actually applied) is the sole source of truth for
+replay; `angle`/`translation`/`scale` are sampling metadata kept for debugging/logging/`repr` only
+and are never used to reconstruct or cross-check the matrix. Output spatial size always equals the
+source size -- this slice does not expand the canvas the way `im.rotate_bound` does. The mask is
+always warped with nearest-neighbor interpolation and a constant border (`mask_border_value`,
+default `0`); the caller cannot change the mask's interpolation or border mode, only the fill value.
+
+This slice covers flip, crop, and a rotation+translation+isotropic-scale affine transform: no
+shear yet (a separate, future extension), no perspective warp, no photometric augmentation
+(brightness/contrast/blur/noise), no bounding box/keypoint/polygon support, and no `Compose`-style
+augmentation pipeline.
 
 ## Status
 

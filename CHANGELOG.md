@@ -96,6 +96,27 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   covers flip and crop only: no affine transforms (rotation/translation/scale/shear), no perspective
   warp, no photometric augmentation, no bounding box/keypoint/polygon support, no `Compose`-style
   pipeline, and no new dependency.
+- `improcv.augmentation`: affine augmentation sampling and replay for rotation, translation, and
+  isotropic scale -- `sample_affine`/`apply_affine`, plus the `AffineParameters` result type. Covers
+  a stable similarity-transform subset of the general affine group; shear is a deliberately separate,
+  future extension (its parameterization and singularity behavior need their own audit), and
+  perspective, canvas expansion (a `rotate_bound`-style growing output), bounding boxes/keypoints/
+  polygons, and any `Compose`-style pipeline remain out of scope. `sample_affine` follows the same
+  `rng: np.random.Generator` contract as `sample_flip`/`sample_crop`; each of `angle_range`/
+  `translation_x_range`/`translation_y_range`/`scale_range` is an independently sampled `(low, high)`
+  tuple (`scale_range` additionally requires a positive `low`). The transform is built as rotation +
+  isotropic scale around the image center (via `cv2.getRotationMatrix2D`, using the same center
+  convention as `improcv.transforms.rotate`), then translated in the destination coordinate system --
+  a fixed composition order, not an implementation detail, since translation does not commute with
+  rotation/scaling in general. `AffineParameters.matrix` (a new, read-only, finite `float64` `(2, 3)`
+  array) is the sole source of truth for replay; `angle`/`translation`/`scale` are sampling metadata
+  for debugging/logging/`repr` only and are never used to reconstruct or cross-check the matrix.
+  `apply_affine` requires the image's (and mask's) spatial size to match `AffineParameters.source_size`
+  exactly, reuses `improcv.transforms.warp_affine` unmodified for both the image and the (always
+  `INTER_NEAREST`, `BORDER_CONSTANT`) mask, and maps an unexpected `cv2.error` to `RuntimeError` (with
+  the original error preserved as `__cause__`) since `warp_affine` itself does not. The mask dtype
+  contract is unchanged from flip/crop (`uint8`/`uint16`/`int16`; `int32` support remains a possible,
+  compatible future extension, not added here). No new dependency.
 
 ### Fixed
 - `improcv.evaluation`: F1 was computed as `2*precision*recall/(precision+recall)`, which loses the
