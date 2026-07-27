@@ -262,6 +262,15 @@ def load_onnx_network(path: StrPath) -> cv2.dnn.Net:
     and accepted; a broken symlink raises `FileNotFoundError`, the same as
     a path that doesn't exist at all.
 
+    **A path containing non-ASCII characters is not guaranteed to work on
+    every platform.** Verified directly (via CI): the same accented-Unicode
+    path that opens correctly on Linux/macOS makes OpenCV's own
+    file-opening code fail on Windows, surfacing here as `RuntimeError`
+    (OpenCV's `cv2.error`, not a bug in this wrapper's own validation,
+    which has already confirmed the file exists, is a non-empty regular
+    file). Prefer an ASCII-only path if you need this to work identically
+    across platforms.
+
     This function only loads the network -- it never calls `setInput`,
     `forward`, reads layer names, inspects input/output shapes, or sets a
     backend/target. Every call parses the file again and returns a new,

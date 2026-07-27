@@ -641,7 +641,11 @@ not its extension, is what's parsed -- a valid ONNX file with no `.onnx` extensi
 Filesystem problems that Python can detect directly give native exceptions (`FileNotFoundError`,
 `IsADirectoryError`, an empty file raises `ValueError`); a problem OpenCV's own parser hits (a
 corrupt/invalid model, or a permission/ACL issue that only surfaces once OpenCV tries to open the
-file) raises `RuntimeError` with the original error attached as `__cause__`.
+file) raises `RuntimeError` with the original error attached as `__cause__`. A path containing
+non-ASCII characters is not guaranteed to work identically on every platform -- verified directly
+(via CI) that the same accented path opens fine on Linux/macOS but makes OpenCV's own file-opening
+code fail on Windows (surfacing as `RuntimeError`, not a bug in this wrapper's validation); prefer
+an ASCII-only path where cross-platform behavior matters.
 
 Every call to either loader parses the model again and returns a new, independent `cv2.dnn.Net` --
 **nothing is cached**, and repeated loading of a large model is exactly as expensive as it looks. The
