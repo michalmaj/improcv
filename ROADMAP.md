@@ -50,10 +50,13 @@ version decided at the time each is actually published, rather than mechanically
   loading implemented; generic inference and backend/target wrappers are out of scope for now, not
   started, see [CHANGELOG.md](CHANGELOG.md)), classification-evaluation utilities deferred from
   Phase 3 (confusion matrix and accuracy/precision/recall/F1 core implemented; ROC/PR curves, AUC,
-  and plotting remain planned, not started, see [CHANGELOG.md](CHANGELOG.md)), image augmentation,
-  and dataset discovery -- augmentation and dataset discovery remain planned, not started. Bounding
-  boxes/keypoints in augmentation, dataset manifests/batching, and DNN inference/model-specific
-  wrappers are deferred, not approved. Release version(s) to be decided as each slice ships.
+  and plotting remain planned, not started, see [CHANGELOG.md](CHANGELOG.md)), image augmentation
+  (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
+  transforms -- rotation/translation/scale/shear -- remain planned, not started), and dataset
+  discovery -- dataset discovery remains planned, not started. Bounding boxes/keypoints/polygons in
+  augmentation, a `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
+  inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as
+  each slice ships.
 - [ ] **Phase 6** — Camera calibration and 3D geometry. Release version to be decided when this
   phase ships.
 - [ ] **Phase 7** — Video/camera capture and tracking (a lightweight IoU tracker only; SORT/
