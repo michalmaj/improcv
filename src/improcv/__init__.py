@@ -44,6 +44,15 @@ from improcv.analysis import (
     min_max_loc,
     moments,
 )
+from improcv.augmentation import (
+    AugmentedImageMask,
+    CropParameters,
+    FlipParameters,
+    apply_crop,
+    apply_flip,
+    sample_crop,
+    sample_flip,
+)
 from improcv.barcode import Barcode, decode_barcodes
 from improcv.color import bgr_to_rgb, ensure_bgr, ensure_gray, rgb_to_bgr, to_hsv, to_lab, to_ycrcb
 from improcv.contours import (
@@ -185,6 +194,7 @@ from improcv.types import Image, ImageFloat32, ImageU8, Mask, TransformMatrix
 
 __all__ = [
     "ApproxMethod",
+    "AugmentedImageMask",
     "Barcode",
     "BoundingBox",
     "Centroids",
@@ -194,12 +204,14 @@ __all__ = [
     "ConfusionMatrixResult",
     "Connectivity",
     "Contour",
+    "CropParameters",
     "DescriptorNorm",
     "DistanceMaskSize",
     "DistanceType",
     "FastType",
     "FeatureMethod",
     "Features",
+    "FlipParameters",
     "FloodFillResult",
     "Hierarchy",
     "HomographyResult",
@@ -231,6 +243,8 @@ __all__ = [
     "adjust_brightness",
     "adjust_contrast",
     "alpha_blend",
+    "apply_crop",
+    "apply_flip",
     "apply_lut",
     "approx_poly_dp",
     "auto_canny",
@@ -315,6 +329,8 @@ __all__ = [
     "rgb_to_bgr",
     "rotate",
     "rotate_bound",
+    "sample_crop",
+    "sample_flip",
     "seamless_clone",
     "sobel_edge",
     "sort_contours",

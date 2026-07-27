@@ -75,6 +75,27 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `average="binary"` in this slice, and no new dependency -- `scikit-learn` was used only as a
   one-off, non-dependency oracle during development to cross-check every documented behavior and
   departure above, never imported by any committed code.
+- New `improcv.augmentation` module, Phase 5 slice (geometric augmentation sampling and replay for
+  flip and crop): `sample_flip`/`sample_crop` and `apply_flip`/`apply_crop`, plus the
+  `FlipParameters`/`CropParameters`/`AugmentedImageMask` result types. Sampling requires an explicit
+  `rng: np.random.Generator` (checked by `isinstance`, never a global/implicit RNG) and returns a
+  small, independent, reusable parameter object; applying that object is a pure function of it, so
+  the same sampled flip/crop can be replayed any number of times, always producing the same result.
+  `apply_flip`/`apply_crop` optionally take a segmentation `mask=`, applying the identical
+  transform to it and returning an `AugmentedImageMask` instead of a bare array, so an image and its
+  mask always stay synchronized. `CropParameters` carries the `source_size` it was sampled for;
+  `apply_crop` requires the image (and mask) to match that size exactly, refusing to replay
+  parameters against a differently-sized image instead of silently cropping the wrong region. A
+  segmentation mask is restricted to `uint8`/`uint16`/`int16` in this slice (not `bool`/`int32`/
+  `int64`/floating-point, and not one-hot/multi-channel encodings) -- narrower than this project's
+  general image dtype contract, deliberately, since a mask holds class labels rather than pixel
+  intensities; widening it (e.g. to `int32`) later is a compatible extension. Both apply functions
+  reuse the existing `improcv.transforms.flip`/`crop` unmodified for the actual pixel work -- no
+  slicing or `cv2.flip` call is reimplemented here -- and always return a new, independent array
+  (or pair), including for a no-op flip and for a crop covering the entire source image. This slice
+  covers flip and crop only: no affine transforms (rotation/translation/scale/shear), no perspective
+  warp, no photometric augmentation, no bounding box/keypoint/polygon support, no `Compose`-style
+  pipeline, and no new dependency.
 
 ### Fixed
 - `improcv.evaluation`: F1 was computed as `2*precision*recall/(precision+recall)`, which loses the

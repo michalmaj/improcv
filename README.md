@@ -689,10 +689,12 @@ integer labels only -- one true class and one predicted class per sample, not mu
 string/hashable labels. `cm.matrix[i, j]` counts samples whose true class is `cm.labels[i]` and
 predicted class is `cm.labels[j]`: **rows are true labels, columns are predicted labels**.
 `labels=None` infers the class universe as the sorted union of every value observed in `y_true`/
-`y_pred`; an explicit `labels` fixes the exact row/column order instead. An observed value outside
-an explicit `labels`, or a duplicate value within `labels`, both raise `ValueError` -- this is a
-deliberate departure from `sklearn.metrics.confusion_matrix`, which silently drops the offending
-sample instead of erroring.
+`y_pred`; an explicit `labels` fixes the exact row/column order instead. `improcv` raises
+`ValueError` in two cases where `sklearn.metrics.confusion_matrix` does not: a duplicate value
+within an explicit `labels` (`sklearn` silently accepts it, but with confusing index semantics --
+the repeated label's row/column gets written to by whichever occurrence's index NumPy resolves
+last, not merged or rejected), and an observed `y_true`/`y_pred` value outside an explicit `labels`
+(`sklearn` silently drops that sample from the matrix instead of erroring).
 
 `classification_metrics`'s result type depends on `average`: `average=None` (the default) gives
 `precision`/`recall`/`f1` as per-class, read-only `float64` arrays; `average="micro"`/`"macro"`/
@@ -724,6 +726,57 @@ memory even though improcv checks the allocation is at least representable first
 
 This is a numeric core only: no ROC/PR curves, no AUC, no plotting, no multilabel classification,
 no sample weights, and no `scikit-learn` dependency.
+
+Augmentation sampling and replay -- flip:
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(42)
+
+flip_params = im.sample_flip(
+    rng,
+    horizontal_probability=0.5,
+    vertical_probability=0.1,
+)
+
+flipped = im.apply_flip(image, flip_params)
+```
+
+With a segmentation mask, apply the same sampled flip to both:
+
+```python
+pair = im.apply_flip(image, flip_params, mask=mask)
+flipped_image = pair.image
+flipped_mask = pair.mask
+```
+
+Augmentation sampling and replay -- crop:
+
+```python
+crop_params = im.sample_crop(
+    rng,
+    source_size=(image.shape[1], image.shape[0]),
+    crop_size=(256, 256),
+)
+
+pair = im.apply_crop(image, crop_params, mask=mask)
+```
+
+`sample_flip`/`sample_crop` take an explicit `rng: np.random.Generator` and return a small,
+independent result (`FlipParameters`/`CropParameters`) -- there is no global/implicit RNG anywhere
+in `improcv`. That result can be stored and replayed any number of times through `apply_flip`/
+`apply_crop`, always producing the same output for the same input. `CropParameters` carries the
+`source_size` it was sampled for; `apply_crop` requires the image (and mask, if given) to match
+that size exactly, so parameters sampled for one image can't be silently misapplied to a
+differently-sized one. Passing `mask=` applies the identical flip/crop to the mask, returning both
+as an `AugmentedImageMask` instead of a bare array; a segmentation mask is restricted to `uint8`/
+`uint16`/`int16` in this slice (not `bool`/`int32`/`int64`/floating-point, and not one-hot/
+multi-channel encodings).
+
+This slice covers flip and crop only: no affine transforms (rotation, translation, scale, shear),
+no perspective warp, no photometric augmentation (brightness/contrast/blur/noise), no bounding
+box/keypoint/polygon support, and no `Compose`-style augmentation pipeline.
 
 ## Status
 
