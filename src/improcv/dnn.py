@@ -68,13 +68,14 @@ def create_dnn_blob(
     would otherwise silently do nothing).
 
     The result is a new, independent array (never a view of `image`);
-    `image` is never mutated. Output shape is always `(1, C, H, W)`, dtype
-    always `float32`; every element is guaranteed finite for the validated,
-    finite inputs this function accepts, but an extreme `scale`/`mean`
-    combined with an extreme pixel value can still legitimately overflow to
-    infinity -- that is a consequence of the parameters chosen, not a bug,
-    and is not blocked here. There is no `[0, 1]`/`[0, 255]` range
-    requirement on the output.
+    `image` is never mutated. Output shape is always `(1, C, H, W)` and
+    dtype is always `float32`. The returned blob is guaranteed finite: if
+    a finite input combined with an extreme `scale` or `mean` overflows
+    during OpenCV preprocessing, this function raises `RuntimeError`
+    rather than returning a blob containing `NaN`/infinity -- it never
+    clips or otherwise rescales the result to make that guarantee hold,
+    it only refuses to return the non-finite value. There is no `[0, 1]`/
+    `[0, 255]` range requirement on the output.
 
     Raises
     ------
@@ -168,7 +169,9 @@ def create_dnn_batch_blob(
 
     The result is a new, independent array; none of `images`' elements are
     mutated. Output shape is always `(N, C, H, W)` where `N == len(images)`,
-    dtype always `float32`.
+    dtype always `float32`. The returned blob is guaranteed finite -- see
+    `create_dnn_blob` for what happens if a finite input combined with an
+    extreme `scale`/`mean` would otherwise overflow.
 
     Raises
     ------
@@ -385,9 +388,10 @@ def _normalize_mean(value: object, channels: int) -> tuple[float, ...]:
     """Raise TypeError/ValueError unless `value` is a valid scalar-or-tuple `mean`.
 
     A scalar is broadcast to every channel; a `tuple` must have exactly one
-    element per channel (a length-1 tuple is rejected even for a
-    single-channel image -- the scalar form already covers broadcasting, so
-    supporting both would be two ways to say the same thing). `list` and
+    element per channel -- for a single-channel (grayscale) image, that
+    means a length-1 tuple is legal (and equivalent to the scalar form),
+    but the same length-1 tuple is rejected for a 3- or 4-channel image,
+    where a full-length tuple is required instead. `list` and
     `np.ndarray` are deliberately not accepted -- unlike raw
     `cv2.dnn.blobFromImage`, which accepts either but treats a bare scalar
     as only the *first* `cv::Scalar` element rather than broadcasting it,
