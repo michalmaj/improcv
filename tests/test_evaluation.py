@@ -85,6 +85,97 @@ def test_scenario_3_class_never_predicted() -> None:
     assert metrics.accuracy == pytest.approx(1 / 3)
 
 
+# --- F1 correctness regressions: F1 must come from TP/FP/FN directly, not from
+# precision*recall, or zero_division wrongly overrides a well-defined F1=0 ---
+
+
+@pytest.mark.parametrize("zero_division", [0.0, 1.0, "nan"])
+def test_f1_is_zero_for_real_fp_fn_even_when_precision_and_recall_are_zero(
+    zero_division,
+) -> None:
+    # every class has TP=0 with real (nonzero) FP and FN -- precision and recall are
+    # both correctly 0 (not zero_division fills), and F1 must likewise be a correctly
+    # defined 0, regardless of zero_division.
+    metrics = classification_metrics([0, 1, 2], [1, 2, 0], zero_division=zero_division)
+
+    assert_array_equal(metrics.precision, [0.0, 0.0, 0.0])
+    assert_array_equal(metrics.recall, [0.0, 0.0, 0.0])
+    assert_array_equal(metrics.f1, [0.0, 0.0, 0.0])
+
+
+def test_f1_zero_division_1_does_not_leak_into_defined_f1_for_all_wrong() -> None:
+    metrics = classification_metrics([0, 1, 2], [1, 2, 0], zero_division=1.0)
+    assert isinstance(metrics.f1, np.ndarray)
+    assert not np.any(metrics.f1 == 1.0)
+
+
+def test_f1_zero_division_nan_does_not_leak_into_defined_f1_for_all_wrong() -> None:
+    metrics = classification_metrics([0, 1, 2], [1, 2, 0], zero_division="nan")
+    assert isinstance(metrics.f1, np.ndarray)
+    assert not np.any(np.isnan(metrics.f1))
+
+
+def test_f1_class_never_predicted_but_present_in_truth_zero_division_1() -> None:
+    metrics = classification_metrics([0, 1, 2], [0, 0, 0], zero_division=1.0)
+    assert isinstance(metrics.precision, np.ndarray)
+    assert isinstance(metrics.recall, np.ndarray)
+    assert isinstance(metrics.f1, np.ndarray)
+    # classes 1 and 2: never predicted -> precision is undefined (zero_division)
+    assert metrics.precision[1] == 1.0
+    assert metrics.precision[2] == 1.0
+    # but recall and F1 are both well-defined here, not affected by zero_division
+    assert metrics.recall[1] == 0.0
+    assert metrics.recall[2] == 0.0
+    assert metrics.f1[1] == 0.0
+    assert metrics.f1[2] == 0.0
+
+
+def test_f1_class_never_predicted_but_present_in_truth_zero_division_nan() -> None:
+    metrics = classification_metrics([0, 1, 2], [0, 0, 0], zero_division="nan")
+    assert isinstance(metrics.precision, np.ndarray)
+    assert isinstance(metrics.recall, np.ndarray)
+    assert isinstance(metrics.f1, np.ndarray)
+    assert math.isnan(metrics.precision[1])
+    assert math.isnan(metrics.precision[2])
+    assert metrics.recall[1] == 0.0
+    assert metrics.recall[2] == 0.0
+    assert metrics.f1[1] == 0.0
+    assert metrics.f1[2] == 0.0
+
+
+@pytest.mark.parametrize("zero_division", [0.0, 1.0, "nan"])
+def test_f1_class_completely_absent_still_uses_zero_division(zero_division) -> None:
+    # class 3: TP=FP=FN=0 (declared but absent from both y_true and y_pred) --
+    # precision, recall, AND f1 are all genuinely undefined here, so all three
+    # must use zero_division.
+    metrics = classification_metrics(
+        [0, 1, 2], [0, 1, 2], labels=[0, 1, 2, 3], zero_division=zero_division
+    )
+    assert isinstance(metrics.precision, np.ndarray)
+    assert isinstance(metrics.recall, np.ndarray)
+    assert isinstance(metrics.f1, np.ndarray)
+    expected = math.nan if zero_division == "nan" else zero_division
+    if zero_division == "nan":
+        assert math.isnan(metrics.precision[3])
+        assert math.isnan(metrics.recall[3])
+        assert math.isnan(metrics.f1[3])
+    else:
+        assert metrics.precision[3] == expected
+        assert metrics.recall[3] == expected
+        assert metrics.f1[3] == expected
+
+
+@pytest.mark.parametrize("average", ["micro", "macro", "weighted"])
+@pytest.mark.parametrize("zero_division", [0.0, 1.0, "nan"])
+def test_f1_fix_holds_under_every_average_mode(average, zero_division) -> None:
+    # all-wrong classification: F1 must never leak to 1.0/NaN under any average mode
+    metrics = classification_metrics(
+        [0, 1, 2], [1, 2, 0], average=average, zero_division=zero_division
+    )
+    assert isinstance(metrics.f1, float)
+    assert metrics.f1 == 0.0
+
+
 def test_scenario_4_class_absent_from_truth() -> None:
     y_true = [0, 0, 1, 1]
     y_pred = [0, 1, 1, 2]
@@ -580,6 +671,42 @@ def test_from_confusion_matrix_accepts_manually_aggregated_matrix() -> None:
 
     metrics = classification_metrics_from_confusion_matrix(combined)
     assert_array_equal(metrics.support, [2, 2])
+
+
+# --- int64 overflow regression: a manually constructed matrix whose true total
+# exceeds int64 must be rejected, never silently wrapped to a negative support ---
+
+
+def test_from_confusion_matrix_rejects_overflowing_manual_matrix() -> None:
+    m = np.int64(2**62)
+    matrix = np.array(
+        [
+            [0, m, m],
+            [m, 0, m],
+            [m, 0, 0],
+        ],
+        dtype=np.int64,
+    )
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0, 1, 2))
+
+    with pytest.raises(ValueError, match="int64"):
+        classification_metrics_from_confusion_matrix(confusion)
+
+
+def test_from_confusion_matrix_int64_max_boundary_is_legal() -> None:
+    matrix = np.array([[np.iinfo(np.int64).max]], dtype=np.int64)
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0,))
+
+    metrics = classification_metrics_from_confusion_matrix(confusion)
+
+    assert_array_equal(metrics.support, [np.iinfo(np.int64).max])
+    assert metrics.accuracy == 1.0
+    assert isinstance(metrics.precision, np.ndarray)
+    assert isinstance(metrics.recall, np.ndarray)
+    assert isinstance(metrics.f1, np.ndarray)
+    _assert_all_close(metrics.precision, [1.0])
+    _assert_all_close(metrics.recall, [1.0])
+    _assert_all_close(metrics.f1, [1.0])
 
 
 # --- read-only / aliasing on classification_metrics results ---

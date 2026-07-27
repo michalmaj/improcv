@@ -698,21 +698,29 @@ sample instead of erroring.
 `precision`/`recall`/`f1` as per-class, read-only `float64` arrays; `average="micro"`/`"macro"`/
 `"weighted"` gives them as plain Python `float`s instead -- never both forms from the same call.
 `support` is always a per-class, read-only `int64` array regardless of `average`, and `accuracy`
-is always a plain `float`. `zero_division` (`0.0`, `1.0`, or `"nan"`) controls what a class with an
-undefined precision/recall/F1 (division by zero -- e.g. a class that was never predicted) reports;
-with `"nan"`, that `NaN` propagates into `"macro"`/`"weighted"` aggregates by plain averaging, not
-by skipping the affected class, including when that class's own support (and therefore its
-weight) is zero.
+is always a plain `float`. `zero_division` (`0.0`, `1.0`, or `"nan"`) controls what a class reports
+when its own division is genuinely undefined -- **precision**, **recall**, and **F1** each have
+their *own* zero-division condition, checked independently from true positive/false positive/false
+negative counts (`TP`/`FP`/`FN`), never from each other: precision uses `zero_division` only when
+`TP + FP == 0` (the class was never predicted); recall uses it only when `TP + FN == 0` (the class
+never occurs in the true labels); F1 uses it only when `2*TP + FP + FN == 0` (the class is
+completely absent from both). A class with `TP = 0` but real, nonzero `FP`/`FN` has a correctly
+defined `F1 = 0` -- `zero_division` does not turn that `0` into `1.0` or `NaN`. With `"nan"`, an
+actually-undefined value's `NaN` propagates into `"macro"`/`"weighted"` aggregates by plain
+averaging, not by skipping the affected class, including when that class's own support (and
+therefore its weight) is zero.
 
 A confusion matrix already computed (including one you've aggregated yourself from several
 batches, e.g. `ConfusionMatrixResult(matrix=sum(batch_matrices), labels=original_labels)`) can be
 passed to `classification_metrics_from_confusion_matrix` directly, without recomputing it from raw
-labels. An empty confusion matrix is possible only with explicit `labels` (`confusion_matrix([],
-[], labels=[0, 1])` returns a well-defined all-zero matrix); `classification_metrics`,
-`classification_metrics_from_confusion_matrix`, and `confusion_matrix` with `labels=None` all
-require at least one observation. Building the dense matrix costs `O(len(labels) ** 2)` memory, so
-a very large explicit `labels` can exhaust process memory even though improcv checks the
-allocation is at least representable first.
+labels -- since such a matrix is never re-derived from `y_true`/`y_pred`, its total count is
+verified to fit in `int64` before `support`/precision/recall/F1 are computed, raising `ValueError`
+instead of silently wrapping around to a negative count if it doesn't. An empty confusion matrix
+is possible only with explicit `labels` (`confusion_matrix([], [], labels=[0, 1])` returns a
+well-defined all-zero matrix); `classification_metrics`, `classification_metrics_from_confusion_matrix`,
+and `confusion_matrix` with `labels=None` all require at least one observation. Building the dense
+matrix costs `O(len(labels) ** 2)` memory, so a very large explicit `labels` can exhaust process
+memory even though improcv checks the allocation is at least representable first.
 
 This is a numeric core only: no ROC/PR curves, no AUC, no plotting, no multilabel classification,
 no sample weights, and no `scikit-learn` dependency.

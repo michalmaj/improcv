@@ -33,6 +33,7 @@ __all__ = [
 ]
 
 _AVERAGE_VALUES: tuple[str | None, ...] = (None, "micro", "macro", "weighted")
+_INT64_MAX = int(np.iinfo(np.int64).max)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -169,13 +170,14 @@ def confusion_matrix(
     Raises
     ------
     TypeError
-        If `y_true`/`y_pred`/`labels` is not a `Sequence` or 1-D integer
-        `ndarray` (including `str`/`bytes`/`bytearray`, a 2-D array, or a
-        non-integer-dtype array), or contains a non-integral element
-        (including `bool`/`np.bool_`/`float`/`str`/`None`).
+        If `y_true`/`y_pred`/`labels` is not a `Sequence` or an `ndarray`
+        (including `str`/`bytes`/`bytearray`, or an `ndarray` with a
+        non-integer dtype), or contains a non-integral element (including
+        `bool`/`np.bool_`/`float`/`str`/`None`).
     ValueError
-        If `y_true` and `y_pred` have different lengths, if `labels` is
-        empty or contains a duplicate, if a value observed in
+        If `y_true` and `y_pred` have different lengths, if any of
+        `y_true`/`y_pred`/`labels` is an `ndarray` that is not 1-D, if
+        `labels` is empty or contains a duplicate, if a value observed in
         `y_true`/`y_pred` is not in an explicit `labels`, if `labels=None`
         and both inputs are empty, or if `len(labels) ** 2` is not
         representable as a dense array on this platform.
@@ -274,13 +276,38 @@ def classification_metrics_from_confusion_matrix(
 
     For each class `i`: `TP_i` is the diagonal entry, `FP_i` is that
     column's sum minus `TP_i`, `FN_i` is that row's sum minus `TP_i`, and
-    `support_i` is that row's sum (`TP_i + FN_i`). `precision_i = TP_i /
-    (TP_i + FP_i)`, `recall_i = TP_i / (TP_i + FN_i)`, `f1_i` is their
-    harmonic mean -- each division that would divide by zero uses
-    `zero_division` instead, computed without ever letting NumPy actually
-    perform a `0/0`-style division (so no `RuntimeWarning` is ever raised
-    here, regardless of `zero_division`). `accuracy` is always
-    `trace(matrix) / matrix.sum()`, independent of `average`.
+    `support_i` is that row's sum (`TP_i + FN_i`). Every count involved
+    (total, per-row, per-column) is verified to fit in `int64` before any
+    of the following is computed -- a `ConfusionMatrixResult` built by hand
+    from huge counts that would silently wrap around in raw `int64`
+    arithmetic raises `ValueError` instead (see `_exact_nonnegative_int64_sum`).
+
+    `precision_i`, `recall_i`, and `f1_i` each have their *own* zero-check,
+    computed directly from `TP_i`/`FP_i`/`FN_i` -- not from each other, and
+    never by adding two already-`zero_division`-filled values together:
+
+    - `precision_i = TP_i / (TP_i + FP_i)`, using `zero_division` only when
+      `TP_i + FP_i == 0` (class `i` was never predicted at all).
+    - `recall_i = TP_i / (TP_i + FN_i)`, using `zero_division` only when
+      `TP_i + FN_i == 0` (class `i` never occurs in the true labels at all).
+    - `f1_i = 2 TP_i / (2 TP_i + FP_i + FN_i)`, using `zero_division` only
+      when `2 TP_i + FP_i + FN_i == 0` (class `i` has no true positives, no
+      false positives, and no false negatives -- i.e. it is completely
+      absent from both `y_true` and `y_pred`).
+
+    This matters because a class can have `TP_i = 0` with real, nonzero
+    `FP_i`/`FN_i` (e.g. a class that was always confused for another) --
+    there, `precision_i`/`recall_i` may or may not individually hit their
+    own zero case, but `f1_i` is well-defined as plain `0.0`, *not*
+    `zero_division`: verified directly that computing `f1_i` from
+    `precision_i`/`recall_i` instead (`2 P_i R_i / (P_i + R_i)`) wrongly
+    treats `P_i = R_i = 0` as an undefined `0/0`, which silently turns a
+    correct `f1_i = 0` into `1.0` (for `zero_division=1.0`) or `NaN` (for
+    `zero_division="nan"`) -- `zero_division` never changes an otherwise
+    well-defined `f1_i = 0`. Each division is computed without ever letting
+    NumPy actually perform a `0/0`-style division (so no `RuntimeWarning`
+    is ever raised here, regardless of `zero_division`). `accuracy` is
+    always `trace(matrix) / total`, independent of `average`.
 
     `average=None` returns per-class `precision`/`recall`/`f1` as read-only
     `float64` arrays aligned with `confusion.labels`, always including
@@ -316,8 +343,9 @@ def classification_metrics_from_confusion_matrix(
     ValueError
         If `confusion`'s `matrix`/`labels` are inconsistent or invalid
         (wrong ndim, not square, empty, negative counts, mismatched
-        lengths, duplicate labels, or a total count of zero), or `average`/
-        `zero_division` is not one of the accepted values.
+        lengths, duplicate labels, a total count of zero, or a total count
+        that exceeds what fits in `int64`), or `average`/`zero_division`
+        is not one of the accepted values.
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
@@ -325,6 +353,26 @@ def classification_metrics_from_confusion_matrix(
     zero_division_value = _normalize_zero_division(zero_division)
     _require_confusion_matrix_result(confusion)
     return _compute_classification_metrics(confusion, average, zero_division_value)
+
+
+def _exact_nonnegative_int64_sum(values: np.ndarray) -> int:
+    """Return the exact sum of a non-negative `int64` array's elements, without overflow.
+
+    `values.sum(dtype=np.int64)` silently wraps around (to a negative or
+    misleadingly-small positive number) once the true total exceeds
+    `int64`'s range -- verified directly with a hand-constructed confusion
+    matrix whose true total is exactly representable in Python but not in
+    `int64`. When every element is small enough that summing all of them
+    cannot possibly overflow (`max element <= INT64_MAX // element_count`),
+    the fast `int64` sum is used directly; otherwise this falls back to an
+    exact, arbitrary-precision Python-`int` sum via `dtype=object`.
+    """
+    if values.size == 0:
+        return 0
+    maximum = int(values.max())
+    if maximum <= _INT64_MAX // values.size:
+        return int(values.sum(dtype=np.int64))
+    return int(values.sum(dtype=object))
 
 
 def _compute_classification_metrics(
@@ -336,27 +384,42 @@ def _compute_classification_metrics(
     labels = confusion.labels
     n_classes = matrix.shape[0]
 
+    # `matrix` is already validated non-negative (by `_require_confusion_matrix_result`
+    # for the from-confusion-matrix path, or by construction for the direct path), so
+    # this exact total is also an exact upper bound for every row/column sum below --
+    # once it is confirmed to fit in int64, so does every row and column sum.
+    total_samples = _exact_nonnegative_int64_sum(matrix)
+    if total_samples == 0:
+        raise ValueError(
+            "classification_metrics_from_confusion_matrix requires at least one "
+            "observation (confusion.matrix sums to zero)"
+        )
+    if total_samples > _INT64_MAX:
+        raise ValueError(
+            f"confusion matrix total count ({total_samples}) exceeds what fits in a "
+            f"signed 64-bit int (max {_INT64_MAX}); support cannot be represented as int64"
+        )
+
     tp = np.diagonal(matrix).astype(np.int64)
-    row_sum = matrix.sum(axis=1)
-    col_sum = matrix.sum(axis=0)
+    row_sum = matrix.sum(axis=1, dtype=np.int64)
+    col_sum = matrix.sum(axis=0, dtype=np.int64)
     fp = col_sum - tp
     fn = row_sum - tp
+    if np.any(tp < 0) or np.any(fp < 0) or np.any(fn < 0):
+        raise RuntimeError("internal error: TP/FP/FN must not be negative")
     support = row_sum.astype(np.int64, copy=True)
     support.flags.writeable = False
 
-    total_samples = int(matrix.sum())
     accuracy = float(np.trace(matrix)) / total_samples
 
-    precision_per_class = _safe_divide_array(
-        tp.astype(np.float64), (tp + fp).astype(np.float64), zero_division
-    )
-    recall_per_class = _safe_divide_array(
-        tp.astype(np.float64), (tp + fn).astype(np.float64), zero_division
-    )
+    tp_float = tp.astype(np.float64)
+    fp_float = fp.astype(np.float64)
+    fn_float = fn.astype(np.float64)
+
+    precision_per_class = _safe_divide_array(tp_float, tp_float + fp_float, zero_division)
+    recall_per_class = _safe_divide_array(tp_float, tp_float + fn_float, zero_division)
     f1_per_class = _safe_divide_array(
-        2.0 * precision_per_class * recall_per_class,
-        precision_per_class + recall_per_class,
-        zero_division,
+        2.0 * tp_float, 2.0 * tp_float + fp_float + fn_float, zero_division
     )
 
     if average is None:
@@ -376,7 +439,7 @@ def _compute_classification_metrics(
         tp_sum, fp_sum, fn_sum = float(tp.sum()), float(fp.sum()), float(fn.sum())
         precision = _safe_divide_scalar(tp_sum, tp_sum + fp_sum, zero_division)
         recall = _safe_divide_scalar(tp_sum, tp_sum + fn_sum, zero_division)
-        f1 = _safe_divide_scalar(2.0 * precision * recall, precision + recall, zero_division)
+        f1 = _safe_divide_scalar(2.0 * tp_sum, 2.0 * tp_sum + fp_sum + fn_sum, zero_division)
         result = ClassificationMetrics(
             labels=labels,
             precision=precision,
@@ -409,7 +472,7 @@ def _compute_classification_metrics(
             average="weighted",
         )
 
-    _check_metrics_postconditions(result, n_classes)
+    _check_metrics_postconditions(result, n_classes, total_samples)
     return result
 
 
@@ -605,14 +668,14 @@ def _require_confusion_matrix_result(confusion: object) -> None:
         )
     if len(set(labels)) != len(labels):
         raise ValueError("confusion.labels must not contain duplicate values")
-    if int(matrix.sum()) == 0:
-        raise ValueError(
-            "classification_metrics_from_confusion_matrix requires at least one observation "
-            "(confusion.matrix sums to zero)"
-        )
+    # The "at least one observation" check is intentionally not here: it requires
+    # summing (potentially huge) matrix values, which _compute_classification_metrics
+    # does safely via _exact_nonnegative_int64_sum, right before it's needed.
 
 
-def _check_metrics_postconditions(result: ClassificationMetrics, n_classes: int) -> None:
+def _check_metrics_postconditions(
+    result: ClassificationMetrics, n_classes: int, expected_total: int
+) -> None:
     if not (isinstance(result.accuracy, float) and math.isfinite(result.accuracy)):
         raise RuntimeError(f"internal error: accuracy {result.accuracy!r} is not a finite float")
     if not (0.0 <= result.accuracy <= 1.0):
@@ -622,6 +685,13 @@ def _check_metrics_postconditions(result: ClassificationMetrics, n_classes: int)
         raise RuntimeError("internal error: support has unexpected shape/dtype")
     if result.support.flags.writeable:
         raise RuntimeError("internal error: support is writeable")
+    if np.any(result.support < 0):
+        raise RuntimeError("internal error: support contains a negative count")
+    support_total = _exact_nonnegative_int64_sum(result.support)
+    if support_total != expected_total:
+        raise RuntimeError(
+            f"internal error: support sums to {support_total}, expected {expected_total}"
+        )
 
     if result.average is None:
         for name, array in (

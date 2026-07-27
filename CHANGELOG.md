@@ -76,6 +76,21 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   one-off, non-dependency oracle during development to cross-check every documented behavior and
   departure above, never imported by any committed code.
 
+### Fixed
+- `improcv.evaluation`: F1 was computed as `2*precision*recall/(precision+recall)`, which loses the
+  distinction between "precision and recall are both correctly `0`" (real, nonzero `FP`/`FN`, `TP =
+  0` -- F1 is well-defined as `0`) and "precision and recall are both undefined" (class completely
+  absent from `y_true`/`y_pred` -- F1 should use `zero_division`); the affected public result was
+  `zero_division=1.0` producing `F1 = 1.0`, or `zero_division="nan"` producing `F1 = NaN`, for a
+  class that was simply misclassified, not one that was actually undefined. F1 is now computed
+  directly from counts (`2*TP / (2*TP + FP + FN)`), using `zero_division` only when
+  `2*TP + FP + FN == 0`; `zero_division=0.0` (the default) was unaffected, since `0` happened to be
+  the correct fallback either way. Also fixed: `classification_metrics_from_confusion_matrix` could
+  silently wrap a very large (hand-constructed) confusion matrix's total count past `int64`'s range,
+  producing a negative `support`; the total is now computed exactly (falling back to arbitrary-
+  precision Python `int` arithmetic when a native `int64` sum could overflow) and raises `ValueError`
+  if it exceeds what `int64` can represent, rather than silently wrapping around.
+
 ## [0.2.0a1] - 2026-07-26
 
 Phase 4 release: quality metrics, perceptual hashing, photo and creative
