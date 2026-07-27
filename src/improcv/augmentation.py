@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import overload
 
+import cv2
 import numpy as np
 
 from improcv._validation import (
@@ -136,11 +137,13 @@ def sample_flip(
     `rng` must be an actual `numpy.random.Generator` instance (checked by
     `isinstance`, not duck-typed) -- a legacy `numpy.random.RandomState`, a
     bare integer seed, the `numpy.random` module itself, or any object that
-    merely implements a compatible interface are all rejected. Consumes
-    `rng` exactly once per axis (`rng.random()`, horizontal then vertical);
-    the exact number and order of internal draws is not part of the public
-    contract and may change between releases without notice, as long as the
-    same `rng` state continues to produce the same `FlipParameters`.
+    merely implements a compatible interface are all rejected. This function
+    consumes the given `rng`; `horizontal` and `vertical` are sampled
+    independently. The exact number and order of internal draws against
+    `rng` is an implementation detail, not part of the public contract, and
+    may change between releases without notice -- what's guaranteed is that
+    replaying a saved `FlipParameters` (via `apply_flip`) reproduces the same
+    result, not that any particular `rng` state does.
 
     `horizontal_probability`/`vertical_probability` must each be a finite
     Python or NumPy real scalar (not `bool`/`np.bool_`) in the closed range
@@ -264,10 +267,11 @@ def sample_crop(
     deterministically yields `x=0, y=0` (the only legal position).
 
     `rng` must be an actual `numpy.random.Generator` (same contract as
-    `sample_flip`). The position is drawn via `rng.integers(0, max_offset +
-    1)` on each axis, so both the right and bottom edges of `source_size`
-    are reachable, not just the top-left-biased range a naive `randint`-style
-    call might suggest.
+    `sample_flip`). The crop position is drawn so that both the right and
+    bottom edges of `source_size` are reachable, not just a top-left-biased
+    range. As with `sample_flip`, the exact number and order of internal
+    draws against `rng` is an implementation detail, not part of the public
+    contract, and may change between releases without notice.
 
     Returns
     -------
@@ -396,8 +400,10 @@ def _require_generator(rng: object) -> None:
 
 
 def _normalize_size(value: object, name: str) -> tuple[int, int]:
-    if not isinstance(value, tuple) or len(value) != 2:
-        raise ValueError(f"{name} must be a 2-tuple, got {value!r}")
+    if not isinstance(value, tuple):
+        raise TypeError(f"{name} must be a tuple, got {type(value).__name__}")
+    if len(value) != 2:
+        raise ValueError(f"{name} must contain exactly 2 elements, got {len(value)}")
     width, height = value
     require_positive_integral(width, f"{name}[0]")
     require_positive_integral(height, f"{name}[1]")
@@ -410,16 +416,21 @@ def _normalize_size(value: object, name: str) -> tuple[int, int]:
 def _apply_flip_preserving_shape(array: np.ndarray, direction: FlipDirection | None) -> np.ndarray:
     if direction is None:
         return array.copy()
-    result = _flip(array, direction)
-    if array.ndim == 3 and result.ndim == 2 and result.size == array.size:
+    try:
+        result = _flip(array, direction)
+    except cv2.error as exc:
+        raise RuntimeError("OpenCV failed to apply flip augmentation") from exc
+    if array.ndim == 3 and array.shape[2] == 1 and result.shape == array.shape[:2]:
         # cv2.flip drops a trailing singleton channel dimension (verified
         # directly for (H, W, 1) input) -- restore it so the output shape
         # always matches the input shape exactly, per this module's own
-        # shape-preservation postcondition. The size check keeps this a
-        # no-op for a genuinely wrong-shaped result, leaving it for
-        # _check_flip_postconditions to reject with a clear RuntimeError
-        # instead of a raw reshape ValueError.
-        result = result.reshape(array.shape)
+        # shape-preservation postcondition. Restricted to exactly this known
+        # squeeze (a singleton channel dim disappearing), not merely "same
+        # total element count" -- a wrong-shaped result with a coincidentally
+        # matching size (e.g. a (H, W*C) result for a (H, W, C) input) must
+        # still be left for _check_flip_postconditions to reject with a clear
+        # RuntimeError, not silently reshaped into something plausible-looking.
+        result = result[:, :, None]
     return result
 
 

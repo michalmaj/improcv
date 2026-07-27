@@ -369,6 +369,70 @@ def test_apply_flip_raises_runtime_error_on_postcondition_violation(
         apply_flip(image, FlipParameters(True, False))
 
 
+def test_apply_flip_does_not_reshape_arbitrary_same_size_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    image = np.arange(4 * 5 * 3, dtype=np.uint8).reshape(4, 5, 3)
+
+    monkeypatch.setattr(
+        augmentation_module,
+        "_flip",
+        lambda image, direction: np.zeros((4, 15), dtype=image.dtype),
+    )
+
+    with pytest.raises(RuntimeError, match="shape"):
+        apply_flip(image, FlipParameters(True, False))
+
+
+def test_apply_flip_maps_unexpected_opencv_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    error = cv2.error("simulated failure")
+
+    def fail(image, direction):
+        raise error
+
+    monkeypatch.setattr(augmentation_module, "_flip", fail)
+
+    with pytest.raises(RuntimeError, match="OpenCV failed") as exc_info:
+        apply_flip(
+            np.zeros((4, 5, 3), dtype=np.uint8),
+            FlipParameters(True, False),
+        )
+
+    assert exc_info.value.__cause__ is error
+
+
+def test_apply_flip_maps_unexpected_opencv_error_for_mask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    real_flip = augmentation_module._flip
+    error = cv2.error("simulated mask failure")
+    calls = {"count": 0}
+
+    def flip_then_fail(image, direction):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return real_flip(image, direction)
+        raise error
+
+    monkeypatch.setattr(augmentation_module, "_flip", flip_then_fail)
+
+    image = _make_image(4, 5)
+    mask = _make_mask(4, 5)
+    with pytest.raises(RuntimeError, match="OpenCV failed") as exc_info:
+        apply_flip(image, FlipParameters(True, False), mask=mask)
+
+    assert exc_info.value.__cause__ is error
+    assert calls["count"] == 2
+
+
 # --- sample_crop ---
 
 
@@ -411,6 +475,34 @@ def test_sample_crop_rejects_bool_dimension() -> None:
     rng = np.random.default_rng(0)
     with pytest.raises(TypeError):
         sample_crop(rng, source_size=(True, 4), crop_size=(1, 1))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad", [[5, 5], None, "55"])
+def test_sample_crop_rejects_non_tuple_source_size(bad: object) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(TypeError, match="tuple"):
+        sample_crop(rng, source_size=bad, crop_size=(1, 1))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad", [[5, 5], None, "55"])
+def test_sample_crop_rejects_non_tuple_crop_size(bad: object) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(TypeError, match="tuple"):
+        sample_crop(rng, source_size=(5, 5), crop_size=bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad", [(5,), (5, 5, 5)])
+def test_sample_crop_rejects_wrong_length_source_size(bad: tuple) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="exactly 2 elements"):
+        sample_crop(rng, source_size=bad, crop_size=(1, 1))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad", [(5,), (5, 5, 5)])
+def test_sample_crop_rejects_wrong_length_crop_size(bad: tuple) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="exactly 2 elements"):
+        sample_crop(rng, source_size=(5, 5), crop_size=bad)  # type: ignore[arg-type]
 
 
 def test_sample_crop_accepts_numpy_integral_dimensions() -> None:
