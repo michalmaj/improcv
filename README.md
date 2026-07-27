@@ -534,6 +534,73 @@ Per-image feature masks supported by the lower-level OpenCV Stitcher API are not
 wrapper. This first version also does not expose any of `cv2.Stitcher`'s registration/seam/
 compositing/confidence settings -- it always uses OpenCV's own defaults.
 
+DNN preprocessing:
+
+```python
+import improcv as im
+
+blob = im.create_dnn_blob(
+    image,
+    size=(224, 224),
+    scale=1.0 / 255.0,
+    mean=(0.0, 0.0, 0.0),
+    swap_rb=True,
+)
+
+# a batch of images sharing one set of parameters:
+batch = im.create_dnn_batch_blob(
+    [image_a, image_b],
+    size=(224, 224),
+    scale=1.0 / 255.0,
+    swap_rb=True,
+)
+```
+
+`create_dnn_blob`/`create_dnn_batch_blob` wrap `cv2.dnn.blobFromImage`/`blobFromImages` to turn a
+`uint8`/`float32` image (or a `Sequence` of them) into a blob ready for `cv2.dnn.Net.setInput` --
+they do not load a model, create a `cv2.dnn.Net`, or run inference; that is a separate, later slice.
+The output is always `float32` and always 4-D NCHW (`(1, C, H, W)` for a single image, `(N, C, H, W)`
+for a batch) -- a single image still gets an explicit batch dimension, there is no 3-D HWC return
+path. `size` is `(width, height)`, matching OpenCV's own convention, not NumPy's `(height, width)`
+indexing order. `crop=False` (the default) resizes directly to `size`, stretching independently in
+each dimension without preserving aspect ratio; `crop=True` uniformly scales the image so it covers
+`size` in both dimensions, then takes a centered crop -- both always use OpenCV's `INTER_LINEAR`,
+which is not configurable, because the underlying OpenCV function does not expose an `interpolation`
+parameter either.
+
+The operation is `(input - mean) * scale`. A scalar `mean` (e.g. `mean=1.0`) is broadcast by improcv
+to every channel; passing that same scalar directly to raw `cv2.dnn.blobFromImage` would **not**
+broadcast it -- it would be interpreted as only the first channel's mean, leaving the others at zero.
+A tuple `mean` must have exactly one element per channel, and its order refers to the *output*
+channel order: for BGR/BGRA input, `swap_rb=False` means `(B, G, R[, A])` and `swap_rb=True` means
+`(R, G, B[, A])` -- passing BGR-ordered image data does not, by itself, produce RGB-ordered output;
+`swap_rb=True` is required for that, and it never touches an alpha channel, which always stays last.
+
+`create_dnn_batch_blob` requires an explicit `size` -- there is no "keep native size" default for a
+batch, because OpenCV silently resizes every image after the first to match the *first* image's
+native size when no `size` is given, which silently produces wrong results for a batch of
+differently-sized images. `create_dnn_blob` (single image) does default `size` to `None`, which
+keeps that one image's native size.
+
+Only `uint8` and `float32` input is accepted (grayscale, `(H, W, 1)`, BGR, or BGRA) -- verified
+directly that other dtypes accepted by raw OpenCV on some versions (e.g. `int16`, `uint16`,
+`float64`) are silently converted on OpenCV >= 4.13 but raise a raw `cv2.error` on OpenCV 4.9, so
+allowing them here would make behavior depend on the installed OpenCV version. There is no
+`output_dtype` parameter in this first version -- the output is always `float32`; a `uint8`-output
+mode may be added later, compatibly, as a new keyword-only parameter if a concrete need for it
+appears.
+
+**Extremely large `size` values can exhaust process memory or be killed by the operating system --
+this is not, and cannot be, turned into a catchable Python exception.** `size` is validated to be
+representable (each dimension and their product must fit a signed 32-bit int, matching an internal
+limit in OpenCV's own blob-construction code), but that says nothing about whether the resulting
+allocation is a *reasonable* size for the machine running it -- pick `size` based on your actual model
+input requirements, not arbitrarily large values.
+
+No model loading, DNN inference, or `cv2.dnn.Net` handling is included in this first slice, and no
+new dependency (or `improcv[ml]` extra) was introduced for it -- both functions run on the same base
+OpenCV install as the rest of `improcv`.
+
 ## Status
 
 `improcv` is in early development. `0.1.0a1` is designated as the first public release and covers

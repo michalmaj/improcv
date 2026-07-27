@@ -10,6 +10,30 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- New `improcv.dnn` module, Phase 5 slice (DNN blob preprocessing): `create_dnn_blob` and
+  `create_dnn_batch_blob`, wrapping `cv2.dnn.blobFromImage`/`blobFromImages` to turn `uint8`/
+  `float32` image(s) into a 4-D NCHW `float32` blob for `cv2.dnn.Net.setInput`. This slice covers
+  preprocessing only -- no model loading, no `cv2.dnn.Net` handling, and no inference. Input is
+  restricted to `uint8`/`float32`, grayscale/`(H, W, 1)`/BGR/BGRA -- verified directly (source and
+  empirically, across OpenCV 4.9/4.13/5.0) that other dtypes accepted by raw OpenCV on some versions
+  (`int16`, `uint16`, `float64`) are silently converted on OpenCV >= 4.13 but raise a raw `cv2.error`
+  on OpenCV 4.9 (this project's floor), and that OpenCV 5.0 removed the Caffe/Darknet/Torch model
+  loaders present on 4.x -- both are reasons this slice deliberately stays narrow. Output is always
+  `float32` (no `output_dtype`/`uint8`-output parameter yet -- `ddepth=CV_8U` forbids any non-default
+  `scale`/`mean` in OpenCV itself, and mixing it with non-`uint8` input silently wraps around on
+  OpenCV >= 4.13 instead of raising, so it was left out rather than exposed unsafely). A scalar `mean`
+  is broadcast by this wrapper to every channel -- passing that same scalar directly to raw
+  `cv2.dnn.blobFromImage` would not broadcast it, only set the first channel's mean. `size` is
+  required (not optional) for `create_dnn_batch_blob` -- verified directly that without it, OpenCV
+  silently resizes every image after the first to match the first image's native size. `images` for
+  the batch function must be a real `Sequence` (a single `np.ndarray`, including a 4-D stack, is
+  rejected, matching `stitch_images`'s existing container contract) whose elements must share dtype
+  and channel count; spatial shape may differ, since the required `size` normalizes it. No new
+  runtime dependency and no `improcv[ml]` extra were introduced -- `cv2.dnn` is part of the base
+  OpenCV install already required by the existing `cv`/`cv-headless`/`cv-contrib`/
+  `cv-contrib-headless` extras.
+
 ## [0.2.0a1] - 2026-07-26
 
 Phase 4 release: quality metrics, perceptual hashing, photo and creative
