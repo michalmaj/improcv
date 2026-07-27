@@ -49,11 +49,18 @@ graph = helper.make_graph([node], "tiny_identity", [input_tensor], [output_tenso
 model = helper.make_model(
     graph, producer_name="improcv-test-fixture", opset_imports=[helper.make_opsetid("", 13)]
 )
+model.ir_version = 13  # set explicitly -- do not rely on onnx's installed-version default
 onnx.checker.check_model(model)
 onnx.save(model, "tiny_identity.onnx")
 ```
 
+This example fixes every property that defines the documented fixture explicitly (input/output
+names, shape, the `Identity` node, opset 13, IR version 13, producer name) rather than relying on
+any of `onnx`'s own defaults, which can differ between installed versions of the package.
+
 After regenerating, manually verify the result still matches the properties above --
 particularly size and SHA-256 (`shasum -a 256 tiny_identity.onnx`) -- before replacing the
-committed file. There is no automated check that regenerates or re-verifies this file as part
-of the normal test suite, lint, or CI.
+committed file. The normal test suite verifies the *committed* fixture's size and SHA-256
+(`tests/test_dnn_onnx.py::test_fixture_matches_documented_sha256_and_size`); it does not
+regenerate the model or require the `onnx` package. Regeneration itself remains an explicit,
+manual maintenance operation, outside the test suite, lint, and CI.
