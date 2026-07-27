@@ -77,6 +77,13 @@ from improcv.dnn import (
 )
 from improcv.drawing import draw_bounding_boxes, draw_contours, montage
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
+from improcv.evaluation import (
+    ClassificationMetrics,
+    ConfusionMatrixResult,
+    classification_metrics,
+    classification_metrics_from_confusion_matrix,
+    confusion_matrix,
+)
 from improcv.features import (
     DescriptorNorm,
     FeatureMethod,
@@ -182,7 +189,9 @@ __all__ = [
     "BoundingBox",
     "Centroids",
     "Circle",
+    "ClassificationMetrics",
     "ComponentStats",
+    "ConfusionMatrixResult",
     "Connectivity",
     "Contour",
     "DescriptorNorm",
@@ -236,6 +245,9 @@ __all__ = [
     "calibrate_camera_response_robertson",
     "center_crop",
     "clahe",
+    "classification_metrics",
+    "classification_metrics_from_confusion_matrix",
+    "confusion_matrix",
     "connected_components",
     "connected_components_with_stats",
     "convex_hull",

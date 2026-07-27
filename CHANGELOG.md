@@ -55,6 +55,26 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   cached. This slice covers loading only: no `setInput`/`forward` wrapper, no backend/target API, no
   model-specific postprocessing, and no new dependency (`onnx` is used only to regenerate the test
   fixture in a throwaway environment, never a project or CI dependency).
+- New `improcv.evaluation` module, Phase 5 slice (classification evaluation core): `confusion_matrix`,
+  `classification_metrics`, and `classification_metrics_from_confusion_matrix`, covering confusion
+  matrices, accuracy, and per-class/aggregated precision/recall/F1/support for single-label
+  multiclass classification with integer labels. Rows are true labels, columns are predicted labels;
+  `labels=None` infers the sorted union of observed values, an explicit `labels` fixes the exact
+  order. Two deliberate departures from `scikit-learn.metrics`'s well-known behavior: a duplicate
+  value in an explicit `labels` and an observed label outside an explicit `labels` both raise
+  `ValueError`, rather than being silently accepted (duplicates) or silently dropping that sample
+  from the result (unknown labels), as `sklearn.metrics.confusion_matrix` does. `average` is
+  `None`/`"micro"`/`"macro"`/`"weighted"` (no `"binary"` in this slice); `zero_division` is `0.0`,
+  `1.0`, or `"nan"` (no `"warn"`), computed without ever letting NumPy perform an actual `0/0`
+  division, so no `RuntimeWarning` is raised regardless of the value chosen. `ConfusionMatrixResult`/
+  `ClassificationMetrics` are frozen dataclasses with a hand-written `__eq__` (comparing `ndarray`
+  fields via `np.array_equal`, with `equal_nan=True` for the float metric fields) and `__hash__ =
+  None`, since the default dataclass-generated equality would hit NumPy's "truth value of an array is
+  ambiguous" error for any non-trivial result; all `ndarray` fields on both types are new, independent
+  arrays, marked read-only. No ROC/PR curves, AUC, plotting, multilabel support, sample weights, or
+  `average="binary"` in this slice, and no new dependency -- `scikit-learn` was used only as a
+  one-off, non-dependency oracle during development to cross-check every documented behavior and
+  departure above, never imported by any committed code.
 
 ## [0.2.0a1] - 2026-07-26
 

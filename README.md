@@ -665,6 +665,58 @@ untrusted binary format. Do not load models from untrusted sources in-process; i
 separate process with its own resource limits instead. This slice does not download models from
 anywhere -- you provide the path or bytes.
 
+Classification evaluation:
+
+```python
+import improcv as im
+
+cm = im.confusion_matrix(
+    y_true=[0, 0, 1, 1],
+    y_pred=[0, 1, 1, 1],
+    labels=[0, 1],
+)
+
+metrics = im.classification_metrics(
+    y_true=[0, 0, 1, 1],
+    y_pred=[0, 1, 1, 1],
+    labels=[0, 1],
+    average=None,
+)
+```
+
+`confusion_matrix`/`classification_metrics` cover single-label multiclass classification with
+integer labels only -- one true class and one predicted class per sample, not multilabel, and not
+string/hashable labels. `cm.matrix[i, j]` counts samples whose true class is `cm.labels[i]` and
+predicted class is `cm.labels[j]`: **rows are true labels, columns are predicted labels**.
+`labels=None` infers the class universe as the sorted union of every value observed in `y_true`/
+`y_pred`; an explicit `labels` fixes the exact row/column order instead. An observed value outside
+an explicit `labels`, or a duplicate value within `labels`, both raise `ValueError` -- this is a
+deliberate departure from `sklearn.metrics.confusion_matrix`, which silently drops the offending
+sample instead of erroring.
+
+`classification_metrics`'s result type depends on `average`: `average=None` (the default) gives
+`precision`/`recall`/`f1` as per-class, read-only `float64` arrays; `average="micro"`/`"macro"`/
+`"weighted"` gives them as plain Python `float`s instead -- never both forms from the same call.
+`support` is always a per-class, read-only `int64` array regardless of `average`, and `accuracy`
+is always a plain `float`. `zero_division` (`0.0`, `1.0`, or `"nan"`) controls what a class with an
+undefined precision/recall/F1 (division by zero -- e.g. a class that was never predicted) reports;
+with `"nan"`, that `NaN` propagates into `"macro"`/`"weighted"` aggregates by plain averaging, not
+by skipping the affected class, including when that class's own support (and therefore its
+weight) is zero.
+
+A confusion matrix already computed (including one you've aggregated yourself from several
+batches, e.g. `ConfusionMatrixResult(matrix=sum(batch_matrices), labels=original_labels)`) can be
+passed to `classification_metrics_from_confusion_matrix` directly, without recomputing it from raw
+labels. An empty confusion matrix is possible only with explicit `labels` (`confusion_matrix([],
+[], labels=[0, 1])` returns a well-defined all-zero matrix); `classification_metrics`,
+`classification_metrics_from_confusion_matrix`, and `confusion_matrix` with `labels=None` all
+require at least one observation. Building the dense matrix costs `O(len(labels) ** 2)` memory, so
+a very large explicit `labels` can exhaust process memory even though improcv checks the
+allocation is at least representable first.
+
+This is a numeric core only: no ROC/PR curves, no AUC, no plotting, no multilabel classification,
+no sample weights, and no `scikit-learn` dependency.
+
 ## Status
 
 `improcv` is in early development. `0.1.0a1` is designated as the first public release and covers
