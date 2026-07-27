@@ -391,6 +391,16 @@ def test_create_dnn_blob_rejects_wrong_length_mean_tuple(mean) -> None:
         create_dnn_blob(image, mean=mean)
 
 
+@pytest.mark.parametrize("shape", [(4, 4), (4, 4, 1)])
+def test_create_dnn_blob_accepts_one_element_mean_tuple_for_grayscale(shape) -> None:
+    image = np.full(shape, 5, dtype=np.uint8)
+
+    blob = create_dnn_blob(image, mean=(2.0,))
+
+    assert blob.shape == (1, 1, 4, 4)
+    assert_array_equal(blob, np.full((1, 1, 4, 4), 3.0, dtype=np.float32))
+
+
 @pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
 def test_create_dnn_blob_rejects_non_finite_mean_element(bad_value) -> None:
     image = np.zeros((4, 4, 3), dtype=np.uint8)
@@ -457,6 +467,23 @@ def test_create_dnn_blob_wraps_cv2_error_as_runtime_error(monkeypatch: pytest.Mo
         create_dnn_blob(image)
 
     assert exc_info.value.__cause__ is original
+
+
+def test_create_dnn_blob_rejects_non_finite_result_from_numeric_overflow() -> None:
+    """A real (non-monkeypatched) OpenCV call: finite input, finite `scale`, non-finite output.
+
+    Verified directly, identically on OpenCV 4.9.0/4.13.0/5.0.0: multiplying
+    `np.finfo(np.float32).max` by `scale=2.0` overflows to `inf` inside
+    `cv2.dnn.blobFromImage` itself (no exception raised by OpenCV -- it
+    just returns a blob containing `inf`). This is the real-world case the
+    monkeypatched postcondition tests below stand in for; this test exists
+    so at least one non-finite-output path is exercised through the actual
+    OpenCV call, not only through a fake.
+    """
+    image = np.full((1, 1, 3), np.finfo(np.float32).max, dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="NaN/Inf"):
+        create_dnn_blob(image, scale=2.0)
 
 
 @pytest.mark.parametrize(
