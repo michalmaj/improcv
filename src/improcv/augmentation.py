@@ -1,15 +1,18 @@
-"""Geometric augmentation: reproducible flip and crop sampling for image + mask pairs.
+"""Geometric augmentation: reproducible flip, crop, and affine sampling for image + mask pairs.
 
 This module separates *sampling* random parameters from *applying* them:
-`sample_flip`/`sample_crop` consume an explicit `np.random.Generator` once and
-return a small, independent, replayable result (`FlipParameters`/
-`CropParameters`); `apply_flip`/`apply_crop` are pure functions of that result
-and never touch any RNG themselves. The same sampled parameters can be
-applied to an image and its segmentation mask (or to a second image of the
-same spatial size) any number of times, always producing the same result.
+`sample_flip`/`sample_crop`/`sample_affine` consume an explicit
+`np.random.Generator` once and return a small, independent, replayable result
+(`FlipParameters`/`CropParameters`/`AffineParameters`); `apply_flip`/
+`apply_crop`/`apply_affine` are pure functions of that result and never touch
+any RNG themselves. The same sampled parameters can be applied to an image
+and its segmentation mask (or to a second image of the same spatial size)
+any number of times, always producing the same result.
 
-Only flip and crop are covered here. Affine transforms (rotation,
-translation, scale, shear), perspective, resize, photometric augmentation,
+Affine coverage is a stable subset of the general affine group: rotation,
+translation, and isotropic scale (a similarity transform), all composed
+around the image center. Shear, perspective, canvas expansion (a
+`rotate_bound`-style growing output), resize, photometric augmentation,
 bounding boxes/keypoints/polygons, and any `Compose`-style pipeline are
 deliberately out of scope for this slice.
 """
@@ -21,26 +24,37 @@ from typing import overload
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 from improcv._validation import (
     require_bool,
     require_dtype,
+    require_finite,
+    require_fits_dtype,
     require_image_ndim,
     require_int,
+    require_integral,
+    require_point_2d,
+    require_positive,
     require_positive_integral,
     require_range,
+    require_transform_matrix,
 )
 from improcv.transforms import FlipDirection
 from improcv.transforms import crop as _crop
 from improcv.transforms import flip as _flip
+from improcv.transforms import warp_affine as _warp_affine
 from improcv.types import Image
 
 __all__ = [
+    "AffineParameters",
     "AugmentedImageMask",
     "CropParameters",
     "FlipParameters",
+    "apply_affine",
     "apply_crop",
     "apply_flip",
+    "sample_affine",
     "sample_crop",
     "sample_flip",
 ]
@@ -100,8 +114,44 @@ class CropParameters:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
+class AffineParameters:
+    """The result of `sample_affine`: a rotation + translation + isotropic-scale matrix.
+
+    `matrix` (shape ``(2, 3)``, dtype ``float64``, finite, a new read-only
+    buffer) is the sole source of truth for replay -- `apply_affine` applies
+    it directly and never reconstructs it from `angle`/`translation`/`scale`.
+    Those three fields are sampling metadata only (debugging, logging, a
+    readable `repr`); a general rotation+scale+shear matrix cannot in
+    general be uniquely decomposed back into them, so they are recorded at
+    sampling time instead. `source_size` is `(width, height)`, matching
+    `CropParameters`'s own convention, and exists for the same reason: to
+    make replay safe by refusing to reapply these parameters to a
+    differently-sized image.
+    """
+
+    matrix: npt.NDArray[np.float64]
+    source_size: tuple[int, int]
+    angle: float
+    translation: tuple[float, float]
+    scale: float
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AffineParameters):
+            return NotImplemented
+        return (
+            bool(np.array_equal(self.matrix, other.matrix))
+            and self.source_size == other.source_size
+            and self.angle == other.angle
+            and self.translation == other.translation
+            and self.scale == other.scale
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True, slots=True, eq=False)
 class AugmentedImageMask:
-    """The image+mask result of `apply_flip`/`apply_crop` when called with a `mask`.
+    """The image+mask result of `apply_flip`/`apply_crop`/`apply_affine` when called with a `mask`.
 
     Equality (`==`) compares both fields by value via `np.array_equal`, never
     by identity -- the default dataclass-generated equality would compare
@@ -240,7 +290,7 @@ def apply_flip(
 
     direction = _flip_direction(params)
     augmented_image = _apply_flip_preserving_shape(image, direction)
-    _check_flip_postconditions(image, augmented_image, "image")
+    _check_shape_preserving_postconditions(image, augmented_image, "image")
 
     if mask is None:
         return augmented_image
@@ -248,7 +298,7 @@ def apply_flip(
     _require_mask(mask, "mask")
     _require_matching_spatial_shape(mask, image, "mask", "image")
     augmented_mask = _apply_flip_preserving_shape(mask, direction)
-    _check_flip_postconditions(mask, augmented_mask, "mask")
+    _check_shape_preserving_postconditions(mask, augmented_mask, "mask")
 
     return AugmentedImageMask(image=augmented_image, mask=augmented_mask)
 
@@ -378,7 +428,7 @@ def apply_crop(
     """
     _require_crop_parameters(params)
     require_image_ndim(image, ndims=(2, 3))
-    _require_matches_source_size(image, params, "image")
+    _require_matches_source_size(image, params.source_size, "image")
 
     augmented_image = _crop(image, params.x, params.y, params.width, params.height)
     _check_crop_postconditions(augmented_image, params, image, "image")
@@ -390,6 +440,216 @@ def apply_crop(
     _require_matching_spatial_shape(mask, image, "mask", "image")
     augmented_mask = _crop(mask, params.x, params.y, params.width, params.height)
     _check_crop_postconditions(augmented_mask, params, mask, "mask")
+
+    return AugmentedImageMask(image=augmented_image, mask=augmented_mask)
+
+
+def sample_affine(
+    rng: np.random.Generator,
+    source_size: tuple[int, int],
+    *,
+    angle_range: tuple[float, float] = (0.0, 0.0),
+    translation_x_range: tuple[float, float] = (0.0, 0.0),
+    translation_y_range: tuple[float, float] = (0.0, 0.0),
+    scale_range: tuple[float, float] = (1.0, 1.0),
+) -> AffineParameters:
+    """Sample a rotation + translation + isotropic-scale affine transform.
+
+    `source_size` is `(width, height)`. `angle_range` is in degrees, with
+    the same positive (counter-clockwise) direction and center convention
+    (`((width - 1) / 2, (height - 1) / 2)`) as `improcv.transforms.rotate`;
+    it is not normalized modulo 360, so a range like `(350.0, 370.0)` is
+    legal and meaningful as-is. `translation_x_range`/`translation_y_range`
+    are in pixels (a positive `x` shifts content right, a positive `y`
+    shifts it down, matching `improcv.transforms.translate`); float
+    (subpixel) values are legal. `scale_range` is a positive, dimensionless,
+    isotropic multiplier (`1.0` is unchanged size).
+
+    Each range is a `(low, high)` tuple: a Python or NumPy real scalar pair
+    (`bool`/`np.bool_` rejected), both finite, with `low <= high` (equal
+    endpoints are legal and always sample that exact constant); `scale_range`
+    additionally requires `low > 0`. Every range is sampled independently via
+    `rng.uniform(low, high)` -- `low` itself is reachable, but for a
+    non-degenerate range, sampling a value exactly equal to `high` is not
+    guaranteed (a property of continuous floating-point sampling, not a bug).
+
+    The transform is built as rotation + isotropic scale around
+    `source_size`'s center (via `cv2.getRotationMatrix2D`), then translated
+    by `(dx, dy)` in the destination coordinate system -- translation does
+    not commute with rotation/scaling in general, so this composition order
+    is a fixed, documented part of the contract, not an implementation
+    detail. Shear is not part of this transform in this slice.
+
+    `rng` must be an actual `numpy.random.Generator` instance (same contract
+    as `sample_flip`/`sample_crop`); the exact number and order of internal
+    draws is an implementation detail, not part of the public contract.
+
+    Returns
+    -------
+    AffineParameters
+        Independent of `rng`'s state after this call; `matrix` is the sole
+        source of truth for replay via `apply_affine`. `angle`/
+        `translation`/`scale` are sampling metadata for debugging/logging/
+        `repr` only.
+
+    Raises
+    ------
+    TypeError
+        If `rng` is not a `numpy.random.Generator`, or `source_size`/any
+        `*_range` is not a 2-tuple of the expected element types.
+    ValueError
+        If `source_size`/any `*_range` has the wrong length or an
+        out-of-contract value (non-finite, `low > high`, non-positive
+        `scale_range`), or if the sampled, otherwise-legal parameters
+        combine into a non-finite matrix (representable only as `inf`/
+        `NaN`, e.g. from an astronomically large `scale`/`source_size`
+        combination -- verified directly reachable from finite inputs).
+    """
+    _require_generator(rng)
+    source_width, source_height = _normalize_size(source_size, "source_size")
+    angle_low, angle_high = _normalize_range(angle_range, "angle_range")
+    tx_low, tx_high = _normalize_range(translation_x_range, "translation_x_range")
+    ty_low, ty_high = _normalize_range(translation_y_range, "translation_y_range")
+    scale_low, scale_high = _normalize_range(scale_range, "scale_range")
+    if scale_low <= 0:
+        raise ValueError(f"scale_range must be positive, got {scale_range}")
+
+    angle = float(rng.uniform(angle_low, angle_high))
+    dx = float(rng.uniform(tx_low, tx_high))
+    dy = float(rng.uniform(ty_low, ty_high))
+    scale = float(rng.uniform(scale_low, scale_high))
+
+    center = ((source_width - 1) / 2.0, (source_height - 1) / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, angle, scale)
+    matrix[0, 2] += dx
+    matrix[1, 2] += dy
+    matrix = np.asarray(matrix, dtype=np.float64)
+
+    if matrix.shape != (2, 3) or matrix.dtype != np.float64:
+        raise RuntimeError(
+            f"internal error: sampled affine matrix has shape {matrix.shape} and "
+            f"dtype {matrix.dtype}, expected (2, 3) float64"
+        )
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError(
+            "the sampled affine transform is not representable as a finite matrix "
+            f"(angle={angle}, translation=({dx}, {dy}), scale={scale}); "
+            "choose narrower ranges"
+        )
+    matrix.setflags(write=False)
+
+    return AffineParameters(
+        matrix=matrix,
+        source_size=(source_width, source_height),
+        angle=angle,
+        translation=(dx, dy),
+        scale=scale,
+    )
+
+
+@overload
+def apply_affine(
+    image: Image,
+    params: AffineParameters,
+    *,
+    mask: None = None,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+) -> Image: ...
+@overload
+def apply_affine(
+    image: Image,
+    params: AffineParameters,
+    *,
+    mask: np.ndarray,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+    mask_border_value: int = 0,
+) -> AugmentedImageMask: ...
+def apply_affine(
+    image: Image,
+    params: AffineParameters,
+    *,
+    mask: np.ndarray | None = None,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+    mask_border_value: int = 0,
+) -> Image | AugmentedImageMask:
+    """Apply a previously sampled affine transform to `image` (and optionally `mask`).
+
+    `params` must be exactly an `AffineParameters` (its fields are
+    re-validated here too, since a frozen dataclass can still be constructed
+    by hand with invalid field values). Only `params.matrix` is used to
+    perform the transform; `angle`/`translation`/`scale` are checked for
+    basic internal consistency (each finite, `scale > 0`) but are never used
+    to reconstruct or cross-check the matrix numerically.
+
+    `image`'s spatial size (`(width, height)`) must equal `params.source_size`
+    *exactly* -- the same replay guard as `apply_crop`. Output spatial size
+    always equals `params.source_size` (this slice does not expand the
+    canvas). Applies `improcv.transforms.warp_affine` directly (never raw
+    `cv2.warpAffine`); `image`'s dtype/shape contract is exactly
+    `warp_affine`'s own.
+
+    If `mask` is given, it must satisfy the same shape/dtype contract as
+    `apply_flip`'s/`apply_crop`'s `mask` (shape `(H, W)`/`(H, W, 1)`, dtype
+    `uint8`/`uint16`/`int16`, spatial size matching `image`) and is always
+    warped with `interpolation=cv2.INTER_NEAREST`,
+    `border_mode=cv2.BORDER_CONSTANT`, and `border_value=mask_border_value`
+    -- the caller cannot change the mask's interpolation or border mode,
+    only the fill value. `mask_border_value` must fit within `mask`'s actual
+    dtype (checked via the same range check `improcv` uses elsewhere for
+    saturating fill values) and need not already occur in `mask`. Because
+    nearest-neighbor sampling introduces no new intermediate values, the
+    output mask contains only values already present in the input mask plus
+    `mask_border_value` -- this is guaranteed by construction and covered by
+    tests, not re-verified by an expensive full-array scan on every call.
+
+    Returns
+    -------
+    Image or AugmentedImageMask
+        A new, independent array (or pair) with `image`'s original shape
+        and dtype; never aliases `image` or `mask`.
+
+    Raises
+    ------
+    TypeError
+        If `params` is not an `AffineParameters`, if its fields are not the
+        expected types, if `mask`/`mask_border_value` is not an
+        `ndarray`/integral, or if `image`/`mask` is not dtype-compatible.
+    ValueError
+        If `image`/`mask` has an unsupported shape, `image`'s (or `mask`'s)
+        spatial size does not match `params.source_size` (or `image`'s), or
+        `mask_border_value` does not fit `mask`'s dtype range.
+    RuntimeError
+        If the underlying `cv2.error` occurs after full validation (for
+        either the image or the mask warp), or if this function's own
+        postconditions are violated.
+    """
+    _require_affine_parameters(params)
+    require_image_ndim(image, ndims=(2, 3))
+    _require_matches_source_size(image, params.source_size, "image")
+
+    augmented_image = _apply_affine_to_array(
+        image, params, interpolation, border_mode, border_value
+    )
+    _check_shape_preserving_postconditions(image, augmented_image, "image")
+
+    if mask is None:
+        return augmented_image
+
+    _require_mask(mask, "mask")
+    _require_matching_spatial_shape(mask, image, "mask", "image")
+    require_integral(mask_border_value, "mask_border_value")
+    require_fits_dtype(mask_border_value, mask.dtype, "mask_border_value")
+
+    augmented_mask = _apply_affine_to_array(
+        mask, params, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT, mask_border_value
+    )
+    _check_shape_preserving_postconditions(mask, augmented_mask, "mask")
 
     return AugmentedImageMask(image=augmented_image, mask=augmented_mask)
 
@@ -413,6 +673,36 @@ def _normalize_size(value: object, name: str) -> tuple[int, int]:
     return (width_int, height_int)
 
 
+def _normalize_range(value: object, name: str) -> tuple[float, float]:
+    if not isinstance(value, tuple):
+        raise TypeError(f"{name} must be a tuple, got {type(value).__name__}")
+    if len(value) != 2:
+        raise ValueError(f"{name} must contain exactly 2 elements, got {len(value)}")
+    low, high = value
+    require_finite(low, f"{name}[0]")
+    require_finite(high, f"{name}[1]")
+    low_f, high_f = float(low), float(high)
+    if low_f > high_f:
+        raise ValueError(f"{name} low must be <= high, got {value}")
+    return (low_f, high_f)
+
+
+def _restore_singleton_channel(source: np.ndarray, result: np.ndarray) -> np.ndarray:
+    # cv2.flip and cv2.warpAffine both drop a trailing singleton channel
+    # dimension (verified directly for (H, W, 1) input, on both) -- restore
+    # it so the output shape always matches the input shape exactly, per
+    # this module's own shape-preservation postcondition. Restricted to
+    # exactly this known squeeze (a singleton channel dim disappearing), not
+    # merely "same total element count" -- a wrong-shaped result with a
+    # coincidentally matching size (e.g. a (H, W*C) result for a (H, W, C)
+    # input) must still be left for _check_shape_preserving_postconditions
+    # to reject with a clear RuntimeError, not silently reshaped into
+    # something plausible-looking.
+    if source.ndim == 3 and source.shape[2] == 1 and result.shape == source.shape[:2]:
+        return result[:, :, None]
+    return result
+
+
 def _apply_flip_preserving_shape(array: np.ndarray, direction: FlipDirection | None) -> np.ndarray:
     if direction is None:
         return array.copy()
@@ -420,18 +710,7 @@ def _apply_flip_preserving_shape(array: np.ndarray, direction: FlipDirection | N
         result = _flip(array, direction)
     except cv2.error as exc:
         raise RuntimeError("OpenCV failed to apply flip augmentation") from exc
-    if array.ndim == 3 and array.shape[2] == 1 and result.shape == array.shape[:2]:
-        # cv2.flip drops a trailing singleton channel dimension (verified
-        # directly for (H, W, 1) input) -- restore it so the output shape
-        # always matches the input shape exactly, per this module's own
-        # shape-preservation postcondition. Restricted to exactly this known
-        # squeeze (a singleton channel dim disappearing), not merely "same
-        # total element count" -- a wrong-shaped result with a coincidentally
-        # matching size (e.g. a (H, W*C) result for a (H, W, C) input) must
-        # still be left for _check_flip_postconditions to reject with a clear
-        # RuntimeError, not silently reshaped into something plausible-looking.
-        result = result[:, :, None]
-    return result
+    return _restore_singleton_channel(array, result)
 
 
 def _flip_direction(params: FlipParameters) -> FlipDirection | None:
@@ -491,8 +770,57 @@ def _require_crop_parameters(params: object) -> None:
         )
 
 
-def _require_matches_source_size(image: np.ndarray, params: CropParameters, name: str) -> None:
-    source_width, source_height = params.source_size
+def _require_affine_parameters(params: object) -> None:
+    if not isinstance(params, AffineParameters):
+        raise TypeError(f"params must be an AffineParameters, got {type(params).__name__}")
+
+    if not isinstance(params.matrix, np.ndarray):
+        raise TypeError(f"params.matrix must be a NumPy array, got {type(params.matrix).__name__}")
+    if params.matrix.dtype != np.float64:
+        raise TypeError(f"params.matrix must have dtype float64, got {params.matrix.dtype}")
+    require_transform_matrix(params.matrix, (2, 3), "params.matrix")
+
+    source_size = params.source_size
+    if not (
+        isinstance(source_size, tuple)
+        and len(source_size) == 2
+        and all(isinstance(v, int) and not isinstance(v, bool) for v in source_size)
+    ):
+        raise TypeError(f"params.source_size must be a 2-tuple of int, got {source_size!r}")
+    source_width, source_height = source_size
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError(f"params.source_size must be positive, got {source_size}")
+
+    require_finite(params.angle, "params.angle")
+    require_point_2d(params.translation, "params.translation")
+    require_positive(params.scale, "params.scale")
+
+
+def _apply_affine_to_array(
+    array: np.ndarray,
+    params: AffineParameters,
+    interpolation: int,
+    border_mode: int,
+    border_value: float | tuple[float, ...],
+) -> np.ndarray:
+    try:
+        result = _warp_affine(
+            array,
+            params.matrix,
+            params.source_size,
+            interpolation=interpolation,
+            border_mode=border_mode,
+            border_value=border_value,
+        )
+    except cv2.error as exc:
+        raise RuntimeError("OpenCV failed to apply affine augmentation") from exc
+    return _restore_singleton_channel(array, result)
+
+
+def _require_matches_source_size(
+    image: np.ndarray, source_size: tuple[int, int], name: str
+) -> None:
+    source_width, source_height = source_size
     image_height, image_width = image.shape[:2]
     if (image_width, image_height) != (source_width, source_height):
         raise ValueError(
@@ -521,7 +849,9 @@ def _require_matching_spatial_shape(a: np.ndarray, b: np.ndarray, name_a: str, n
         )
 
 
-def _check_flip_postconditions(original: np.ndarray, result: np.ndarray, name: str) -> None:
+def _check_shape_preserving_postconditions(
+    original: np.ndarray, result: np.ndarray, name: str
+) -> None:
     if result.shape != original.shape:
         raise RuntimeError(
             f"internal error: {name} shape changed from {original.shape} to {result.shape}"
