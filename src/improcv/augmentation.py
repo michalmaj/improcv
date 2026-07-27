@@ -2,7 +2,7 @@
 
 This module separates *sampling* random parameters from *applying* them:
 `sample_flip`/`sample_crop`/`sample_affine` consume an explicit
-`np.random.Generator` once and return a small, independent, replayable result
+`np.random.Generator` and return an independent, replayable parameter object
 (`FlipParameters`/`CropParameters`/`AffineParameters`); `apply_flip`/
 `apply_crop`/`apply_affine` are pure functions of that result and never touch
 any RNG themselves. The same sampled parameters can be applied to an image
@@ -34,7 +34,6 @@ from improcv._validation import (
     require_image_ndim,
     require_int,
     require_integral,
-    require_point_2d,
     require_positive,
     require_positive_integral,
     require_range,
@@ -119,11 +118,11 @@ class AffineParameters:
 
     `matrix` (shape ``(2, 3)``, dtype ``float64``, finite, a new read-only
     buffer) is the sole source of truth for replay -- `apply_affine` applies
-    it directly and never reconstructs it from `angle`/`translation`/`scale`.
-    Those three fields are sampling metadata only (debugging, logging, a
-    readable `repr`); a general rotation+scale+shear matrix cannot in
-    general be uniquely decomposed back into them, so they are recorded at
-    sampling time instead. `source_size` is `(width, height)`, matching
+    it directly. `angle`/`translation`/`scale` are sampling metadata only,
+    recorded to make debugging, logging, and a readable `repr` easier;
+    `apply_affine` never reconstructs the matrix from them, nor cross-checks
+    the matrix against them beyond each field's own basic validity (finite,
+    `scale > 0`). `source_size` is `(width, height)`, matching
     `CropParameters`'s own convention, and exists for the same reason: to
     make replay safe by refusing to reapply these parameters to a
     differently-sized image.
@@ -594,6 +593,15 @@ def apply_affine(
     `cv2.warpAffine`); `image`'s dtype/shape contract is exactly
     `warp_affine`'s own.
 
+    `interpolation` selects an OpenCV interpolation mode only (e.g.
+    `cv2.INTER_LINEAR`, `cv2.INTER_NEAREST`) -- it does not accept
+    `cv2.WARP_INVERSE_MAP` or any other warp-control flag bit. `params.matrix`
+    is always applied as the forward mapping it was sampled as (a positive
+    `dx`/`dy` in `params.translation` moves content right/down); allowing
+    `WARP_INVERSE_MAP` through would silently apply the saved transform in
+    the opposite direction, which is rejected here before `warp_affine` is
+    ever called.
+
     If `mask` is given, it must satisfy the same shape/dtype contract as
     `apply_flip`'s/`apply_crop`'s `mask` (shape `(H, W)`/`(H, W, 1)`, dtype
     `uint8`/`uint16`/`int16`, spatial size matching `image`) and is always
@@ -618,18 +626,22 @@ def apply_affine(
     ------
     TypeError
         If `params` is not an `AffineParameters`, if its fields are not the
-        expected types, if `mask`/`mask_border_value` is not an
-        `ndarray`/integral, or if `image`/`mask` is not dtype-compatible.
+        expected types, if `interpolation` is not an integral value, if
+        `mask`/`mask_border_value` is not an `ndarray`/integral, or if
+        `image`/`mask` is not dtype-compatible.
     ValueError
         If `image`/`mask` has an unsupported shape, `image`'s (or `mask`'s)
-        spatial size does not match `params.source_size` (or `image`'s), or
-        `mask_border_value` does not fit `mask`'s dtype range.
+        spatial size does not match `params.source_size` (or `image`'s),
+        `interpolation` includes `WARP_INVERSE_MAP` or any other
+        non-interpolation flag bit, or `mask_border_value` does not fit
+        `mask`'s dtype range.
     RuntimeError
         If the underlying `cv2.error` occurs after full validation (for
         either the image or the mask warp), or if this function's own
         postconditions are violated.
     """
     _require_affine_parameters(params)
+    interpolation = _require_interpolation_mode(interpolation)
     require_image_ndim(image, ndims=(2, 3))
     _require_matches_source_size(image, params.source_size, "image")
 
@@ -780,20 +792,53 @@ def _require_affine_parameters(params: object) -> None:
         raise TypeError(f"params.matrix must have dtype float64, got {params.matrix.dtype}")
     require_transform_matrix(params.matrix, (2, 3), "params.matrix")
 
-    source_size = params.source_size
-    if not (
-        isinstance(source_size, tuple)
-        and len(source_size) == 2
-        and all(isinstance(v, int) and not isinstance(v, bool) for v in source_size)
-    ):
-        raise TypeError(f"params.source_size must be a 2-tuple of int, got {source_size!r}")
-    source_width, source_height = source_size
-    if source_width <= 0 or source_height <= 0:
-        raise ValueError(f"params.source_size must be positive, got {source_size}")
+    _require_affine_source_size(params.source_size)
 
     require_finite(params.angle, "params.angle")
-    require_point_2d(params.translation, "params.translation")
+    _require_translation(params.translation, "params.translation")
     require_positive(params.scale, "params.scale")
+
+
+def _require_affine_source_size(source_size: object) -> None:
+    if not isinstance(source_size, tuple):
+        raise TypeError(f"params.source_size must be a tuple, got {type(source_size).__name__}")
+    if len(source_size) != 2:
+        raise ValueError(
+            f"params.source_size must contain exactly 2 elements, got {len(source_size)}"
+        )
+    for value in source_size:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"params.source_size elements must be int, got {type(value).__name__}")
+    width, height = source_size
+    if width <= 0 or height <= 0:
+        raise ValueError(f"params.source_size must be positive, got {source_size}")
+    if width > _INTP_MAX or height > _INTP_MAX:
+        raise ValueError(
+            f"params.source_size must fit in a signed intp (<= {_INTP_MAX}), got {source_size}"
+        )
+
+
+def _require_translation(value: object, name: str) -> None:
+    if not isinstance(value, tuple):
+        raise TypeError(f"{name} must be a tuple, got {type(value).__name__}")
+    if len(value) != 2:
+        raise ValueError(f"{name} must contain exactly 2 elements, got {len(value)}")
+    dx, dy = value
+    require_finite(dx, f"{name}[0]")
+    require_finite(dy, f"{name}[1]")
+
+
+def _require_interpolation_mode(value: object) -> int:
+    require_integral(value, "interpolation")
+    normalized = int(value)  # type: ignore[arg-type]
+
+    if not 0 <= normalized < int(cv2.INTER_MAX):
+        raise ValueError(
+            "interpolation must be an OpenCV interpolation mode without "
+            "WARP_INVERSE_MAP or other warp modifier flags"
+        )
+
+    return normalized
 
 
 def _apply_affine_to_array(
