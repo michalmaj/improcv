@@ -724,8 +724,50 @@ and `confusion_matrix` with `labels=None` all require at least one observation. 
 matrix costs `O(len(labels) ** 2)` memory, so a very large explicit `labels` can exhaust process
 memory even though improcv checks the allocation is at least representable first.
 
-This is a numeric core only: no ROC/PR curves, no AUC, no plotting, no multilabel classification,
-no sample weights, and no `scikit-learn` dependency.
+This is a numeric core only: no plotting, no multilabel classification, no sample weights, and no
+`scikit-learn` dependency.
+
+Binary one-vs-rest ranking curves -- ROC, precision-recall, and ROC AUC:
+
+```python
+import improcv as im
+
+y_true = [0, 0, 1, 1]
+y_score = [0.1, 0.4, 0.35, 0.8]
+
+roc = im.roc_curve(y_true, y_score, positive_label=1)
+pr = im.precision_recall_curve(y_true, y_score, positive_label=1)
+auc = im.roc_auc_score(y_true, y_score, positive_label=1)
+```
+
+`y_score` is a ranking score, not a predicted label or a probability -- it does not need to lie in
+`[0, 1]`, and a larger score means greater confidence in the positive class. `roc_curve`/
+`precision_recall_curve`/`roc_auc_score` are binary, one-vs-rest: `positive_label` is always
+required and explicit -- a sample is positive iff its label equals `positive_label`; every other
+observed label is negative, regardless of how many distinct negative labels occur, and there is no
+automatic inference of which label is positive. A threshold classifies a sample positive iff
+`score >= threshold`; every sample sharing the same score is aggregated into one threshold before
+FPR/TPR/precision/recall is computed there, so permuting the order of tied samples (or of the whole
+input) never changes the result.
+
+Both curves start at the same sentinel threshold `+inf` (predicting nothing positive): ROC starts
+at `(FPR, TPR) = (0.0, 0.0)`, precision-recall starts at `(precision, recall) = (1.0, 0.0)` with no
+corresponding real threshold. `thresholds[1:]` holds every distinct observed score in strictly
+decreasing order, so `thresholds`/the two curve-value arrays always share one length (`K + 1` for
+`K` distinct scores) -- `recall` increases alongside decreasing `thresholds`, matching `roc_curve`'s
+convention (a deliberate departure from `sklearn.metrics.precision_recall_curve`'s descending
+`recall`). `roc_curve`/`roc_auc_score` require at least one positive and one negative sample,
+raising `ValueError` instead of scikit-learn's `UndefinedMetricWarning` for a degenerate input;
+`precision_recall_curve` only requires at least one positive sample -- a `y_true` with no negative
+sample is legal, giving `precision == 1.0` at every real threshold.
+
+`roc_auc_score` integrates the ROC curve with the trapezoidal rule (equivalent to the probability
+that a random positive sample outranks a random negative one, with a tied pair counted as
+one-half) -- it never calls `np.trapz`/`np.trapezoid`, since neither name exists across this
+project's full supported NumPy range. All three functions return new, independent, read-only
+`float64` arrays -- never a view of `y_true`/`y_score` -- and run in `O(N log N)` time, `O(N)`
+memory. This slice covers binary ROC/PR/ROC-AUC only: no multiclass score matrix, no averaging, no
+sample weights, no average precision, no trapezoidal PR AUC, and no plotting.
 
 Augmentation sampling and replay -- flip:
 

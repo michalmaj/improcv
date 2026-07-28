@@ -162,6 +162,39 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   never silently skipped or wrapped in a new exception type -- there is no OpenCV/NumPy involvement
   in this module at all). No image/mask pairing, class inference from directory names, dataset
   splits, manifests, or loading/decoding in this slice, and no new dependency.
+- `improcv.evaluation`, Phase 5 slice: binary one-vs-rest ROC and precision-recall curves plus
+  ROC AUC -- `roc_curve`, `precision_recall_curve`, `roc_auc_score`, and their `RocCurve`/
+  `PrecisionRecallCurve` result dataclasses. Binary, one-vs-rest: `positive_label` is always
+  required and explicit -- a sample is positive iff its `y_true` label equals `positive_label`;
+  every other observed label is negative, regardless of how many distinct negative labels occur,
+  and there is no automatic inference of which label is positive. `y_score` is a ranking score,
+  not a predicted label or a probability -- it does not need to lie in `[0, 1]`, larger means more
+  confident positive, and it is normalized to an independent `float64` array (Python/NumPy `int`/
+  `float`, `float16`/`float32`/`float64` ndarrays, and any integer ndarray dtype are accepted;
+  `bool`, complex, object, and wider-than-`float64` floating dtypes are rejected, as are NaN/Inf,
+  and an integer value not exactly representable as `float64`, e.g. `2**53 + 1`). A threshold
+  classifies a sample positive iff `score >= threshold`; every sample sharing the same score is
+  aggregated into one threshold before FPR/TPR/precision/recall is computed there, so permuting
+  the order of tied samples (or of the whole input) never changes the result -- verified directly
+  that grouping by distinct score, not sort-algorithm stability, is what makes this true. Both
+  curves start at the sentinel threshold `+inf` (ROC at `(FPR, TPR) = (0, 0)`, precision-recall at
+  `(precision, recall) = (1, 0)` with no corresponding real threshold); `thresholds`/the two
+  curve-value arrays always share length `K + 1` for `K` distinct observed scores, with
+  `thresholds[1:]` strictly decreasing. `roc_curve`/`roc_auc_score` require at least one positive
+  and one negative sample, raising `ValueError` for a degenerate `y_true` instead of
+  `sklearn.metrics`'s `UndefinedMetricWarning` plus a degenerate result; `precision_recall_curve`
+  only requires at least one positive sample -- a `y_true` with no negative sample is legal
+  (`precision == 1.0` at every real threshold). `precision_recall_curve`'s `recall` is returned in
+  ascending order paired with descending `thresholds`, matching `roc_curve`'s convention -- a
+  deliberate departure from `sklearn.metrics.precision_recall_curve`'s descending `recall`.
+  `roc_auc_score` integrates the ROC curve with the trapezoidal rule (verified directly equivalent
+  to the probability that a random positive sample outranks a random negative one, with a tied
+  pair counted as one-half) using plain array arithmetic -- never `np.trapz`/`np.trapezoid`, since
+  neither name exists across this project's full supported NumPy range (`np.trapz` is removed in
+  current NumPy; `np.trapezoid` does not exist on this project's NumPy floor). All three functions
+  return new, independent, read-only `float64` arrays, never a view of `y_true`/`y_score`. No
+  generic `auc(x, y)` helper, no average precision, no trapezoidal PR AUC, no multiclass score
+  matrix/averaging, no sample weights, and no plotting in this slice.
 
 ### Fixed
 - `improcv.discovery`: `discover_images` now classifies descendants using a fresh path-based

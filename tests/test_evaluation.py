@@ -1,6 +1,10 @@
+import dataclasses
 import math
+import warnings
 from collections.abc import Sequence
+from decimal import Decimal
 from enum import IntEnum
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -10,9 +14,14 @@ import improcv as im
 from improcv.evaluation import (
     ClassificationMetrics,
     ConfusionMatrixResult,
+    PrecisionRecallCurve,
+    RocCurve,
     classification_metrics,
     classification_metrics_from_confusion_matrix,
     confusion_matrix,
+    precision_recall_curve,
+    roc_auc_score,
+    roc_curve,
 )
 
 
@@ -790,4 +799,717 @@ def test_evaluation_exports_from_top_level_package() -> None:
         is classification_metrics_from_confusion_matrix
     )
     assert im.ConfusionMatrixResult is ConfusionMatrixResult
+    assert im.roc_curve is roc_curve
+    assert im.precision_recall_curve is precision_recall_curve
+    assert im.roc_auc_score is roc_auc_score
+    assert im.RocCurve is RocCurve
+    assert im.PrecisionRecallCurve is PrecisionRecallCurve
+
+
+# =====================================================================================
+# Binary one-vs-rest ranking curves: roc_curve / precision_recall_curve / roc_auc_score
+# =====================================================================================
+
+_RANKING_FUNCTIONS = (roc_curve, precision_recall_curve, roc_auc_score)
+
+
+def _mann_whitney_auc(y_true, y_score, positive_label) -> float:
+    """Independent, non-vectorized AUC oracle: fraction of (positive, negative) pairs where
+    the positive outranks the negative, with a tied pair counted as one-half."""
+    positives = [s for t, s in zip(y_true, y_score, strict=True) if t == positive_label]
+    negatives = [s for t, s in zip(y_true, y_score, strict=True) if t != positive_label]
+    total = 0.0
+    for p in positives:
+        for n in negatives:
+            if p > n:
+                total += 1.0
+            elif p == n:
+                total += 0.5
+    return total / (len(positives) * len(negatives))
+
+
+class _CustomScoreSequence(Sequence):
+    """A minimal, real `collections.abc.Sequence` that is neither list nor tuple."""
+
+    def __init__(self, items: list) -> None:
+        self._items = items
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, index):
+        return self._items[index]
+
+
+# --- y_true validation (shared across all three functions via the private ranking core) ---
+
+
+@pytest.mark.parametrize(
+    ("make_y_true", "expected_exception"),
+    [
+        (lambda: (x for x in [0, 0, 1, 1]), TypeError),
+        (lambda: iter([0, 0, 1, 1]), TypeError),
+        (lambda: "0011", TypeError),
+        (lambda: b"0011", TypeError),
+        (lambda: [False, False, True, True], TypeError),
+        (lambda: [0.0, 0.0, 1.0, 1.0], TypeError),
+        (lambda: np.array(1), ValueError),
+        (lambda: np.array([[0, 1], [0, 1]]), ValueError),
+        (lambda: [], ValueError),
+    ],
+)
+def test_ranking_functions_reject_bad_y_true(make_y_true, expected_exception) -> None:
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(expected_exception):
+            func(make_y_true(), y_score, positive_label=1)
+
+
+@pytest.mark.parametrize("container", [list, tuple, _CustomScoreSequence])
+def test_ranking_functions_accept_various_y_true_sequence_containers(container) -> None:
+    y_true = container([0, 1, 0, 1])
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        func(y_true, y_score, positive_label=1)
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint32])
+def test_ranking_functions_accept_1d_integer_ndarray_y_true(dtype) -> None:
+    y_true = np.array([0, 1, 0, 1], dtype=dtype)
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        func(y_true, y_score, positive_label=1)
+
+
+def test_ranking_functions_accept_int_enum_labels() -> None:
+    y_true = [_Color.RED, _Color.GREEN, _Color.RED, _Color.GREEN]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        func(y_true, y_score, positive_label=_Color.GREEN)
+
+
+def test_ranking_functions_accept_negative_and_huge_integer_labels() -> None:
+    y_true = [-5, 10**20, -5, 10**20]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        func(y_true, y_score, positive_label=10**20)
+
+
+def test_ranking_functions_accept_many_distinct_negative_labels() -> None:
+    y_true = [5, 7, 2, 1, 5, 7]
+    y_score = [0.9, 0.1, 0.2, 0.8, 0.3, 0.05]
+    roc = roc_curve(y_true, y_score, positive_label=5)
+    assert roc.true_positive_rate[-1] == 1.0
+    assert roc.false_positive_rate[-1] == 1.0
+
+
+def test_positive_label_absent_from_y_true_raises() -> None:
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError):
+            func([0, 0, 2, 2], [0.1, 0.2, 0.3, 0.4], positive_label=1)
+
+
+def test_ranking_functions_require_at_least_one_positive() -> None:
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError):
+            func([0, 0, 0], [0.1, 0.2, 0.3], positive_label=1)
+
+
+def test_roc_and_auc_require_at_least_one_negative() -> None:
+    with pytest.raises(ValueError):
+        roc_curve([1, 1, 1], [0.1, 0.2, 0.3], positive_label=1)
+    with pytest.raises(ValueError):
+        roc_auc_score([1, 1, 1], [0.1, 0.2, 0.3], positive_label=1)
+
+
+def test_precision_recall_curve_allows_no_negative_samples() -> None:
+    pr = precision_recall_curve([1, 1, 1], [0.1, 0.2, 0.3], positive_label=1)
+    assert np.all(pr.precision == 1.0)
+    assert_array_equal(pr.recall, [0.0, 1 / 3, 2 / 3, 1.0])
+
+
+# --- positive_label validation ---
+
+
+@pytest.mark.parametrize(
+    "positive_label",
+    [True, np.bool_(True), 1.0, "1", None],
+)
+def test_ranking_functions_reject_bad_positive_label(positive_label) -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(TypeError):
+            func(y_true, y_score, positive_label=positive_label)
+
+
+def test_ranking_functions_accept_negative_positive_label() -> None:
+    y_true = [-1, -1, 3, 3]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        func(y_true, y_score, positive_label=-1)
+
+
+# --- y_score validation ---
+
+
+@pytest.mark.parametrize(
+    ("make_y_score", "expected_exception"),
+    [
+        (lambda: (s for s in [0.1, 0.4, 0.35, 0.8]), TypeError),
+        (lambda: iter([0.1, 0.4, 0.35, 0.8]), TypeError),
+        (lambda: "abcd", TypeError),
+        (lambda: b"abcd", TypeError),
+        (lambda: np.array([True, False, True, False]), TypeError),
+        (lambda: np.array([1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j]), TypeError),
+        (lambda: np.array([0.1, 0.4, 0.35, 0.8], dtype=object), TypeError),
+        (lambda: np.array(1.0), ValueError),
+        (lambda: np.array([[0.1, 0.4], [0.35, 0.8]]), ValueError),
+        (lambda: [], ValueError),
+        (lambda: [0.1, 0.4, float("nan"), 0.8], ValueError),
+        (lambda: [0.1, 0.4, float("inf"), 0.8], ValueError),
+        (lambda: [0.1, 0.4, float("-inf"), 0.8], ValueError),
+        (lambda: [0.1, 0.4, Decimal("0.35"), 0.8], TypeError),
+        (lambda: [0.1, 0.4, Fraction(35, 100), 0.8], TypeError),
+        (lambda: [0.1, 0.4, None, 0.8], TypeError),
+        (lambda: [0.1, 0.4, 1 + 2j, 0.8], TypeError),
+        (lambda: [0.1, 0.4, True, 0.8], TypeError),
+        (lambda: [0.1, 0.4, 0.35], ValueError),
+    ],
+)
+def test_ranking_functions_reject_bad_y_score(make_y_score, expected_exception) -> None:
+    y_true = [0, 0, 1, 1]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(expected_exception):
+            func(y_true, make_y_score(), positive_label=1)
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_y_score_accepts_floating_ndarray_dtypes(dtype) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = np.array([0.1, 0.9, 0.2, 0.8], dtype=dtype)
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    assert roc.thresholds.dtype == np.float64
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64],
+)
+def test_y_score_accepts_integer_ndarray_dtypes(dtype) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = np.array([1, 9, 2, 8], dtype=dtype)
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    assert roc.thresholds.dtype == np.float64
+
+
+def test_y_score_accepts_python_and_numpy_scalar_elements() -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [1, np.int64(9), 2.0, np.float32(8.0)]
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    assert roc.thresholds.shape[0] == 5
+
+
+def test_y_score_values_outside_unit_interval_are_legal() -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [-100.0, 50.0, -3.0, 1000.0]
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    assert roc.true_positive_rate[-1] == 1.0
+
+
+def test_y_score_signed_zero_creates_one_threshold() -> None:
+    roc = roc_curve([0, 1], [0.0, -0.0], positive_label=1)
+    assert roc.thresholds.shape[0] == 2
+    assert_array_equal(roc.false_positive_rate, [0.0, 1.0])
+    assert_array_equal(roc.true_positive_rate, [0.0, 1.0])
+
+
+def test_y_score_subnormal_values_are_distinct() -> None:
+    roc = roc_curve([0, 1], [5e-320, 5e-321], positive_label=1)
+    assert roc.thresholds.shape[0] == 3
+
+
+def test_y_score_extreme_finite_float64_no_warning() -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        roc = roc_curve(y_true, y_score, positive_label=1)
+        auc = roc_auc_score(y_true, y_score, positive_label=1)
+        precision_recall_curve(y_true, y_score, positive_label=1)
+    assert roc.thresholds.shape[0] == 3
+    assert auc == 0.0
+
+
+@pytest.mark.parametrize("container", [list, tuple, _CustomScoreSequence])
+def test_y_score_accepts_various_sequence_containers(container) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = container([0.1, 0.9, 0.2, 0.8])
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    assert roc.thresholds.shape[0] == 5
+
+
+@pytest.mark.parametrize(("value", "legal"), [(2**53, True), (2**53 + 1, False), (2**53 + 2, True)])
+def test_y_score_exact_integer_representability_boundary_sequence(value, legal) -> None:
+    y_true = [0, 1, 0]
+    y_score = [0.0, value, 1.0]
+    if legal:
+        roc = roc_curve(y_true, y_score, positive_label=1)
+        assert roc.thresholds.shape[0] == 4
+    else:
+        with pytest.raises(ValueError):
+            roc_curve(y_true, y_score, positive_label=1)
+
+
+@pytest.mark.parametrize(("value", "legal"), [(2**53, True), (2**53 + 1, False), (2**53 + 2, True)])
+def test_y_score_exact_integer_representability_boundary_int64_ndarray(value, legal) -> None:
+    y_true = [0, 1, 0]
+    y_score = np.array([0, value, 1], dtype=np.int64)
+    if legal:
+        roc = roc_curve(y_true, y_score, positive_label=1)
+        assert roc.thresholds.shape[0] == 4
+    else:
+        with pytest.raises(ValueError):
+            roc_curve(y_true, y_score, positive_label=1)
+
+
+def test_y_score_exact_integer_representability_boundary_uint64_ndarray() -> None:
+    y_true = [0, 1, 0]
+    roc = roc_curve(y_true, np.array([0, 2**53 + 2, 1], dtype=np.uint64), positive_label=1)
+    assert roc.thresholds.shape[0] == 4
+    with pytest.raises(ValueError):
+        roc_curve(y_true, np.array([0, 2**53 + 1, 1], dtype=np.uint64), positive_label=1)
+
+
+def test_y_score_rejects_wider_than_float64_floating_dtype_when_present() -> None:
+    if np.dtype(np.longdouble) == np.dtype(np.float64):
+        pytest.skip("this platform's longdouble is identical to float64 -- nothing wider exists")
+    y_true = [0, 1, 0, 1]
+    y_score = np.array([0.1, 0.9, 0.2, 0.8], dtype=np.longdouble)
+    with pytest.raises(TypeError):
+        roc_curve(y_true, y_score, positive_label=1)
+
+
+def test_ranking_functions_do_not_mutate_or_alias_inputs() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = np.array([0.1, 0.4, 0.35, 0.8], dtype=np.float64)
+    y_true_copy = list(y_true)
+    y_score_copy = y_score.copy()
+
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    precision_recall_curve(y_true, y_score, positive_label=1)
+    roc_auc_score(y_true, y_score, positive_label=1)
+
+    assert y_true == y_true_copy
+    assert_array_equal(y_score, y_score_copy)
+    assert not np.shares_memory(roc.thresholds, y_score)
+    assert not np.shares_memory(roc.false_positive_rate, y_score)
+    assert not np.shares_memory(roc.true_positive_rate, y_score)
+
+
+# --- ties, sorting, threshold semantics ---
+
+
+def test_number_of_real_thresholds_matches_distinct_scores() -> None:
+    y_true = [0, 1, 0, 1, 1, 0, 1, 0]
+    y_score = [0.1, 0.1, 0.2, 0.2, 0.3, 0.4, 0.4, 0.5]
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    assert roc.thresholds.shape[0] == len(set(y_score)) + 1
+
+
+def test_threshold_semantics_score_greater_equal_threshold() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    for threshold, expected_fpr, expected_tpr in zip(
+        roc.thresholds, roc.false_positive_rate, roc.true_positive_rate, strict=True
+    ):
+        predicted_positive = [s >= threshold for s in y_score]
+        tp = sum(1 for p, t in zip(predicted_positive, y_true, strict=True) if p and t == 1)
+        fp = sum(1 for p, t in zip(predicted_positive, y_true, strict=True) if p and t != 1)
+        assert tp / 2 == expected_tpr
+        assert fp / 2 == expected_fpr
+
+
+def test_roc_permutation_invariance() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.2, 0.5, 0.5, 0.5, 0.9]
+    baseline_roc = roc_curve(y_true, y_score, positive_label=1)
+    baseline_pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    baseline_auc = roc_auc_score(y_true, y_score, positive_label=1)
+
+    rng = np.random.default_rng(0)
+    indices = np.arange(len(y_true))
+    for _ in range(20):
+        rng.shuffle(indices)
+        permuted_true = [y_true[i] for i in indices]
+        permuted_score = [y_score[i] for i in indices]
+        assert roc_curve(permuted_true, permuted_score, positive_label=1) == baseline_roc
+        assert (
+            precision_recall_curve(permuted_true, permuted_score, positive_label=1) == baseline_pr
+        )
+        assert roc_auc_score(permuted_true, permuted_score, positive_label=1) == baseline_auc
+
+
+# --- ROC curve ---
+
+
+def test_roc_curve_manual_expected_arrays() -> None:
+    roc = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    np.testing.assert_allclose(roc.false_positive_rate, [0.0, 0.0, 0.5, 0.5, 1.0])
+    np.testing.assert_allclose(roc.true_positive_rate, [0.0, 0.5, 0.5, 1.0, 1.0])
+    np.testing.assert_allclose(roc.thresholds, [np.inf, 0.8, 0.4, 0.35, 0.1])
+    assert roc.positive_label == 1
+
+
+def test_roc_curve_perfect_separation() -> None:
+    roc = roc_curve([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9], positive_label=1)
+    np.testing.assert_allclose(roc.false_positive_rate, [0.0, 0.0, 0.0, 0.5, 1.0])
+    np.testing.assert_allclose(roc.true_positive_rate, [0.0, 0.5, 1.0, 1.0, 1.0])
+
+
+def test_roc_curve_one_positive_one_negative() -> None:
+    roc = roc_curve([0, 1], [0.3, 0.7], positive_label=1)
+    np.testing.assert_allclose(roc.false_positive_rate, [0.0, 0.0, 1.0])
+    np.testing.assert_allclose(roc.true_positive_rate, [0.0, 1.0, 1.0])
+
+
+def test_roc_curve_mixed_ties() -> None:
+    roc = roc_curve([0, 1, 0, 1, 1, 0], [0.5, 0.5, 0.5, 0.9, 0.9, 0.1], positive_label=1)
+    assert roc.thresholds.shape[0] == 4
+    np.testing.assert_allclose(roc.false_positive_rate, [0.0, 0.0, 2 / 3, 1.0])
+    np.testing.assert_allclose(roc.true_positive_rate, [0.0, 2 / 3, 1.0, 1.0])
+
+
+def test_roc_curve_endpoints_and_monotonicity() -> None:
+    roc = roc_curve([0, 0, 1, 1, 0, 1], [0.05, 0.4, 0.3, 0.9, 0.2, 0.6], positive_label=1)
+    assert roc.thresholds[0] == np.inf
+    assert roc.false_positive_rate[0] == 0.0
+    assert roc.true_positive_rate[0] == 0.0
+    assert roc.false_positive_rate[-1] == 1.0
+    assert roc.true_positive_rate[-1] == 1.0
+    rest = roc.thresholds[1:]
+    assert np.all(rest[1:] < rest[:-1])
+    assert np.all(roc.false_positive_rate[1:] >= roc.false_positive_rate[:-1])
+    assert np.all(roc.true_positive_rate[1:] >= roc.true_positive_rate[:-1])
+    n = roc.thresholds.shape[0]
+    assert roc.false_positive_rate.shape == (n,)
+    assert roc.true_positive_rate.shape == (n,)
+
+
+def test_roc_curve_single_real_threshold_has_exactly_two_points() -> None:
+    roc = roc_curve([0, 1], [0.5, 0.5], positive_label=1)
+    assert roc.thresholds.shape[0] == 2
+    np.testing.assert_allclose(roc.false_positive_rate, [0.0, 1.0])
+    np.testing.assert_allclose(roc.true_positive_rate, [0.0, 1.0])
+
+
+# --- precision-recall curve ---
+
+
+def test_precision_recall_curve_manual_expected_arrays() -> None:
+    pr = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    np.testing.assert_allclose(pr.precision, [1.0, 1.0, 0.5, 2.0 / 3.0, 0.5])
+    np.testing.assert_allclose(pr.recall, [0.0, 0.5, 0.5, 1.0, 1.0])
+    np.testing.assert_allclose(pr.thresholds, [np.inf, 0.8, 0.4, 0.35, 0.1])
+    assert pr.positive_label == 1
+
+
+def test_precision_recall_curve_perfect_separation() -> None:
+    pr = precision_recall_curve([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9], positive_label=1)
+    np.testing.assert_allclose(pr.precision, [1.0, 1.0, 1.0, 2.0 / 3.0, 0.5])
+    np.testing.assert_allclose(pr.recall, [0.0, 0.5, 1.0, 1.0, 1.0])
+
+
+def test_precision_recall_curve_mixed_ties() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.5, 0.5, 0.5, 0.9, 0.9, 0.1]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    assert pr.thresholds.shape[0] == 4
+    np.testing.assert_allclose(pr.precision, [1.0, 1.0, 0.6, 0.5])
+    np.testing.assert_allclose(pr.recall, [0.0, 2 / 3, 1.0, 1.0])
+
+
+def test_precision_recall_curve_endpoints_and_monotonicity() -> None:
+    y_true = [0, 0, 1, 1, 0, 1]
+    y_score = [0.05, 0.4, 0.3, 0.9, 0.2, 0.6]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    assert pr.thresholds[0] == np.inf
+    assert pr.precision[0] == 1.0
+    assert pr.recall[0] == 0.0
+    assert pr.recall[-1] == 1.0
+    assert pr.precision[-1] == pytest.approx(3 / 6)
+    assert np.all(pr.recall[1:] >= pr.recall[:-1])
+    rest = pr.thresholds[1:]
+    assert np.all(rest[1:] < rest[:-1])
+    n = pr.thresholds.shape[0]
+    assert pr.precision.shape == (n,)
+    assert pr.recall.shape == (n,)
+
+
+def test_precision_recall_curve_single_real_threshold_has_exactly_two_points() -> None:
+    pr = precision_recall_curve([0, 1], [0.5, 0.5], positive_label=1)
+    assert pr.thresholds.shape[0] == 2
+    np.testing.assert_allclose(pr.precision, [1.0, 0.5])
+    np.testing.assert_allclose(pr.recall, [0.0, 1.0])
+
+
+# --- ROC AUC ---
+
+
+def test_roc_auc_score_manual_expected_value() -> None:
+    assert roc_auc_score([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1) == pytest.approx(
+        0.75
+    )
+
+
+def test_roc_auc_perfect_separation_is_one() -> None:
+    assert roc_auc_score([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9], positive_label=1) == 1.0
+
+
+def test_roc_auc_reverse_separation_is_zero() -> None:
+    assert roc_auc_score([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1], positive_label=1) == 0.0
+
+
+def test_roc_auc_constant_score_is_one_half() -> None:
+    assert roc_auc_score([0, 0, 1, 1], [0.5, 0.5, 0.5, 0.5], positive_label=1) == 0.5
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score"),
+    [
+        ([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8]),
+        ([0, 1, 0, 1, 1, 0], [0.2, 0.5, 0.1, 0.9, 0.5, 0.5]),
+        ([1, 1, 0, 0, 0], [0.9, 0.1, 0.1, 0.1, 0.9]),
+        ([0, 1], [0.5, 0.5]),
+        ([0, 0, 0, 1], [0.3, 0.3, 0.9, 0.3]),
+    ],
+)
+def test_roc_auc_matches_independent_mann_whitney_oracle(y_true, y_score) -> None:
+    expected = _mann_whitney_auc(y_true, y_score, positive_label=1)
+    actual = roc_auc_score(y_true, y_score, positive_label=1)
+    assert actual == pytest.approx(expected)
+
+
+def test_roc_auc_monotonic_transform_invariance() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.5, 0.1, 0.9, 0.5, 0.5]
+    baseline = roc_auc_score(y_true, y_score, positive_label=1)
+    transformed_score = [math.exp(s) for s in y_score]
+    transformed = roc_auc_score(y_true, transformed_score, positive_label=1)
+    assert transformed == pytest.approx(baseline)
+
+
+def test_roc_auc_complement_relation_with_ties() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.5, 0.1, 0.9, 0.5, 0.5]
+    auc = roc_auc_score(y_true, y_score, positive_label=1)
+    negated_score = [-s for s in y_score]
+    complement_auc = roc_auc_score(y_true, negated_score, positive_label=1)
+    assert auc + complement_auc == pytest.approx(1.0)
+
+
+def test_roc_auc_score_result_is_plain_float() -> None:
+    result = roc_auc_score([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    assert type(result) is float
+
+
+def test_roc_auc_score_bounds() -> None:
+    for y_true, y_score in (
+        ([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8]),
+        ([0, 1], [0.5, 0.5]),
+        ([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1]),
+    ):
+        result = roc_auc_score(y_true, y_score, positive_label=1)
+        assert 0.0 <= result <= 1.0
+
+
+def test_roc_auc_score_does_not_use_trapz_or_trapezoid() -> None:
+    import ast
+    import inspect
+
+    from improcv import evaluation
+
+    tree = ast.parse(inspect.getsource(evaluation))
+    forbidden = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr in ("trapz", "trapezoid")
+    }
+    assert forbidden == set()
+
+
+# --- result types: RocCurve / PrecisionRecallCurve ---
+
+
+def test_roc_curve_equality() -> None:
+    a = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    b = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    c = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.36, 0.8], positive_label=1)
+    assert a == b
+    assert a != c
+    assert a != "not a curve"
+    assert (a == 5) is False
+
+
+def test_roc_curve_inequality_per_field() -> None:
+    baseline = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    other_fpr = RocCurve(
+        false_positive_rate=np.array([0.0, 0.0, 1.0, 1.0, 1.0]),
+        true_positive_rate=baseline.true_positive_rate,
+        thresholds=baseline.thresholds,
+        positive_label=baseline.positive_label,
+    )
+    other_tpr = RocCurve(
+        false_positive_rate=baseline.false_positive_rate,
+        true_positive_rate=np.array([0.0, 1.0, 1.0, 1.0, 1.0]),
+        thresholds=baseline.thresholds,
+        positive_label=baseline.positive_label,
+    )
+    other_thresholds = RocCurve(
+        false_positive_rate=baseline.false_positive_rate,
+        true_positive_rate=baseline.true_positive_rate,
+        thresholds=np.array([np.inf, 0.9, 0.4, 0.35, 0.1]),
+        positive_label=baseline.positive_label,
+    )
+    other_label = RocCurve(
+        false_positive_rate=baseline.false_positive_rate,
+        true_positive_rate=baseline.true_positive_rate,
+        thresholds=baseline.thresholds,
+        positive_label=999,
+    )
+    assert baseline != other_fpr
+    assert baseline != other_tpr
+    assert baseline != other_thresholds
+    assert baseline != other_label
+
+
+def test_roc_curve_unhashable() -> None:
+    roc = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    with pytest.raises(TypeError):
+        hash(roc)
+
+
+def test_roc_curve_arrays_are_read_only_and_independent() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = np.array([0.1, 0.4, 0.35, 0.8], dtype=np.float64)
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    for arr in (roc.false_positive_rate, roc.true_positive_rate, roc.thresholds):
+        assert isinstance(arr, np.ndarray)
+        assert arr.dtype == np.float64
+        assert arr.ndim == 1
+        assert not arr.flags.writeable
+        with pytest.raises(ValueError):
+            arr[0] = 99.0
+    assert not np.shares_memory(roc.false_positive_rate, roc.true_positive_rate)
+    assert not np.shares_memory(roc.false_positive_rate, roc.thresholds)
+    assert not np.shares_memory(roc.true_positive_rate, roc.thresholds)
+    assert not np.shares_memory(roc.thresholds, y_score)
+
+
+def test_roc_curve_asdict_and_repr() -> None:
+    roc = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    as_dict = dataclasses.asdict(roc)
+    assert set(as_dict) == {
+        "false_positive_rate",
+        "true_positive_rate",
+        "thresholds",
+        "positive_label",
+    }
+    assert "RocCurve" in repr(roc)
+
+
+def test_roc_curve_no_nan_and_inf_only_at_index_zero() -> None:
+    roc = roc_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    assert not np.any(np.isnan(roc.false_positive_rate))
+    assert not np.any(np.isnan(roc.true_positive_rate))
+    assert not np.any(np.isnan(roc.thresholds))
+    assert np.isinf(roc.thresholds[0])
+    assert not np.any(np.isinf(roc.thresholds[1:]))
+
+
+def test_precision_recall_curve_equality() -> None:
+    a = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    b = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    c = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.36, 0.8], positive_label=1)
+    assert a == b
+    assert a != c
+    assert a != "not a curve"
+    assert (a == 5) is False
+
+
+def test_precision_recall_curve_inequality_per_field() -> None:
+    baseline = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    other_precision = PrecisionRecallCurve(
+        precision=np.array([1.0, 1.0, 1.0, 1.0, 1.0]),
+        recall=baseline.recall,
+        thresholds=baseline.thresholds,
+        positive_label=baseline.positive_label,
+    )
+    other_recall = PrecisionRecallCurve(
+        precision=baseline.precision,
+        recall=np.array([0.0, 1.0, 1.0, 1.0, 1.0]),
+        thresholds=baseline.thresholds,
+        positive_label=baseline.positive_label,
+    )
+    other_thresholds = PrecisionRecallCurve(
+        precision=baseline.precision,
+        recall=baseline.recall,
+        thresholds=np.array([np.inf, 0.9, 0.4, 0.35, 0.1]),
+        positive_label=baseline.positive_label,
+    )
+    other_label = PrecisionRecallCurve(
+        precision=baseline.precision,
+        recall=baseline.recall,
+        thresholds=baseline.thresholds,
+        positive_label=999,
+    )
+    assert baseline != other_precision
+    assert baseline != other_recall
+    assert baseline != other_thresholds
+    assert baseline != other_label
+
+
+def test_precision_recall_curve_unhashable() -> None:
+    pr = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    with pytest.raises(TypeError):
+        hash(pr)
+
+
+def test_precision_recall_curve_arrays_are_read_only_and_independent() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = np.array([0.1, 0.4, 0.35, 0.8], dtype=np.float64)
+    pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    for arr in (pr.precision, pr.recall, pr.thresholds):
+        assert isinstance(arr, np.ndarray)
+        assert arr.dtype == np.float64
+        assert arr.ndim == 1
+        assert not arr.flags.writeable
+        with pytest.raises(ValueError):
+            arr[0] = 99.0
+    assert not np.shares_memory(pr.precision, pr.recall)
+    assert not np.shares_memory(pr.precision, pr.thresholds)
+    assert not np.shares_memory(pr.recall, pr.thresholds)
+    assert not np.shares_memory(pr.thresholds, y_score)
+
+
+def test_precision_recall_curve_asdict_and_repr() -> None:
+    pr = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    as_dict = dataclasses.asdict(pr)
+    assert set(as_dict) == {"precision", "recall", "thresholds", "positive_label"}
+    assert "PrecisionRecallCurve" in repr(pr)
+
+
+def test_precision_recall_curve_no_nan_and_inf_only_at_index_zero() -> None:
+    pr = precision_recall_curve([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    assert not np.any(np.isnan(pr.precision))
+    assert not np.any(np.isnan(pr.recall))
+    assert not np.any(np.isnan(pr.thresholds))
+    assert np.isinf(pr.thresholds[0])
+    assert not np.any(np.isinf(pr.thresholds[1:]))
     assert im.ClassificationMetrics is ClassificationMetrics
