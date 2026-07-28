@@ -9,12 +9,12 @@ any RNG themselves. The same sampled parameters can be applied to an image
 and its segmentation mask (or to a second image of the same spatial size)
 any number of times, always producing the same result.
 
-Affine coverage is a stable subset of the general affine group: rotation,
-translation, and isotropic scale (a similarity transform), all composed
-around the image center. Shear, perspective, canvas expansion (a
-`rotate_bound`-style growing output), resize, photometric augmentation,
-bounding boxes/keypoints/polygons, and any `Compose`-style pipeline are
-deliberately out of scope for this slice.
+Affine coverage is a stable subset of the general affine group: shear,
+rotation, and isotropic scale (a similarity transform plus a sequential
+shear), all composed around the image center. Perspective, anisotropic
+scale, canvas expansion (a `rotate_bound`-style growing output), resize,
+photometric augmentation, bounding boxes/keypoints/polygons, and any
+`Compose`-style pipeline are deliberately out of scope for this slice.
 """
 
 from __future__ import annotations
@@ -477,10 +477,18 @@ def sample_affine(
     `shear_y_range` are raw, dimensionless shear coefficients (not degrees):
     `shear_x` maps `x' = x + shear_x * y` and `shear_y` (applied after
     `shear_x`) maps `y' = y + shear_y * x'`, both in the coordinate system
-    centered on the same pivot as rotation/scale. Both are legal at any
-    finite, positive or negative value -- there is no `abs(shear)` limit and
-    no forbidden angle (unlike a degrees-based shear parameterization, this
-    raw-coefficient form has no singularity to avoid).
+    centered on the same pivot as rotation/scale. There is no `abs(shear)`
+    limit and no forbidden angle (unlike a degrees-based shear
+    parameterization, this raw-coefficient form has no domain to avoid).
+    The underlying `[[1, shear_x], [shear_y, 1 + shear_x*shear_y]]` matrix
+    has determinant `1` mathematically for any finite `shear_x`/`shear_y` --
+    but that is a statement about the exact real-number parameterization,
+    not a promise of infinite `float64` precision: when `shear_x * shear_y`
+    is large enough (roughly `2**52` in magnitude) that `1.0 +
+    shear_x*shear_y` rounds back down to exactly `shear_x*shear_y`, the
+    unit term that keeps the matrix invertible would be silently discarded,
+    so that specific combination is rejected (see Raises below) rather than
+    stored as a matrix that no longer matches the shear it was sampled as.
 
     Each range is a `(low, high)` tuple: a Python or NumPy real scalar pair
     (`bool`/`np.bool_` rejected), both finite, with `low <= high` (equal
@@ -530,13 +538,21 @@ def sample_affine(
     ValueError
         If `source_size`/any `*_range` has the wrong length or an
         out-of-contract value (non-finite, `low > high`, non-positive
-        `scale_range`), or if the sampled, otherwise-legal parameters
-        combine into a non-finite matrix (representable only as `inf`/
-        `NaN`, e.g. from an astronomically large `scale`/`shear`/
-        `source_size` combination -- verified directly reachable from
-        finite inputs; a large shear coefficient can also strongly deform
-        the image or push its content outside the canvas entirely without
-        making the matrix non-finite -- this is not guarded against).
+        `scale_range`), if the sampled, otherwise-legal parameters combine
+        into a non-finite matrix (representable only as `inf`/`NaN`, e.g.
+        from an astronomically large `scale`/`shear`/`source_size`
+        combination -- verified directly reachable from finite inputs), or
+        if `shear_x * shear_y` is large enough that `float64` can no longer
+        distinguish `1.0 + shear_x*shear_y` from `shear_x*shear_y` itself,
+        silently losing the unit term the sequential shear matrix depends
+        on for invertibility. There is no other limit on shear magnitude:
+        a large, but still representable, shear coefficient is accepted
+        even though it can strongly deform the image or push its content
+        outside the canvas entirely -- that is not guarded against, and
+        neither is a merely poorly-conditioned (but still representable)
+        matrix in general; `1` is the exact determinant of the real-number
+        parameterization, not a guarantee about the numerical stability of
+        every accepted matrix.
     """
     _require_generator(rng)
     source_width, source_height = _normalize_size(source_size, "source_size")
@@ -570,9 +586,30 @@ def sample_affine(
     else:
         # Extreme, but individually finite, shear/scale/center values can
         # overflow intermediate products (e.g. shear_x * shear_y) to inf --
-        # expected and handled by the finite-matrix check below, not a sign
+        # expected and handled by the finite-matrix checks below, not a sign
         # of a bug, so it must not surface as a stray RuntimeWarning (which
         # would fail test suites run with warnings-as-errors).
+        with np.errstate(over="ignore", invalid="ignore"):
+            shear_product = shear_x * shear_y
+            shear_diagonal = 1.0 + shear_product
+
+        if not np.isfinite(shear_product) or not np.isfinite(shear_diagonal):
+            raise ValueError("sampled affine parameters do not produce a finite transform matrix")
+        if shear_diagonal == shear_product:
+            # The sequential shear matrix [[1, shear_x], [shear_y, 1 +
+            # shear_x*shear_y]] has determinant 1 mathematically, for any
+            # finite coefficients -- but that guarantee is about the exact
+            # real-number parameterization, not about float64. When
+            # |shear_x * shear_y| exceeds float64's ~2**52 integer
+            # precision, "1.0 + shear_product" rounds back down to exactly
+            # shear_product, silently discarding the unit term that made
+            # the matrix invertible in the first place -- the stored matrix
+            # would then no longer be the shear it was sampled as.
+            raise ValueError(
+                "sampled shear coefficients are too large to preserve "
+                "an invertible sequential shear matrix in float64"
+            )
+
         with np.errstate(over="ignore", invalid="ignore"):
             rs_3x3 = np.eye(3, dtype=np.float64)
             rs_3x3[:2, :] = rs_matrix
@@ -584,7 +621,7 @@ def sample_affine(
             shear_3x3 = np.eye(3, dtype=np.float64)
             shear_3x3[0, 1] = shear_x
             shear_3x3[1, 0] = shear_y
-            shear_3x3[1, 1] = 1.0 + shear_x * shear_y
+            shear_3x3[1, 1] = shear_diagonal
 
             cx, cy = center
             to_origin = np.eye(3, dtype=np.float64)

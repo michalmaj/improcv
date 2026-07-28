@@ -1739,6 +1739,58 @@ def test_sample_affine_shear_overflow_raises_value_error_not_warning() -> None:
             )
 
 
+def test_sample_affine_rejects_shear_when_float64_loses_unit_determinant_term() -> None:
+    with pytest.raises(ValueError, match="invertible|float64"):
+        sample_affine(
+            np.random.default_rng(0),
+            source_size=(21, 21),
+            shear_x_range=(1e8, 1e8),
+            shear_y_range=(1e8, 1e8),
+        )
+
+
+def test_sample_affine_float64_shear_collapse_raises_without_warning() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError):
+            sample_affine(
+                np.random.default_rng(0),
+                source_size=(21, 21),
+                shear_x_range=(1e8, 1e8),
+                shear_y_range=(1e8, 1e8),
+            )
+
+
+def test_sample_affine_rejects_shear_with_negative_product_losing_unit_term() -> None:
+    # Same float64 precision loss as the positive-product case -- magnitude
+    # is what matters for representability, not sign.
+    sx, sy = 1e8, -1e8
+    assert (1.0 + sx * sy) == sx * sy  # confirms the chosen values actually trigger the loss
+    with pytest.raises(ValueError, match="invertible|float64"):
+        sample_affine(
+            np.random.default_rng(0),
+            source_size=(21, 21),
+            shear_x_range=(sx, sx),
+            shear_y_range=(sy, sy),
+        )
+
+
+def test_sample_affine_accepts_large_but_still_representable_shear_pair() -> None:
+    # product == 2**52 is the largest exact integer float64 can represent
+    # as "1 + product" without collapsing back to "product" -- still a very
+    # large, likely visually-degenerate shear, but not a numerical policy
+    # violation. This test is only about the representability boundary, not
+    # about image quality at this extreme.
+    sx = sy = float(2**26)
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng, source_size=(21, 21), shear_x_range=(sx, sx), shear_y_range=(sy, sy)
+    )
+    product = params.shear[0] * params.shear[1]
+    assert 1.0 + product != product
+    assert np.all(np.isfinite(params.matrix))
+
+
 # --- compatibility: shear must not disturb the pre-shear contract ---
 
 
@@ -1772,16 +1824,36 @@ def test_sample_affine_zero_shear_matches_pre_shear_matrix_bit_for_bit() -> None
 
 
 def test_sample_affine_default_shear_preserves_rng_sequence_across_calls() -> None:
-    rng_a = np.random.default_rng(999)
-    first_a = sample_affine(rng_a, source_size=(10, 8), angle_range=(-5.0, 5.0))
-    second_a = sample_affine(rng_a, source_size=(10, 8), angle_range=(-5.0, 5.0))
+    # Compares two consecutive sample_affine() calls against a *manually*
+    # reconstructed pre-shear draw sequence (angle, dx, dy, scale -- in that
+    # order, unconditionally, exactly as sample_affine sampled them before
+    # shear existed), not against another run of the current implementation.
+    # This is what actually proves shear's default (0.0, 0.0) ranges don't
+    # consume any rng state: two runs of *this* implementation against each
+    # other would still match even if a shared bug changed both identically.
+    source_size = (10, 8)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+    angle_range = (-5.0, 5.0)
 
-    rng_b = np.random.default_rng(999)
-    first_b = sample_affine(rng_b, source_size=(10, 8), angle_range=(-5.0, 5.0))
-    second_b = sample_affine(rng_b, source_size=(10, 8), angle_range=(-5.0, 5.0))
+    rng_new = np.random.default_rng(999)
+    new_results = [
+        sample_affine(rng_new, source_size=source_size, angle_range=angle_range) for _ in range(2)
+    ]
 
-    assert first_a == first_b
-    assert second_a == second_b
+    rng_old = np.random.default_rng(999)
+    for params in new_results:
+        angle = float(rng_old.uniform(*angle_range))
+        dx = float(rng_old.uniform(0.0, 0.0))
+        dy = float(rng_old.uniform(0.0, 0.0))
+        scale = float(rng_old.uniform(1.0, 1.0))
+        expected_matrix = cv2.getRotationMatrix2D(center, angle, scale)
+        expected_matrix[0, 2] += dx
+        expected_matrix[1, 2] += dy
+
+        assert params.angle == angle
+        assert params.translation == (dx, dy)
+        assert params.scale == scale
+        np.testing.assert_array_equal(params.matrix, expected_matrix)
 
 
 def test_affine_parameters_five_positional_arguments_still_construct() -> None:
@@ -1894,6 +1966,19 @@ def test_sample_affine_shear_x_then_y_matches_manual_sequential_matrix() -> None
     sh_xy_3x3 = np.array([[1, sx, 0], [sy, 1 + sx * sy, 0], [0, 0, 1]])
     expected = (t_pos @ sh_xy_3x3 @ t_neg)[:2, :]
     np.testing.assert_allclose(params.matrix, expected)
+
+    # Direct check of the stored unit determinant term itself, rather than
+    # relying solely on np.linalg.det (which can be numerically misleading
+    # -- returning a plausible-looking but wrong positive or near-zero
+    # value depending on algorithm/rounding -- for a badly conditioned
+    # matrix; here the coefficients are moderate, so det is also checked).
+    stored_sx, stored_sy = params.shear
+    product = stored_sx * stored_sy
+    assert 1.0 + product != product
+    # scale defaults to 1.0 here, so the combined linear part's determinant
+    # is just the shear's own determinant (rotation alone has det 1).
+    assert params.scale == 1.0
+    assert np.linalg.det(params.matrix[:2, :2]) == pytest.approx(1.0)
 
 
 def test_apply_affine_positive_shear_x_moves_bottom_right_relative_to_top() -> None:

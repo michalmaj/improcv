@@ -804,14 +804,19 @@ are raw, dimensionless shear *coefficients*, not degrees: `shear_x` maps `x' = x
 and `shear_y` (applied after `shear_x`) then maps `y' = y + shear_y * x'`, using the already-sheared
 `x'` -- documented as "shear x, then shear y", never as simultaneous, since that's exactly what the
 sequential composition means. A positive `shear_x` moves the bottom of the image right relative to
-the top; a positive `shear_y` moves the right side down relative to the left. Both are legal at any
-finite value, positive or negative, with no forbidden angle and no `abs(shear)` limit -- this is a
-deliberate choice of parameterization: `[[1, shear_x], [shear_y, 1 + shear_x*shear_y]]` always has
-determinant `1` (area- and orientation-preserving, never singular) for any finite coefficients,
-unlike the naive-looking `[[1, shear_x], [shear_y, 1]]`, which becomes singular whenever
-`shear_x * shear_y == 1` and flips orientation beyond that -- `improcv` never uses the naive form.
-A very large shear coefficient is still accepted, but can strongly deform the image or push its
-content outside the canvas; there is no automatic protection against that. Each `*_range` is a
+the top; a positive `shear_y` moves the right side down relative to the left. There is no forbidden
+angle and no `abs(shear)` limit -- this is a deliberate choice of parameterization:
+`[[1, shear_x], [shear_y, 1 + shear_x*shear_y]]` has determinant `1` mathematically, for any finite
+coefficients (area- and orientation-preserving), unlike the naive-looking `[[1, shear_x], [shear_y,
+1]]`, which becomes singular whenever `shear_x * shear_y == 1` and flips orientation beyond that --
+`improcv` never uses the naive form. That determinant-`1` guarantee is about the exact real-number
+parameterization, not a promise of infinite `float64` precision: `improcv` rejects a `shear_x`/
+`shear_y` pair whose product is large enough (roughly `2**52` in magnitude) that `float64` can no
+longer tell `1.0 + shear_x*shear_y` apart from `shear_x*shear_y` itself, since that would silently
+store a matrix that has lost the unit term making it invertible. Short of that, a large shear
+coefficient is still accepted even though the resulting matrix can be very poorly conditioned,
+strongly deform the image, or push its content outside the canvas entirely -- there is no automatic
+protection against that beyond the float64-representability check. Each `*_range` is a
 `(low, high)` tuple sampled independently via `Generator.uniform` -- `low` is always reachable,
 equal endpoints sample that exact constant, but hitting `high` itself is not guaranteed for a
 non-degenerate range (an ordinary property of continuous floating-point sampling). The transform is
