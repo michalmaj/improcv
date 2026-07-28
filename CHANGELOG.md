@@ -164,6 +164,14 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   splits, manifests, or loading/decoding in this slice, and no new dependency.
 
 ### Fixed
+- `improcv.discovery`: `discover_images` now classifies descendants using a fresh path-based
+  non-following stat instead of cached `DirEntry` metadata, preserving its fail-fast contract when
+  an entry disappears before inspection. `os.DirEntry.stat()` can return metadata captured during
+  directory enumeration itself, without a fresh system call, on some platforms (notably Windows) --
+  which could let a descendant that had already been deleted or replaced before classification pass
+  through the check silently instead of raising the documented `FileNotFoundError`. Classification
+  now always calls `os.stat(entry.path, follow_symlinks=False)`; hidden entries (skipped by name
+  before any filesystem inspection) are unaffected and still incur no `stat` call at all.
 - `improcv.augmentation`: reject sequential affine-shear coefficients when `float64` rounding
   removes the unit determinant term, preventing a mathematically invertible shear from being stored
   as a singular matrix. `sample_affine`'s sequential shear matrix (`[[1, shear_x], [shear_y, 1 +

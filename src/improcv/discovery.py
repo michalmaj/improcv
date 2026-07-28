@@ -101,10 +101,21 @@ def discover_images(
     same physical file via a hard link -- this function performs no
     identity-based deduplication.
 
+    For every non-hidden descendant entry, discovery performs a fresh
+    path-based stat with `follow_symlinks=False` before classifying it --
+    never a cached result from directory enumeration itself (which some
+    platforms, notably Windows, can otherwise return without a fresh system
+    call). If an entry disappears between being listed and this fresh
+    inspection, the native `FileNotFoundError` propagates (see Raises
+    below), never silently skipped. An entry observed as a symlink or
+    Windows reparse point at inspection time is skipped, per the policy
+    above.
+
     This is a snapshot of one traversal, not an atomic view of the
-    filesystem: a file can be created, modified, or deleted right after
-    this function returns (or even between two of its own internal
-    filesystem calls -- see Raises below), and nothing here detects that.
+    filesystem: this fresh-stat guarantee covers only the moment of
+    inspection itself -- a file can still be created, modified, or deleted
+    right after being classified (or after this function returns entirely),
+    and nothing here detects that later change.
 
     Raises
     ------
@@ -147,7 +158,7 @@ def discover_images(
                 if not include_hidden and entry.name.startswith("."):
                     continue
 
-                entry_stat = entry.stat(follow_symlinks=False)
+                entry_stat = os.stat(entry.path, follow_symlinks=False)
                 mode = entry_stat.st_mode
                 if stat.S_ISLNK(mode) or _is_reparse_point(entry_stat):
                     continue

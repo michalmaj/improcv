@@ -531,11 +531,13 @@ def test_discover_images_symlink_pointing_outside_root_skipped(tmp_path: Path) -
 def test_discover_images_windows_reparse_point_skipped_via_synthetic_attribute(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Simulates a Windows junction by monkeypatching stat_result.st_file_attributes.
+    """Simulates a Windows junction by monkeypatching os.stat's result.
 
     A real junction can't be created portably/reliably in CI without
     elevated privileges, so this exercises the `_is_reparse_point` branch
-    directly via a monkeypatched `DirEntry.stat` result, independent of the
+    directly via a monkeypatched fresh `os.stat(entry.path,
+    follow_symlinks=False)` result (not `DirEntry.stat`, which production
+    code must not use -- see the fail-fast tests below), independent of the
     host platform.
     """
     import improcv.discovery as discovery_module
@@ -549,7 +551,7 @@ def test_discover_images_windows_reparse_point_skipped_via_synthetic_attribute(
 
     monkeypatch.setattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400, raising=False)
 
-    real_scandir = discovery_module.os.scandir
+    real_os_stat = discovery_module.os.stat
 
     class FakeStatResult:
         def __init__(self, real_stat, attributes):
@@ -559,38 +561,12 @@ def test_discover_images_windows_reparse_point_skipped_via_synthetic_attribute(
         def __getattr__(self, item):
             return getattr(self._real_stat, item)
 
-    def patched_scandir(path):
-        cm = real_scandir(path)
-        entries = list(cm.__enter__())
-        cm.__exit__(None, None, None)
+    def patched_stat(path, *args, **kwargs):
+        real_stat = real_os_stat(path, *args, **kwargs)
+        attributes = 0x400 if Path(path).name == "junction" else 0
+        return FakeStatResult(real_stat, attributes)
 
-        class Wrapper:
-            def __init__(self, entry):
-                self._entry = entry
-
-            @property
-            def name(self):
-                return self._entry.name
-
-            @property
-            def path(self):
-                return self._entry.path
-
-            def stat(self, follow_symlinks=False):
-                real_stat = self._entry.stat(follow_symlinks=follow_symlinks)
-                attributes = 0x400 if self._entry.name == "junction" else 0
-                return FakeStatResult(real_stat, attributes)
-
-        class WrapperCM:
-            def __enter__(self):
-                return [Wrapper(e) for e in entries]
-
-            def __exit__(self, *args):
-                return False
-
-        return WrapperCM()
-
-    monkeypatch.setattr(discovery_module.os, "scandir", patched_scandir)
+    monkeypatch.setattr(discovery_module.os, "stat", patched_stat)
 
     result = discover_images(tmp_path)
     assert result == (tmp_path / "real_dir" / "a.jpg",)
@@ -604,41 +580,120 @@ def test_discover_images_propagates_permission_error_from_scandir(
 ) -> None:
     import improcv.discovery as discovery_module
 
+    original = PermissionError(13, "synthetic permission denial", str(tmp_path))
+
     def boom(path):
-        raise PermissionError(13, "synthetic permission denial", str(path))
+        raise original
 
     monkeypatch.setattr(discovery_module.os, "scandir", boom)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionError) as exc_info:
         discover_images(tmp_path)
+    assert exc_info.value is original
 
 
-def test_discover_images_propagates_error_from_entry_stat(
+def test_discover_images_propagates_permission_error_from_fresh_stat(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import improcv.discovery as discovery_module
 
-    class FailingEntry:
+    _touch(tmp_path / "a.jpg")
+    original = PermissionError(13, "synthetic permission denial", str(tmp_path / "a.jpg"))
+
+    def boom(path, *args, **kwargs):
+        raise original
+
+    monkeypatch.setattr(discovery_module.os, "stat", boom)
+
+    with pytest.raises(PermissionError) as exc_info:
+        discover_images(tmp_path)
+    assert exc_info.value is original
+
+
+def test_discover_images_hidden_entry_skips_stat_call_when_not_included(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import improcv.discovery as discovery_module
+
+    _touch(tmp_path / ".hidden.jpg")
+    _touch(tmp_path / "visible.jpg")
+
+    real_stat = discovery_module.os.stat
+
+    def spy_stat(path, *args, **kwargs):
+        if Path(path).name == ".hidden.jpg":
+            pytest.fail("hidden entries must be skipped before any stat call")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(discovery_module.os, "stat", spy_stat)
+
+    result = discover_images(tmp_path, include_hidden=False)
+    assert result == (tmp_path / "visible.jpg",)
+
+
+def test_discover_images_never_calls_direntry_stat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DirEntry.stat may return cached metadata from directory enumeration
+    (notably on Windows), not a fresh system call -- production code must
+    classify every descendant via a fresh `os.stat(entry.path,
+    follow_symlinks=False)` instead. This is a real `os.scandir` (not a
+    fake entry), with only `DirEntry.stat` itself patched to fail the test
+    if called at all.
+    """
+    _touch(tmp_path / "a.jpg")
+    import os as os_module
+
+    real_direntry_stat = os_module.DirEntry.stat
+
+    def forbidden_stat(self, *args, **kwargs):
+        pytest.fail("discover_images must use fresh os.stat, not cached DirEntry.stat")
+
+    monkeypatch.setattr(os_module.DirEntry, "stat", forbidden_stat)
+    try:
+        result = discover_images(tmp_path)
+    finally:
+        monkeypatch.setattr(os_module.DirEntry, "stat", real_direntry_stat)
+    assert result == (tmp_path / "a.jpg",)
+
+
+def test_discover_images_propagates_error_from_fresh_stat_on_disappearing_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import improcv.discovery as discovery_module
+
+    ghost_path = tmp_path / "ghost.jpg"
+    real_stat = os.stat
+    original = FileNotFoundError(2, "synthetic disappearing entry", os.fspath(ghost_path))
+
+    def patched_stat(path, *args, **kwargs):
+        if os.fspath(path) == os.fspath(ghost_path):
+            raise original
+        return real_stat(path, *args, **kwargs)
+
+    class FakeEntry:
         name = "ghost.jpg"
-        path = str(tmp_path / "ghost.jpg")
+        path = str(ghost_path)
 
-        def stat(self, follow_symlinks=False):
-            raise FileNotFoundError(2, "synthetic disappearing entry", self.path)
+        def stat(self, *args, **kwargs):
+            pytest.fail("discover_images must use fresh os.stat, not cached DirEntry.stat")
 
-    class FailingCM:
+    class FakeCM:
         def __enter__(self):
-            return [FailingEntry()]
+            return [FakeEntry()]
 
         def __exit__(self, *args):
             return False
 
     def patched_scandir(path):
-        return FailingCM()
+        return FakeCM()
 
     monkeypatch.setattr(discovery_module.os, "scandir", patched_scandir)
+    monkeypatch.setattr(discovery_module.os, "stat", patched_stat)
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError) as exc_info:
         discover_images(tmp_path)
+    assert exc_info.value is original
 
 
 @pytest.mark.skipif(
