@@ -1,23 +1,34 @@
-"""Classification evaluation core: confusion matrices and precision/recall/F1/support.
+"""Classification evaluation core: confusion matrices, precision/recall/F1/support, and
+binary ranking curves (ROC, precision-recall, ROC AUC).
 
-Single-label multiclass only: exactly one true class and one predicted class
-per sample, integer labels only. Does not cover ROC/PR curves, AUC, plotting,
-multilabel classification, sample weights, or `average="binary"` -- those are
-separate, later concerns, not part of this core. Two deliberate departures
-from `scikit-learn.metrics`'s well-known behavior (documented at the call
-sites that enforce them): a duplicate value in an explicit `labels` sequence
-raises `ValueError` rather than being silently accepted, and an observed
-label outside an explicit `labels` sequence raises `ValueError` rather than
-silently dropping that sample from the result.
+`confusion_matrix`/`classification_metrics` are single-label multiclass only: exactly one
+true class and one predicted class per sample, integer labels only. `roc_curve`/
+`precision_recall_curve`/`roc_auc_score` are binary, one-vs-rest: an explicit `positive_label`
+picks the positive class, every other observed label is negative, regardless of how many
+distinct negative labels occur -- there is no automatic inference of which label is positive.
+Does not cover plotting, multilabel classification, sample weights, `average="binary"`,
+multiclass ranking curves/averaging, a generic `auc(x, y)` helper, average precision, or
+trapezoidal PR AUC -- those are separate, later concerns, not part of this core.
+
+Several deliberate departures from `scikit-learn.metrics`'s well-known behavior (documented at
+the call sites that enforce them): a duplicate value in an explicit `labels` sequence raises
+`ValueError` rather than being silently accepted; an observed label outside an explicit
+`labels` sequence raises `ValueError` rather than silently dropping that sample from the
+result; `roc_curve`/`roc_auc_score` raise `ValueError` for a `y_true` with no positive or no
+negative sample rather than emitting `UndefinedMetricWarning` and returning a degenerate
+result; and `precision_recall_curve`'s `recall` is returned in ascending order paired with
+descending `thresholds` (matching `roc_curve`'s convention), not scikit-learn's descending
+`recall`.
 """
 
 from __future__ import annotations
 
 import math
+import numbers
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -27,9 +38,14 @@ from improcv._validation import require_integral, require_one_of
 __all__ = [
     "ClassificationMetrics",
     "ConfusionMatrixResult",
+    "PrecisionRecallCurve",
+    "RocCurve",
     "classification_metrics",
     "classification_metrics_from_confusion_matrix",
     "confusion_matrix",
+    "precision_recall_curve",
+    "roc_auc_score",
+    "roc_curve",
 ]
 
 _AVERAGE_VALUES: tuple[str | None, ...] = (None, "micro", "macro", "weighted")
@@ -721,3 +737,535 @@ def _check_metrics_postconditions(
                 raise RuntimeError(
                     f"internal error: aggregate {name} {value!r} is not in [0, 1] or NaN"
                 )
+
+
+# --- binary one-vs-rest ranking curves: RocCurve / PrecisionRecallCurve / roc_auc_score ---
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class RocCurve:
+    """The result of `roc_curve`: false/true positive rate at each distinct score threshold.
+
+    `false_positive_rate[i]`/`true_positive_rate[i]` are the FPR/TPR obtained by predicting
+    positive for every sample with `score >= thresholds[i]`. `thresholds[0]` is always `+inf`
+    (predicting nothing positive, giving `(FPR, TPR) = (0.0, 0.0)`); `thresholds[1:]` holds
+    every distinct observed score in strictly decreasing order, so all three arrays share the
+    same length `K + 1` for `K` distinct scores. The final point is always `(1.0, 1.0)`
+    (predicting everything positive). All three arrays are new, independent, read-only
+    `float64` arrays -- never views of `y_true`/`y_score` or of each other.
+
+    Equality (`==`) compares `positive_label` and all three arrays by value (via
+    `np.array_equal`), never by identity -- unlike the default dataclass-generated equality,
+    which would hit the same "truth value of an array is ambiguous" error
+    `ConfusionMatrixResult` documents. Instances are unhashable (`hash()` raises `TypeError`).
+    """
+
+    false_positive_rate: npt.NDArray[np.float64]
+    true_positive_rate: npt.NDArray[np.float64]
+    thresholds: npt.NDArray[np.float64]
+    positive_label: int
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, RocCurve):
+            return NotImplemented
+        return (
+            self.positive_label == other.positive_label
+            and bool(
+                np.array_equal(
+                    self.false_positive_rate,
+                    other.false_positive_rate,
+                )
+            )
+            and bool(
+                np.array_equal(
+                    self.true_positive_rate,
+                    other.true_positive_rate,
+                )
+            )
+            and bool(np.array_equal(self.thresholds, other.thresholds))
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class PrecisionRecallCurve:
+    """The result of `precision_recall_curve`: precision/recall at each distinct score threshold.
+
+    `precision[i]`/`recall[i]` are the precision/recall obtained by predicting positive for
+    every sample with `score >= thresholds[i]`. `thresholds[0]` is always `+inf` (predicting
+    nothing positive, giving the synthetic point `(precision, recall) = (1.0, 0.0)`, with no
+    corresponding real threshold); `thresholds[1:]` holds every distinct observed score in
+    strictly decreasing order, so all three arrays share the same length `K + 1` for `K`
+    distinct scores. `recall` is non-decreasing and its final value is always `1.0`; the final
+    `precision` equals the overall positive prevalence `P / len(y_true)` (predicting everything
+    positive). All three arrays are new, independent, read-only `float64` arrays -- never views
+    of `y_true`/`y_score` or of each other.
+
+    Equality (`==`) compares `positive_label` and all three arrays by value (via
+    `np.array_equal`), never by identity. Instances are unhashable (`hash()` raises
+    `TypeError`).
+    """
+
+    precision: npt.NDArray[np.float64]
+    recall: npt.NDArray[np.float64]
+    thresholds: npt.NDArray[np.float64]
+    positive_label: int
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PrecisionRecallCurve):
+            return NotImplemented
+        return (
+            self.positive_label == other.positive_label
+            and bool(np.array_equal(self.precision, other.precision))
+            and bool(np.array_equal(self.recall, other.recall))
+            and bool(np.array_equal(self.thresholds, other.thresholds))
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def roc_curve(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    positive_label: int,
+) -> RocCurve:
+    """Compute a binary, one-vs-rest ROC curve: false/true positive rate at each threshold.
+
+    Binary one-vs-rest: a sample is positive iff its `y_true` label equals `positive_label`
+    (compared with plain Python `==`, so arbitrarily large integers stay exact); every other
+    observed label is negative, regardless of how many distinct negative labels occur. There is
+    no automatic inference of which label is positive -- `positive_label` is always required,
+    and is never inferred from label sorting or majority/minority class size.
+
+    `y_score` is a ranking score, not a predicted label or a probability: it does not need to
+    lie in `[0, 1]`, and a larger score means greater confidence in the positive class. A
+    threshold classifies a sample positive iff `score >= threshold`; every sample that shares
+    the same score is aggregated into a single threshold before FPR/TPR is computed there, so
+    permuting the order of tied samples (or of the whole input) never changes the result.
+
+    Requires at least one positive sample (`y_true` contains `positive_label`) and at least one
+    negative sample -- with either missing, FPR or TPR would be an undefined `0/0`, so this
+    raises `ValueError` rather than emitting a warning and returning a degenerate curve (compare
+    `sklearn.metrics.roc_curve`, which emits `UndefinedMetricWarning` instead).
+
+    Raises
+    ------
+    TypeError
+        If `y_true` is not a `Sequence`/1-D integer `ndarray`, if any of its elements is not
+        integral (including `bool`/`np.bool_`), if `positive_label` is not a Python/NumPy
+        integral value (including `bool`/`np.bool_`), if `y_score` is not a `Sequence`/1-D
+        float-or-integer `ndarray`, if `y_score` has a `bool`/complex/object/wider-than-`float64`
+        floating dtype, or if a `y_score` element is not a Python/NumPy int or float.
+    ValueError
+        If `y_true`/`y_score` is empty, if their lengths differ, if any `y_true`/`y_score`
+        `ndarray` is not 1-D, if a `y_score` element is NaN/`Inf` (or an integer not exactly
+        representable as `float64`), if `y_true` has no sample equal to `positive_label`, or if
+        `y_true` has no sample different from `positive_label`.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+    """
+    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=True)
+    false_positive_rate = core.false_positives.astype(np.float64) / core.n_negative
+    true_positive_rate = core.true_positives.astype(np.float64) / core.n_positive
+    false_positive_rate.flags.writeable = False
+    true_positive_rate.flags.writeable = False
+    thresholds = core.thresholds
+    thresholds.flags.writeable = False
+
+    result = RocCurve(
+        false_positive_rate=false_positive_rate,
+        true_positive_rate=true_positive_rate,
+        thresholds=thresholds,
+        positive_label=core.positive_label,
+    )
+    _check_roc_curve_postconditions(result)
+    return result
+
+
+def precision_recall_curve(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    positive_label: int,
+) -> PrecisionRecallCurve:
+    """Compute a binary, one-vs-rest precision-recall curve at each distinct score threshold.
+
+    See `roc_curve` for the shared one-vs-rest/`positive_label`/`y_score`/tie-aggregation
+    contract, which applies identically here. Requires at least one positive sample; unlike
+    `roc_curve`, a `y_true` with no negative sample is legal (precision is then `1.0` at every
+    real threshold, since there is never a false positive to count) -- a deliberate departure
+    from `sklearn.metrics.precision_recall_curve`'s own length/ordering conventions, made so that
+    `precision`/`recall`/`thresholds` always share one length (`K + 1` for `K` distinct scores)
+    and the same descending-threshold/ascending-recall pairing as `roc_curve`.
+
+    `thresholds[0]` is `+inf`, giving the synthetic starting point
+    `(precision, recall) = (1.0, 0.0)` with no corresponding real threshold. `recall` is
+    non-decreasing and its final value is `1.0`; the final `precision` is the overall positive
+    prevalence `P / len(y_true)` (predicting everything positive).
+
+    Raises
+    ------
+    TypeError
+        Same as `roc_curve`.
+    ValueError
+        Same as `roc_curve`, except a `y_true` with no negative sample is accepted rather than
+        rejected.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+    """
+    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=False)
+    true_positive = core.true_positives.astype(np.float64)
+    false_positive = core.false_positives.astype(np.float64)
+
+    precision = np.empty_like(true_positive)
+    precision[0] = 1.0
+    precision[1:] = true_positive[1:] / (true_positive[1:] + false_positive[1:])
+    recall = true_positive / core.n_positive
+
+    precision.flags.writeable = False
+    recall.flags.writeable = False
+    thresholds = core.thresholds
+    thresholds.flags.writeable = False
+
+    result = PrecisionRecallCurve(
+        precision=precision,
+        recall=recall,
+        thresholds=thresholds,
+        positive_label=core.positive_label,
+    )
+    _check_pr_curve_postconditions(result)
+    return result
+
+
+def roc_auc_score(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    positive_label: int,
+) -> float:
+    """Compute the area under the binary, one-vs-rest ROC curve.
+
+    Uses the same false/true positive rate points `roc_curve` would return (see `roc_curve` for
+    the full `positive_label`/`y_score`/tie-aggregation/error contract, which applies
+    identically here), integrated with the trapezoidal rule -- equivalent to the probability
+    that a uniformly random positive sample outranks a uniformly random negative sample, with a
+    tied pair counted as one-half. Does not call `np.trapz` or `np.trapezoid`: neither name
+    exists across the full range of NumPy versions this project supports (verified directly:
+    `np.trapz` is gone in current NumPy, `np.trapezoid` does not exist on this project's NumPy
+    floor), so the trapezoidal sum is computed directly from basic array arithmetic instead.
+
+    A perfect ranking gives `1.0`; a perfectly reversed ranking gives `0.0`; a `y_score` with no
+    discriminative power (e.g. every sample given the same score) gives `0.5`.
+
+    Raises
+    ------
+    TypeError
+        Same as `roc_curve`.
+    ValueError
+        Same as `roc_curve`.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+    """
+    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=True)
+    false_positive_rate = core.false_positives.astype(np.float64) / core.n_negative
+    true_positive_rate = core.true_positives.astype(np.float64) / core.n_positive
+
+    area = float(
+        np.sum(
+            np.diff(false_positive_rate) * (true_positive_rate[:-1] + true_positive_rate[1:]) * 0.5,
+            dtype=np.float64,
+        )
+    )
+    _check_roc_auc_postconditions(area)
+    return area
+
+
+class _RankingCore(NamedTuple):
+    """Grouped ranking thresholds shared by `roc_curve`/`precision_recall_curve`/`roc_auc_score`.
+
+    Not a public result type -- `thresholds`/`true_positives`/`false_positives` all share length
+    `K + 1` for `K` distinct observed scores, with index 0 always the `+inf` sentinel
+    (`true_positives[0] = false_positives[0] = 0`) and indices `1..K` the cumulative counts at
+    each of the `K` distinct scores, in strictly decreasing order.
+    """
+
+    thresholds: npt.NDArray[np.float64]
+    true_positives: npt.NDArray[np.int64]
+    false_positives: npt.NDArray[np.int64]
+    n_positive: int
+    n_negative: int
+    positive_label: int
+
+
+def _compute_ranking_core(
+    y_true: object,
+    y_score: object,
+    positive_label: object,
+    *,
+    require_negative: bool,
+) -> _RankingCore:
+    require_integral(positive_label, "positive_label")
+    positive_label_value = int(positive_label)  # type: ignore[call-overload]
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    scores = _normalize_score_sequence(y_score, "y_score")
+    if len(true_list) != scores.shape[0]:
+        raise ValueError(
+            f"y_true and y_score must have the same length, got {len(true_list)} and "
+            f"{scores.shape[0]}"
+        )
+
+    is_positive = np.fromiter(
+        (label == positive_label_value for label in true_list),
+        dtype=bool,
+        count=len(true_list),
+    )
+    n_positive = int(np.count_nonzero(is_positive))
+    n_negative = len(true_list) - n_positive
+    if n_positive == 0:
+        raise ValueError(
+            f"y_true contains no sample equal to positive_label={positive_label_value!r}"
+        )
+    if require_negative and n_negative == 0:
+        raise ValueError(
+            "y_true contains no negative sample (every label equals "
+            f"positive_label={positive_label_value!r})"
+        )
+
+    # Descending order via a stable ascending sort, reversed: cheaper than a dedicated
+    # descending sort, and the within-tie order it produces is irrelevant either way, since
+    # every sample sharing a score is aggregated into one threshold below.
+    order = np.argsort(scores, kind="stable")[::-1]
+    sorted_scores = scores[order]
+    sorted_is_positive = is_positive[order]
+
+    # Direct comparison, not `np.diff(sorted_scores) != 0`: subtracting two finite scores near
+    # +-float64 max can overflow to +-inf and raise a spurious "overflow encountered in
+    # subtract" warning -- verified directly.
+    distinct = sorted_scores[1:] != sorted_scores[:-1]
+    group_end_mask = np.concatenate((distinct, np.array([True], dtype=bool)))
+    group_end_indices = np.flatnonzero(group_end_mask)
+
+    cumulative_positive = np.cumsum(sorted_is_positive, dtype=np.int64)
+    cumulative_total = np.arange(1, len(true_list) + 1, dtype=np.int64)
+
+    group_true_positive = cumulative_positive[group_end_indices]
+    group_total = cumulative_total[group_end_indices]
+    group_false_positive = group_total - group_true_positive
+
+    thresholds = np.empty(group_end_indices.shape[0] + 1, dtype=np.float64)
+    thresholds[0] = np.inf
+    thresholds[1:] = sorted_scores[group_end_indices]
+
+    true_positives = np.empty(group_end_indices.shape[0] + 1, dtype=np.int64)
+    true_positives[0] = 0
+    true_positives[1:] = group_true_positive
+
+    false_positives = np.empty(group_end_indices.shape[0] + 1, dtype=np.int64)
+    false_positives[0] = 0
+    false_positives[1:] = group_false_positive
+
+    return _RankingCore(
+        thresholds=thresholds,
+        true_positives=true_positives,
+        false_positives=false_positives,
+        n_positive=n_positive,
+        n_negative=n_negative,
+        positive_label=positive_label_value,
+    )
+
+
+_ALLOWED_SCORE_FLOAT_DTYPES = (
+    np.dtype(np.float16),
+    np.dtype(np.float32),
+    np.dtype(np.float64),
+)
+
+
+def _normalize_score_sequence(value: object, name: str) -> npt.NDArray[np.float64]:
+    """Raise TypeError/ValueError unless `value` is a valid score container; return `float64`
+    ndarray.
+
+    Accepts a real `collections.abc.Sequence` (explicitly excluding `str`/`bytes`/`bytearray`)
+    of Python/NumPy `int`/`float` scalars, or a 1-D `ndarray` with an integer or `float16`/
+    `float32`/`float64` dtype -- a generator/iterator, a 2-D (or 0-D) array, a `bool`/complex/
+    object/wider-than-`float64` floating dtype array, and an empty container are all rejected.
+    Every element/value is normalized into an independent, newly allocated `float64` array
+    (never a view of `value`); NaN and +/-Inf are rejected, and an integer value not exactly
+    representable as `float64` (e.g. `2**53 + 1`) is rejected rather than silently rounded.
+    """
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError(
+            f"{name} must be a Sequence of real numbers or a 1-D float/integer ndarray, "
+            f"not {type(value).__name__}"
+        )
+    if isinstance(value, np.ndarray):
+        return _normalize_score_ndarray(value, name)
+    if not isinstance(value, Sequence):
+        raise TypeError(
+            f"{name} must be a Sequence of real numbers (e.g. a list or tuple) or a 1-D "
+            f"float/integer ndarray, not {type(value).__name__}"
+        )
+    if len(value) == 0:
+        raise ValueError(f"{name} must not be empty")
+
+    normalized = np.empty(len(value), dtype=np.float64)
+    for index, element in enumerate(value):
+        normalized[index] = _normalize_score_scalar(element, f"{name}[{index}]")
+    return normalized
+
+
+def _normalize_score_scalar(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be a real number, not bool")
+    if isinstance(value, numbers.Integral):
+        integer = int(value)
+        converted = float(integer)
+        if not math.isfinite(converted) or int(converted) != integer:
+            raise ValueError(f"{name} is not exactly representable as float64")
+        return converted
+    if isinstance(value, (float, np.floating)):
+        converted = float(value)
+        if not math.isfinite(converted):
+            raise ValueError(f"{name} must be finite, got {value}")
+        return converted
+    raise TypeError(f"{name} must be a Python/NumPy int or float, got {type(value).__name__}")
+
+
+def _normalize_score_ndarray(value: np.ndarray, name: str) -> npt.NDArray[np.float64]:
+    if value.ndim != 1:
+        raise ValueError(f"{name} must be 1-D, got shape {value.shape}")
+    if value.size == 0:
+        raise ValueError(f"{name} must not be empty")
+
+    dtype = value.dtype
+    if np.issubdtype(dtype, np.floating):
+        if dtype not in _ALLOWED_SCORE_FLOAT_DTYPES:
+            raise TypeError(
+                f"{name} must have dtype float16, float32, or float64, got {dtype} -- a wider "
+                "floating dtype could narrow values in a platform-dependent way"
+            )
+        converted = value.astype(np.float64, copy=True)
+    elif np.issubdtype(dtype, np.integer):
+        converted = _exact_integer_ndarray_to_float64(value, name)
+    else:
+        raise TypeError(f"{name} must have a floating or integer dtype, got {dtype}")
+
+    if not np.all(np.isfinite(converted)):
+        raise ValueError(f"{name} must contain only finite values (no NaN or Inf)")
+    return converted
+
+
+def _exact_integer_ndarray_to_float64(value: np.ndarray, name: str) -> npt.NDArray[np.float64]:
+    """Widen an integer ndarray to float64, rejecting any value that would lose precision.
+
+    `value.tolist()` gives exact Python ints for any NumPy integer dtype, including `uint64`
+    magnitudes that don't fit in `int64` -- comparing each against its own `float64` round-trip
+    catches precision loss above `2**53` (e.g. `2**53 + 1`) that a bare `.astype(np.float64)`
+    would otherwise silently round away.
+    """
+    converted = value.astype(np.float64, copy=True)
+    pairs = zip(value.tolist(), converted.tolist(), strict=True)
+    for index, (original, as_float) in enumerate(pairs):
+        if int(as_float) != original:
+            raise ValueError(f"{name}[{index}] is not exactly representable as float64")
+    return converted
+
+
+def _check_curve_postconditions(
+    thresholds: np.ndarray, values_a: np.ndarray, values_b: np.ndarray, kind: str
+) -> None:
+    for label, array in (
+        ("thresholds", thresholds),
+        (f"{kind}_a", values_a),
+        (f"{kind}_b", values_b),
+    ):
+        if not isinstance(array, np.ndarray):
+            raise RuntimeError(f"internal error: {label} is not an ndarray")
+        if array.dtype != np.float64:
+            raise RuntimeError(f"internal error: {label} has dtype {array.dtype}, expected float64")
+        if array.ndim != 1:
+            raise RuntimeError(f"internal error: {label} has ndim {array.ndim}, expected 1")
+
+    length = thresholds.shape[0]
+    if values_a.shape[0] != length or values_b.shape[0] != length:
+        raise RuntimeError("internal error: curve arrays have mismatched lengths")
+    if length < 2:
+        raise RuntimeError(f"internal error: curve has length {length}, expected at least 2")
+
+    if thresholds[0] != np.inf:
+        raise RuntimeError("internal error: thresholds[0] must be +inf")
+    rest = thresholds[1:]
+    if not np.all(np.isfinite(rest)):
+        raise RuntimeError("internal error: thresholds[1:] must be finite")
+    if rest.shape[0] >= 2 and not np.all(rest[1:] < rest[:-1]):
+        raise RuntimeError("internal error: thresholds[1:] must be strictly decreasing")
+
+    for label, array in (
+        ("thresholds", thresholds),
+        (f"{kind}_a", values_a),
+        (f"{kind}_b", values_b),
+    ):
+        if array.flags.writeable:
+            raise RuntimeError(f"internal error: {label} is writeable")
+
+    if (
+        np.shares_memory(thresholds, values_a)
+        or np.shares_memory(thresholds, values_b)
+        or np.shares_memory(values_a, values_b)
+    ):
+        raise RuntimeError("internal error: curve arrays alias each other")
+
+
+def _check_roc_curve_postconditions(result: RocCurve) -> None:
+    _check_curve_postconditions(
+        result.thresholds, result.false_positive_rate, result.true_positive_rate, "roc"
+    )
+    for label, array in (
+        ("false_positive_rate", result.false_positive_rate),
+        ("true_positive_rate", result.true_positive_rate),
+    ):
+        if not np.all(np.isfinite(array)):
+            raise RuntimeError(f"internal error: {label} contains a non-finite value")
+        if not np.all((array >= 0.0) & (array <= 1.0)):
+            raise RuntimeError(f"internal error: {label} has a value outside [0, 1]")
+        if array.shape[0] >= 2 and not np.all(array[1:] >= array[:-1]):
+            raise RuntimeError(f"internal error: {label} must be non-decreasing")
+
+    if result.false_positive_rate[0] != 0.0 or result.true_positive_rate[0] != 0.0:
+        raise RuntimeError("internal error: ROC curve must start at (0, 0)")
+    if result.false_positive_rate[-1] != 1.0 or result.true_positive_rate[-1] != 1.0:
+        raise RuntimeError("internal error: ROC curve must end at (1, 1)")
+
+
+def _check_pr_curve_postconditions(result: PrecisionRecallCurve) -> None:
+    _check_curve_postconditions(result.thresholds, result.precision, result.recall, "pr")
+    for label, array in (("precision", result.precision), ("recall", result.recall)):
+        if not np.all(np.isfinite(array)):
+            raise RuntimeError(f"internal error: {label} contains a non-finite value")
+        if not np.all((array >= 0.0) & (array <= 1.0)):
+            raise RuntimeError(f"internal error: {label} has a value outside [0, 1]")
+
+    if result.recall.shape[0] >= 2 and not np.all(result.recall[1:] >= result.recall[:-1]):
+        raise RuntimeError("internal error: recall must be non-decreasing")
+    if result.precision[0] != 1.0 or result.recall[0] != 0.0:
+        raise RuntimeError("internal error: PR curve must start at (precision=1, recall=0)")
+    if result.recall[-1] != 1.0:
+        raise RuntimeError("internal error: PR curve must end with recall == 1")
+
+
+def _check_roc_auc_postconditions(value: float) -> None:
+    if not isinstance(value, float):
+        raise RuntimeError(
+            f"internal error: roc_auc_score result is not a float, got {type(value).__name__}"
+        )
+    if not math.isfinite(value):
+        raise RuntimeError(f"internal error: roc_auc_score result {value!r} is not finite")
+    tolerance = 1e-9
+    if not (-tolerance <= value <= 1.0 + tolerance):
+        raise RuntimeError(f"internal error: roc_auc_score result {value!r} is outside [0, 1]")
