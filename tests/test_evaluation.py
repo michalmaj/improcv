@@ -1095,6 +1095,94 @@ def test_y_score_rejects_wider_than_float64_floating_dtype_when_present() -> Non
         roc_curve(y_true, y_score, positive_label=1)
 
 
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_ranking_functions_reject_python_integer_outside_float64_range(value: int) -> None:
+    for function in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError, match="exactly representable as float64"):
+            function([0, 1, 0], [0, value, 1], positive_label=1)
+
+
+def test_ranking_functions_reject_python_integer_outside_float64_range_has_overflow_cause() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        roc_curve([0, 1, 0], [0, 10**400, 1], positive_label=1)
+    assert isinstance(excinfo.value.__cause__, OverflowError)
+
+
+def test_y_score_large_exactly_representable_int_beyond_2_53_is_still_legal() -> None:
+    # 2**60 is far beyond 2**53 (where float64 precision loss starts) but is itself an exact
+    # power of two, hence exactly representable -- the overflow fix must not have turned the
+    # "not exactly representable" contract into a blanket range limit.
+    value = 2**60
+    assert int(float(value)) == value
+    for function in _RANKING_FUNCTIONS:
+        function([0, 1, 0], [0, value, 1], positive_label=1)
+
+
+def test_y_score_rejects_wider_numpy_floating_scalar_in_sequence() -> None:
+    if np.dtype(np.longdouble) == np.dtype(np.float64):
+        pytest.skip("this platform's longdouble is identical to float64 -- nothing wider exists")
+
+    value = np.longdouble("0.5")
+    for function in _RANKING_FUNCTIONS:
+        with pytest.raises(TypeError, match="float64|longdouble"):
+            function([0, 1], [np.longdouble("0.1"), value], positive_label=1)  # type: ignore[arg-type]
+
+
+def test_y_score_wider_numpy_floating_scalar_would_create_a_false_tie_if_unchecked() -> None:
+    if np.dtype(np.longdouble) == np.dtype(np.float64):
+        pytest.skip("this platform's longdouble is identical to float64 -- nothing wider exists")
+
+    lower = np.longdouble(1.0)
+    higher = np.nextafter(lower, np.longdouble(2.0), dtype=np.longdouble)
+    assert lower != higher
+    assert float(lower) == float(higher)
+
+    for function in _RANKING_FUNCTIONS:
+        with pytest.raises(TypeError):
+            function([0, 1], [lower, higher], positive_label=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_y_score_accepts_numpy_floating_scalars_of_allowed_dtype_in_sequence(dtype) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [dtype(0.1), dtype(0.9), dtype(0.2), dtype(0.8)]
+    for function in _RANKING_FUNCTIONS:
+        function(y_true, y_score, positive_label=1)
+
+
+def test_roc_curve_signed_zero_is_permutation_deterministic() -> None:
+    first = roc_curve([0, 1], [0.0, -0.0], positive_label=1)
+    second = roc_curve([1, 0], [-0.0, 0.0], positive_label=1)
+    assert first == second
+    assert first.thresholds.tobytes() == second.thresholds.tobytes()
+    assert not np.signbit(first.thresholds[1])
+    assert not np.signbit(second.thresholds[1])
+
+
+def test_precision_recall_curve_signed_zero_is_permutation_deterministic() -> None:
+    first = precision_recall_curve([0, 1], [0.0, -0.0], positive_label=1)
+    second = precision_recall_curve([1, 0], [-0.0, 0.0], positive_label=1)
+    assert first == second
+    assert first.thresholds.tobytes() == second.thresholds.tobytes()
+    assert not np.signbit(first.thresholds[1])
+    assert not np.signbit(second.thresholds[1])
+
+
+def test_roc_auc_score_signed_zero_is_permutation_deterministic() -> None:
+    first = roc_auc_score([0, 1], [0.0, -0.0], positive_label=1)
+    second = roc_auc_score([1, 0], [-0.0, 0.0], positive_label=1)
+    assert first == second
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_y_score_ndarray_signed_zero_thresholds_are_always_positive_zero(dtype) -> None:
+    y_score = np.array([0.0, -0.0], dtype=dtype)
+    roc = roc_curve([0, 1], y_score, positive_label=1)
+    assert not np.signbit(roc.thresholds[1])
+    pr = precision_recall_curve([0, 1], y_score, positive_label=1)
+    assert not np.signbit(pr.thresholds[1])
+
+
 def test_ranking_functions_do_not_mutate_or_alias_inputs() -> None:
     y_true = [0, 0, 1, 1]
     y_score = np.array([0.1, 0.4, 0.35, 0.8], dtype=np.float64)
