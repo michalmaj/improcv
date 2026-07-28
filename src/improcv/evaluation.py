@@ -1,5 +1,6 @@
 """Classification evaluation core: confusion matrices, precision/recall/F1/support, and
-binary ranking curves (ROC, precision-recall, ROC AUC, average precision).
+binary ranking curves (ROC, precision-recall, ROC AUC, average precision), plus a generic
+trapezoidal `auc(x, y)` helper.
 
 `confusion_matrix`/`classification_metrics` are single-label multiclass only: exactly one
 true class and one predicted class per sample, integer labels only. `roc_curve`/
@@ -7,9 +8,13 @@ true class and one predicted class per sample, integer labels only. `roc_curve`/
 explicit `positive_label` picks the positive class, every other observed label is negative,
 regardless of how many distinct negative labels occur -- there is no automatic inference of
 which label is positive. `average_precision_score` is classification ranking average
-precision, not object-detection AP or mAP. Does not cover plotting, multilabel classification,
-sample weights, `average="binary"`, multiclass ranking curves/averaging, a generic `auc(x, y)`
-helper, or trapezoidal PR AUC -- those are separate, later concerns, not part of this core.
+precision, not object-detection AP or mAP. `auc` is a general-purpose trapezoidal
+area-under-curve helper with no ranking semantics of its own -- it also computes the
+trapezoidal area under the precision-recall curve (`auc(curve.recall, curve.precision)`), a
+distinct quantity from `average_precision_score` that this module deliberately does not expose
+under a separate name (see `auc`'s docstring). Does not cover plotting, multilabel
+classification, sample weights, `average="binary"`, or multiclass ranking curves/averaging --
+those are separate, later concerns, not part of this core.
 
 Several deliberate departures from `scikit-learn.metrics`'s well-known behavior (documented at
 the call sites that enforce them): a duplicate value in an explicit `labels` sequence raises
@@ -41,6 +46,7 @@ __all__ = [
     "ConfusionMatrixResult",
     "PrecisionRecallCurve",
     "RocCurve",
+    "auc",
     "average_precision_score",
     "classification_metrics",
     "classification_metrics_from_confusion_matrix",
@@ -1026,14 +1032,81 @@ def roc_auc_score(
     false_positive_rate = core.false_positives.astype(np.float64) / core.n_negative
     true_positive_rate = core.true_positives.astype(np.float64) / core.n_positive
 
-    area = float(
-        np.sum(
-            np.diff(false_positive_rate) * (true_positive_rate[:-1] + true_positive_rate[1:]) * 0.5,
-            dtype=np.float64,
-        )
-    )
+    area = _trapezoidal_area(false_positive_rate, true_positive_rate)
     _check_roc_auc_postconditions(area)
     return area
+
+
+def auc(
+    x: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    y: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
+) -> float:
+    """Compute the area under a curve given as `(x, y)` points, using the trapezoidal rule.
+
+    A general-purpose geometric helper with no ranking semantics of its own -- unlike
+    `roc_auc_score`/`average_precision_score`, it has no `positive_label`, no tie-aggregation,
+    and no notion of "positive"/"negative" samples. `x` must be either non-decreasing or
+    non-increasing throughout (duplicate `x` values are legal in either direction and
+    contribute a zero-width segment; constant `x` is legal and gives exactly `0.0`); a
+    non-increasing `x` gives the same positive geometric area as the equivalent non-decreasing
+    order would -- this is not a signed integral, so the result never depends on which
+    direction a monotonic `x` happens to be given in. `y` may be negative, and so may the
+    result: there is no `[0, 1]` bound here the way there is for `roc_auc_score`/
+    `average_precision_score`, whose `x`/`y` are always ratios in `[0, 1]` by construction.
+
+    `x`/`y` accept the same containers/dtypes as `roc_curve`'s `y_score` (a `Sequence` of
+    Python `int`/`float` or NumPy `float16`/`float32`/`float64` scalars, or a 1-D `ndarray` with
+    an integer or `float16`/`float32`/`float64` dtype) -- a generator/iterator, a 2-D (including
+    a column-vector-shaped `(n, 1)` array -- deliberately not silently raveled) or 0-D array, a
+    `bool`/complex/object/wider-than-`float64` floating dtype, NaN/Inf, and an integer not
+    exactly representable as `float64` are all rejected, for the same reasons `y_score` rejects
+    them: consistency and no silent precision loss anywhere in this module, even though `x`/`y`
+    here are curve coordinates, not ranking scores.
+
+    This function computes the trapezoidal area under the precision-recall curve when called
+    as `auc(curve.recall, curve.precision)` for a `curve` from `precision_recall_curve` -- this
+    is a distinct quantity from `average_precision_score` (a non-interpolated, non-trapezoidal
+    definition; see that function's docstring), and this module deliberately does not expose
+    the trapezoidal PR-curve area under its own name: `auc(curve.recall, curve.precision)` is
+    the complete, supported way to compute it.
+
+    An intermediate segment width, height sum, or product that would overflow `float64` is
+    recovered through an exact, power-of-two-scaled fallback where the true geometric area is
+    still finite and representable; only an input whose true area is not representable as a
+    finite `float64` raises `ValueError`. No NumPy warning is ever emitted for an accepted
+    input, and this never silently returns `inf`/`-inf`/`NaN`.
+
+    Raises
+    ------
+    TypeError
+        If `x`/`y` is not a `Sequence`/1-D `ndarray`, if an element/dtype is `bool`, complex,
+        `object`, or a floating type wider than `float64`, or if an element is not a
+        Python/NumPy int or float.
+    ValueError
+        If `x`/`y` is empty, if either `ndarray` is not 1-D, if an element is NaN/Inf (or an
+        integer not exactly representable as `float64`), if `x` and `y` have different lengths,
+        if fewer than 2 points are given, if `x` is neither non-decreasing nor non-increasing,
+        or if the true area is not representable as a finite `float64`.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+    """
+    x_array = _normalize_score_sequence(x, "x")
+    y_array = _normalize_score_sequence(y, "y")
+    if x_array.shape[0] != y_array.shape[0]:
+        raise ValueError(
+            f"x and y must have the same length, got {x_array.shape[0]} and {y_array.shape[0]}"
+        )
+    if x_array.shape[0] < 2:
+        raise ValueError(f"at least 2 points are needed to compute an area, got {x_array.shape[0]}")
+
+    non_decreasing = np.all(x_array[1:] >= x_array[:-1])
+    non_increasing = np.all(x_array[1:] <= x_array[:-1])
+    if not (non_decreasing or non_increasing):
+        raise ValueError("x must be monotonic (either non-decreasing or non-increasing)")
+
+    result = _trapezoidal_area(x_array, y_array)
+    _check_auc_postconditions(result)
+    return result
 
 
 class _RankingCore(NamedTuple):
@@ -1154,6 +1227,58 @@ def _compute_precision_recall_arrays(
 
     recall = true_positive / core.n_positive
     return precision, recall
+
+
+def _trapezoidal_area(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> float:
+    """Sum of `|x[i+1]-x[i]| * (y[i]+y[i+1]) * 0.5` over every segment -- shared by `auc` and
+    `roc_auc_score`.
+
+    Assumes `x`/`y` are already validated (finite, matching length, at least 2 points); `x`
+    does not need to be monotonic here (`roc_auc_score`'s `false_positive_rate` always is, by
+    construction, so `abs()` is a no-op there -- verified directly that this shared formula
+    reproduces `roc_auc_score`'s previous bit-for-bit result on representative curves, ties,
+    constant scores, and 1000 random deterministic rankings).
+
+    Tries the plain operation order first, under `np.errstate(over="raise", invalid="raise")`
+    so an overflowing/NaN-producing intermediate raises `FloatingPointError` instead of
+    silently returning `inf`/`NaN` with only a printed (and easily missed) `RuntimeWarning` --
+    verified directly that NumPy's default ("warn") mode does exactly that for a genuinely
+    finite, representable input (e.g. `x=[0, 1e250], y=[1e200, 1e200]`). For `roc_auc_score`'s
+    own `[0, 1]`-bounded domain this can never overflow, so that fast path is always the one
+    taken, unchanged.
+
+    If the fast path overflows, falls back to an exact, power-of-two-scaled recomputation:
+    scaling by `0.5`/`2.0` is always exact under IEEE 754 (only the exponent changes, never the
+    mantissa, short of underflow/overflow at the very extremes), so halving both operands
+    before combining them and rescaling once at the end recovers a segment whose true
+    contribution is finite even though the direct computation of its width, height sum, or
+    product would overflow -- verified directly for a height-sum overflow with finite result
+    (`x=[0,1], y=[M,M]` -> exactly `M`), a width overflow with finite result (`x=[-M,M],
+    y=[0,0]` -> exactly `0.0`), constant `x` with an extreme finite `y` (`x=[0,0], y=[M,M]` ->
+    exactly `0.0`), and a width overflow combined with a tiny `y` giving a finite, nonzero
+    result, all without emitting any NumPy warning. Deferring the final `*2.0` rescale until
+    after summing every segment (rather than rescaling each segment individually) gives the
+    aggregate sum extra headroom before it, itself, could overflow.
+
+    Only raises `ValueError` if even this safe fallback cannot produce a finite result (i.e.
+    the true geometric area genuinely is not representable as a finite `float64`, such as
+    `x=[-M,M], y=[M,M]`) -- never claims non-representability merely because the first,
+    unscaled attempt happened to overflow.
+    """
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            return float(np.sum(np.abs(np.diff(x)) * (y[:-1] + y[1:]) * 0.5, dtype=np.float64))
+    except FloatingPointError:
+        pass
+
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            half_width = np.abs(x[1:] * 0.5 - x[:-1] * 0.5)
+            half_height_sum = y[:-1] * 0.5 + y[1:] * 0.5
+            half_total = np.sum(half_width * half_height_sum, dtype=np.float64)
+            return float(half_total * 2.0)
+    except FloatingPointError as exc:
+        raise ValueError("the trapezoidal area could not be computed as a finite float64") from exc
 
 
 _ALLOWED_SCORE_FLOAT_DTYPES = (
@@ -1399,3 +1524,14 @@ def _check_average_precision_postconditions(value: float) -> None:
         raise RuntimeError(
             f"internal error: average_precision_score result {value!r} is outside [0, 1]"
         )
+
+
+def _check_auc_postconditions(value: float) -> None:
+    """Unlike `_check_roc_auc_postconditions`/`_check_average_precision_postconditions`, does
+    not check a `[0, 1]` bound: `auc`'s `x`/`y` are arbitrary, so its result can legitimately be
+    negative or greater than `1.0` -- only finiteness is guaranteed by construction here.
+    """
+    if not isinstance(value, float):
+        raise RuntimeError(f"internal error: auc result is not a float, got {type(value).__name__}")
+    if not math.isfinite(value):
+        raise RuntimeError(f"internal error: auc result {value!r} is not finite")

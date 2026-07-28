@@ -16,6 +16,7 @@ from improcv.evaluation import (
     ConfusionMatrixResult,
     PrecisionRecallCurve,
     RocCurve,
+    auc,
     average_precision_score,
     classification_metrics,
     classification_metrics_from_confusion_matrix,
@@ -806,6 +807,7 @@ def test_evaluation_exports_from_top_level_package() -> None:
     assert im.RocCurve is RocCurve
     assert im.PrecisionRecallCurve is PrecisionRecallCurve
     assert im.average_precision_score is average_precision_score
+    assert im.auc is auc
 
 
 # =====================================================================================
@@ -1433,6 +1435,363 @@ def test_roc_auc_score_does_not_use_trapz_or_trapezoid() -> None:
         if isinstance(node, ast.Attribute) and node.attr in ("trapz", "trapezoid")
     }
     assert forbidden == set()
+
+
+def test_evaluation_module_does_not_import_scipy_or_sklearn() -> None:
+    import ast
+    import inspect
+
+    from improcv import evaluation
+
+    tree = ast.parse(inspect.getsource(evaluation))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "scipy" not in imported
+    assert "sklearn" not in imported
+
+
+def test_roc_auc_score_bit_identical_to_pre_refactor_arithmetic_standard_example() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    core_fpr = np.array([0.0, 0.0, 0.5, 0.5, 1.0])
+    core_tpr = np.array([0.0, 0.5, 0.5, 1.0, 1.0])
+    pre_refactor = float(
+        np.sum(np.diff(core_fpr) * (core_tpr[:-1] + core_tpr[1:]) * 0.5, dtype=np.float64)
+    )
+    assert roc_auc_score(y_true, y_score, positive_label=1) == pre_refactor
+
+
+def test_roc_auc_score_bit_identical_to_pre_refactor_arithmetic_mixed_ties() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.5, 0.5, 0.5, 0.9, 0.9, 0.1]
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    pre_refactor = float(
+        np.sum(
+            np.diff(roc.false_positive_rate)
+            * (roc.true_positive_rate[:-1] + roc.true_positive_rate[1:])
+            * 0.5,
+            dtype=np.float64,
+        )
+    )
+    assert roc_auc_score(y_true, y_score, positive_label=1) == pre_refactor
+
+
+def test_roc_auc_score_bit_identical_to_pre_refactor_arithmetic_constant_scores() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.5, 0.5, 0.5, 0.5]
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    pre_refactor = float(
+        np.sum(
+            np.diff(roc.false_positive_rate)
+            * (roc.true_positive_rate[:-1] + roc.true_positive_rate[1:])
+            * 0.5,
+            dtype=np.float64,
+        )
+    )
+    assert roc_auc_score(y_true, y_score, positive_label=1) == pre_refactor
+
+
+def test_roc_auc_score_bit_identical_to_pre_refactor_arithmetic_extreme_scores() -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+    ]
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pre_refactor = float(
+            np.sum(
+                np.diff(roc.false_positive_rate)
+                * (roc.true_positive_rate[:-1] + roc.true_positive_rate[1:])
+                * 0.5,
+                dtype=np.float64,
+            )
+        )
+        result = roc_auc_score(y_true, y_score, positive_label=1)
+    assert result == pre_refactor
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+def test_roc_auc_score_bit_identical_to_pre_refactor_arithmetic_random_rankings(seed) -> None:
+    rng = np.random.default_rng(seed)
+    n = int(rng.integers(4, 30))
+    y_true = rng.integers(0, 2, size=n).tolist()
+    if 0 not in y_true:
+        y_true[0] = 0
+    if 1 not in y_true:
+        y_true[1] = 1
+    y_score = rng.random(n).tolist()
+    roc = roc_curve(y_true, y_score, positive_label=1)
+    pre_refactor = float(
+        np.sum(
+            np.diff(roc.false_positive_rate)
+            * (roc.true_positive_rate[:-1] + roc.true_positive_rate[1:])
+            * 0.5,
+            dtype=np.float64,
+        )
+    )
+    assert roc_auc_score(y_true, y_score, positive_label=1) == pre_refactor
+
+
+# --- generic auc(x, y) ---
+
+
+def _manual_trapezoid_oracle(x, y) -> float:
+    """Independent oracle: plain Python loop over segment pairs, no NumPy trapezoid helpers."""
+    total = 0.0
+    for i in range(len(x) - 1):
+        width = abs(x[i + 1] - x[i])
+        height_sum = y[i] + y[i + 1]
+        total += width * height_sum * 0.5
+    return total
+
+
+def test_auc_triangle_manual_area() -> None:
+    # Triangle with base 2, height 2: area = 0.5 * base * height = 2.0
+    assert auc([0.0, 1.0, 2.0], [0.0, 2.0, 0.0]) == 2.0
+
+
+def test_auc_rectangle_manual_area() -> None:
+    assert auc([0.0, 1.0, 2.0], [3.0, 3.0, 3.0]) == 6.0
+
+
+def test_auc_exactly_two_points() -> None:
+    assert auc([0.0, 1.0], [2.0, 4.0]) == 3.0
+
+
+def test_auc_repeated_x_increasing_and_decreasing() -> None:
+    assert auc([0.0, 1.0, 1.0, 2.0], [1.0, 1.0, 5.0, 5.0]) == pytest.approx(
+        _manual_trapezoid_oracle([0.0, 1.0, 1.0, 2.0], [1.0, 1.0, 5.0, 5.0])
+    )
+    assert auc([2.0, 1.0, 1.0, 0.0], [5.0, 5.0, 1.0, 1.0]) == pytest.approx(
+        _manual_trapezoid_oracle([2.0, 1.0, 1.0, 0.0], [5.0, 5.0, 1.0, 1.0])
+    )
+
+
+def test_auc_constant_x_is_zero() -> None:
+    assert auc([2.0, 2.0, 2.0], [1.0, 5.0, 9.0]) == 0.0
+
+
+def test_auc_decreasing_x_gives_same_positive_area_as_increasing() -> None:
+    x = [0.0, 0.3, 0.7, 1.0]
+    y = [0.2, 0.5, 0.4, 0.9]
+    increasing = auc(x, y)
+    decreasing = auc(list(reversed(x)), list(reversed(y)))
+    assert increasing == pytest.approx(decreasing)
+    assert increasing > 0.0
+
+
+def test_auc_rejects_non_monotonic_x() -> None:
+    with pytest.raises(ValueError, match="monotonic"):
+        auc([0.0, 1.0, 0.5], [1.0, 2.0, 3.0])
+
+
+def test_auc_rejects_empty_input() -> None:
+    with pytest.raises(ValueError):
+        auc([], [])
+
+
+def test_auc_rejects_one_point() -> None:
+    with pytest.raises(ValueError):
+        auc([1.0], [2.0])
+
+
+def test_auc_rejects_mismatched_lengths() -> None:
+    with pytest.raises(ValueError):
+        auc([0.0, 1.0, 2.0], [0.0, 1.0])
+
+
+@pytest.mark.parametrize(
+    ("make_bad", "expected_exception"),
+    [
+        (lambda: (v for v in [0.0, 1.0, 2.0]), TypeError),
+        (lambda: iter([0.0, 1.0, 2.0]), TypeError),
+        (lambda: "012", TypeError),
+        (lambda: b"012", TypeError),
+        (lambda: np.array(1.0), ValueError),
+        (lambda: np.array([[0.0, 1.0], [2.0, 3.0]]), ValueError),
+        (lambda: np.array([[1.0], [2.0], [3.0]]), ValueError),
+        (lambda: np.array([True, False, True]), TypeError),
+        (lambda: np.array([1 + 2j, 3 + 4j, 5 + 6j]), TypeError),
+        (lambda: np.array([0.0, 1.0, 2.0], dtype=object), TypeError),
+        (lambda: [0.0, float("nan"), 2.0], ValueError),
+        (lambda: [0.0, float("inf"), 2.0], ValueError),
+        (lambda: [0.0, 2**53 + 1, 2.0], ValueError),
+    ],
+)
+def test_auc_rejects_bad_x_and_y(make_bad, expected_exception) -> None:
+    good = [0.0, 1.0, 2.0]
+    with pytest.raises(expected_exception):
+        auc(make_bad(), good)
+    with pytest.raises(expected_exception):
+        auc(good, make_bad())
+
+
+def test_auc_rejects_column_vector_shaped_ndarray() -> None:
+    # (n, 1) is deliberately NOT silently raveled, unlike sklearn's column_or_1d.
+    with pytest.raises(ValueError, match="1-D"):
+        auc(np.array([[0.0], [1.0], [2.0]]), [0.0, 1.0, 2.0])
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_auc_accepts_supported_floating_dtypes(dtype) -> None:
+    x = np.array([0.0, 1.0, 2.0], dtype=dtype)
+    y = np.array([0.0, 1.0, 0.0], dtype=dtype)
+    assert auc(x, y) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint32])
+def test_auc_accepts_integer_dtypes(dtype) -> None:
+    x = np.array([0, 1, 2], dtype=dtype)
+    y = np.array([0, 2, 0], dtype=dtype)
+    assert auc(x, y) == 2.0
+
+
+def test_auc_rejects_wider_than_float64_floating_dtype_when_present() -> None:
+    if np.dtype(np.longdouble) == np.dtype(np.float64):
+        pytest.skip("this platform's longdouble is identical to float64 -- nothing wider exists")
+    with pytest.raises(TypeError):
+        auc(np.array([0.0, 1.0, 2.0], dtype=np.longdouble), [0.0, 1.0, 0.0])
+
+
+def test_auc_signed_zero_x_is_treated_as_duplicate() -> None:
+    assert auc([0.0, -0.0, 1.0], [1.0, 1.0, 1.0]) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("container", [list, tuple, _CustomScoreSequence])
+def test_auc_accepts_various_sequence_containers(container) -> None:
+    x = container([0.0, 1.0, 2.0])
+    y = container([0.0, 2.0, 0.0])
+    assert auc(x, y) == 2.0
+
+
+def test_auc_does_not_mutate_or_alias_inputs() -> None:
+    x = np.array([0.0, 1.0, 2.0], dtype=np.float64)
+    y = np.array([0.0, 2.0, 0.0], dtype=np.float64)
+    x_copy = x.copy()
+    y_copy = y.copy()
+    auc(x, y)
+    assert_array_equal(x, x_copy)
+    assert_array_equal(y, y_copy)
+
+
+def test_auc_result_is_plain_float() -> None:
+    assert type(auc([0.0, 1.0, 2.0], [0.0, 2.0, 0.0])) is float
+
+
+def test_auc_result_can_be_negative() -> None:
+    result = auc([0.0, 1.0, 2.0], [1.0, -1.0, -3.0])
+    assert result < 0.0
+    assert result == -2.0
+
+
+def test_auc_result_can_exceed_unit_interval() -> None:
+    result = auc([0.0, 1.0, 2.0], [10.0, 20.0, 30.0])
+    assert result == 40.0
+
+
+# --- generic auc(x, y): overflow safety (mandatory cases from the approved corrections) ---
+
+
+def test_auc_avoids_intermediate_height_sum_overflow() -> None:
+    M = np.finfo(np.float64).max
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc([0.0, 1.0], [M, M])
+    assert result == M
+
+
+def test_auc_avoids_intermediate_width_overflow_for_zero_area() -> None:
+    M = np.finfo(np.float64).max
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc([-M, M], [0.0, 0.0])
+    assert result == 0.0
+
+
+def test_auc_constant_x_with_extreme_finite_y_is_zero() -> None:
+    M = np.finfo(np.float64).max
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc([0.0, 0.0], [M, M])
+    assert result == 0.0
+
+
+def test_auc_width_overflow_with_tiny_y_gives_finite_nonzero_result() -> None:
+    M = np.finfo(np.float64).max
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc([-M, M], [1e-300, 1e-300])
+    assert result > 0.0
+    assert math.isfinite(result)
+
+
+def test_auc_mixed_sign_y_gives_negative_result() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc([0.0, 1.0, 2.0], [1.0, -1.0, -3.0])
+    assert result == -2.0
+
+
+def test_auc_genuinely_non_representable_area_raises_value_error() -> None:
+    M = np.finfo(np.float64).max
+    with pytest.raises(ValueError, match="finite float64"):
+        auc([-M, M], [M, M])
+
+
+def test_auc_extreme_arithmetic_never_warns() -> None:
+    M = np.finfo(np.float64).max
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        auc([0.0, 1.0], [M, M])
+        auc([-M, M], [0.0, 0.0])
+        auc([0.0, 0.0], [M, M])
+        auc([-M, M], [1e-300, 1e-300])
+        auc([0.0, 1.0, 2.0], [1.0, -1.0, -3.0])
+        with pytest.raises(ValueError):
+            auc([-M, M], [M, M])
+
+
+def test_auc_matches_independent_manual_oracle_for_ordinary_data() -> None:
+    rng = np.random.default_rng(11)
+    for _ in range(20):
+        n = int(rng.integers(2, 15))
+        x = np.sort(rng.uniform(-10, 10, n)).tolist()
+        y = rng.uniform(-10, 10, n).tolist()
+        expected = _manual_trapezoid_oracle(x, y)
+        assert auc(x, y) == pytest.approx(expected)
+
+
+# --- generic auc(x, y): trapezoidal PR AUC composition (distinct from average_precision_score) ---
+
+
+def test_auc_trapezoidal_pr_curve_area_example_trapezoid_larger_than_ap() -> None:
+    y_true = [0, 1, 0]
+    y_score = [3, 3, 2]
+    curve = precision_recall_curve(y_true, y_score, positive_label=1)
+    ap = average_precision_score(y_true, y_score, positive_label=1)
+    trapezoid = auc(curve.recall, curve.precision)
+    assert ap == 1 / 2
+    assert trapezoid == 3 / 4
+    assert trapezoid > ap
+
+
+def test_auc_trapezoidal_pr_curve_area_example_trapezoid_smaller_than_ap() -> None:
+    y_true = [0, 0, 1]
+    y_score = [3, 3, 2]
+    curve = precision_recall_curve(y_true, y_score, positive_label=1)
+    ap = average_precision_score(y_true, y_score, positive_label=1)
+    trapezoid = auc(curve.recall, curve.precision)
+    assert ap == 1 / 3
+    assert trapezoid == 1 / 6
+    assert trapezoid < ap
 
 
 # --- average precision ---

@@ -214,6 +214,30 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   sample returns exactly `1.0`; constant scores return exactly the positive prevalence. No
   trapezoidal PR AUC, no generic `auc(x, y)` helper, no interpolated/VOC/COCO-style AP, no
   object-detection AP/mAP, no new public result type, and no new dependency in this slice.
+- `improcv.evaluation`, Phase 5 slice: a general-purpose trapezoidal area-under-curve helper,
+  `auc(x, y)`, with no ranking semantics of its own (no `positive_label`, no tie-aggregation, no
+  positive/negative samples) -- `x` must be non-decreasing or non-increasing throughout (duplicate
+  `x` values are legal either way and contribute a zero-width segment; constant `x` gives exactly
+  `0.0`); a non-increasing `x` gives the same positive geometric area a non-decreasing order of the
+  same points would, not a signed integral. `y` may be negative and so may the result -- unlike
+  `roc_auc_score`/`average_precision_score`, whose domain is always `[0, 1]` by construction, `auc`
+  has no such bound. An intermediate segment width, height sum, or product that would overflow
+  `float64` is recovered through an exact, power-of-two-scaled fallback (scaling by `0.5`/`2.0` is
+  lossless under IEEE 754) wherever the true geometric area is still finite and representable --
+  verified directly for a height-sum overflow with a finite result, a width overflow with a finite
+  result, constant `x` with an extreme finite `y`, and a width overflow combined with a tiny `y`
+  giving a finite nonzero result, all without emitting a NumPy warning; only an input whose true
+  area is not representable as a finite `float64` raises `ValueError`, never silently `inf`/`-inf`/
+  `NaN`. `auc` computes the trapezoidal area under the precision-recall curve when called as
+  `auc(curve.recall, curve.precision)` -- a distinct quantity from `average_precision_score` (see
+  above), and the complete, supported way to obtain it: there is no separate score-level function
+  for it, to avoid a symbol that could be confused with `average_precision_score`. `roc_auc_score`
+  now shares its trapezoidal arithmetic with `auc` through a common private primitive (verified
+  bit-identical to its previous result for representative curves, ties, constant scores, extreme
+  accepted scores, and several deterministic random rankings) -- its own public behavior,
+  `[0, 1]`-bounded postconditions, and input contract are unchanged. No new public result type, no
+  `precision_recall_auc_score` or other score-level alias, no SciPy, and no new dependency in this
+  slice.
 
 ### Fixed
 - `improcv.discovery`: `discover_images` now classifies descendants using a fresh path-based

@@ -50,9 +50,12 @@ version decided at the time each is actually published, rather than mechanically
   loading implemented; generic inference and backend/target wrappers are out of scope for now, not
   started, see [CHANGELOG.md](CHANGELOG.md)), classification-evaluation utilities deferred from
   Phase 3 (confusion matrix and accuracy/precision/recall/F1 core implemented; binary one-vs-rest
-  ROC/precision-recall curves, ROC AUC, and average precision implemented; trapezoidal PR AUC, a
-  generic `auc(x, y)` helper, multiclass ranking curves/averaging, sample weights, and plotting
-  remain planned, not started, see [CHANGELOG.md](CHANGELOG.md)), image augmentation
+  ROC/precision-recall curves, ROC AUC, and average precision implemented; a generic trapezoidal
+  `auc(x, y)` helper implemented, also covering trapezoidal PR-curve area through the supported
+  composition `auc(curve.recall, curve.precision)` -- no separate score-level function for it was
+  added, deliberately, to avoid a symbol that could be confused with `average_precision_score`;
+  multiclass ranking curves/averaging and sample weights remain planned, not started, see
+  [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-scale sampling/replay implemented; perspective, anisotropic
   scale, and canvas expansion remain planned, not started), and dataset discovery (deterministic,
