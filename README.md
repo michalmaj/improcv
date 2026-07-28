@@ -839,6 +839,42 @@ perspective warp, no anisotropic scale, no canvas expansion, no photometric augm
 (brightness/contrast/blur/noise), no bounding box/keypoint/polygon support, and no `Compose`-style
 augmentation pipeline.
 
+Dataset image discovery:
+
+```python
+files = im.discover_images(
+    "dataset/images",
+    recursive=True,
+)
+```
+
+With custom extensions:
+
+```python
+files = im.discover_images(
+    "dataset/images",
+    extensions={".png", ".tif"},
+)
+```
+
+`discover_images` finds candidate image files under a directory by filename extension only --
+files are never opened or decoded, so an empty, corrupted, or non-image file with a matching
+extension is still discovered. The result is a materialized, globally-sorted `tuple[Path, ...]`
+(sorted by each path's POSIX-style form relative to `root`, independent of the underlying
+filesystem's traversal order or the platform's path separator) -- this costs `O(N)` memory, so this
+is not a streaming indexer for an arbitrarily large tree. Returned paths keep `root`'s own
+relative/absolute form (e.g. `discover_images("data")` returns paths like `Path("data/cat.jpg")`,
+never resolved or made absolute). `root` itself may be a symlink to a directory, but any symlink or
+Windows reparse point (including a junction) found *while traversing* `root`'s contents is always
+skipped, along with everything under it -- there is no `follow_symlinks` option. A descendant file
+or directory whose name starts with `.` is skipped by default (this never applies to `root` itself,
+so an explicitly given `root` like `".dataset"` is still searched); pass `include_hidden=True` to
+include them. Filesystem errors are fail-fast: a missing/inaccessible `root`, or a permission error
+encountered anywhere during traversal, raises immediately rather than silently skipping data. An
+empty directory, or a directory with no matching files, returns `()`, not an error. This slice does
+not pair images with masks, infer classes from directory names, produce dataset splits, or load/
+decode any image, and adds no new dependency.
+
 ## Status
 
 `improcv` is in early development. `0.1.0a1` is designated as the first public release and covers
