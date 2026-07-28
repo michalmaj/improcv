@@ -117,6 +117,27 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   the original error preserved as `__cause__`) since `warp_affine` itself does not. The mask dtype
   contract is unchanged from flip/crop (`uint8`/`uint16`/`int16`; `int32` support remains a possible,
   compatible future extension, not added here). No new dependency.
+- `improcv.augmentation`: affine shear sampling and replay using sequential x-then-y,
+  area-preserving shear coefficients -- `sample_affine` gains `shear_x_range`/`shear_y_range`
+  (each an independently sampled `(low, high)` tuple, same contract as the other `*_range`
+  parameters, no positivity restriction and no `abs(shear)` limit), and `AffineParameters` gains a
+  keyword-only `shear: tuple[float, float] = (0.0, 0.0)` field -- the pre-existing five-positional-
+  argument construction, `__match_args__` (unchanged, still the original five field names), and
+  positional pattern matching all keep working exactly as before. Shear is parameterized as a raw,
+  dimensionless coefficient (not degrees -- a degrees-based `tan()` conversion has a practically
+  unguarded singularity at ±90° that a raw coefficient doesn't), applied as `Shy(shear_y) @
+  Shx(shear_x)` (`[[1, shear_x], [shear_y, 1 + shear_x*shear_y]]`): determinant `1` for any finite
+  coefficients, so it's never singular and never flips orientation, unlike the naive-looking
+  `[[1, shear_x], [shear_y, 1]]` (determinant `1 - shear_x*shear_y`), which `improcv` does not use.
+  Composition order is shear x, then shear y, then rotation + isotropic scale around the same
+  center as before, then translation -- shear does not commute with rotation, so this is a fixed,
+  documented part of the contract. When `shear_x_range`/`shear_y_range` are left at their `(0.0,
+  0.0)` default, the matrix is built via the pre-shear code path with no extra matrix
+  multiplication (bit-for-bit identical to before this change, not just numerically close) and no
+  extra `rng.uniform` call is made, so existing call sites keep sampling `angle`/`translation`/
+  `scale` from exactly the same `rng` sequence, call after call, as they did before shear existed.
+  `apply_affine`'s public signature, the mask dtype contract, and `transforms.py` are all
+  unchanged. No new dependency.
 
 ### Fixed
 - `improcv.augmentation`: `apply_affine` now rejects `WARP_INVERSE_MAP` and other non-interpolation

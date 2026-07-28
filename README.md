@@ -763,7 +763,7 @@ crop_params = im.sample_crop(
 pair = im.apply_crop(image, crop_params, mask=mask)
 ```
 
-Augmentation sampling and replay -- affine (rotation, translation, isotropic scale):
+Augmentation sampling and replay -- affine (shear, rotation, translation, isotropic scale):
 
 ```python
 affine_params = im.sample_affine(
@@ -773,6 +773,8 @@ affine_params = im.sample_affine(
     translation_x_range=(-8.0, 8.0),
     translation_y_range=(-8.0, 8.0),
     scale_range=(0.9, 1.1),
+    shear_x_range=(-0.15, 0.15),
+    shear_y_range=(-0.10, 0.10),
 )
 
 pair = im.apply_affine(
@@ -797,21 +799,38 @@ slice (not `bool`/`int32`/`int64`/floating-point, and not one-hot/multi-channel 
 For `sample_affine`/`apply_affine` specifically: `angle_range` is in degrees (positive =
 counter-clockwise, matching `im.rotate`); `translation_x_range`/`translation_y_range` are in pixels
 (positive `x` moves content right, positive `y` moves it down, matching `im.translate`);
-`scale_range` is a positive, dimensionless, isotropic multiplier. Each `*_range` is a `(low, high)`
-tuple sampled independently via `Generator.uniform` -- `low` is always reachable, equal endpoints
-sample that exact constant, but hitting `high` itself is not guaranteed for a non-degenerate range
-(an ordinary property of continuous floating-point sampling). The transform is always rotation +
-isotropic scale around the image center, then translated -- this composition order is fixed and
-documented, not an implementation detail, since translation does not commute with rotation/scaling.
+`scale_range` is a positive, dimensionless, isotropic multiplier. `shear_x_range`/`shear_y_range`
+are raw, dimensionless shear *coefficients*, not degrees: `shear_x` maps `x' = x + shear_x * y`,
+and `shear_y` (applied after `shear_x`) then maps `y' = y + shear_y * x'`, using the already-sheared
+`x'` -- documented as "shear x, then shear y", never as simultaneous, since that's exactly what the
+sequential composition means. A positive `shear_x` moves the bottom of the image right relative to
+the top; a positive `shear_y` moves the right side down relative to the left. Both are legal at any
+finite value, positive or negative, with no forbidden angle and no `abs(shear)` limit -- this is a
+deliberate choice of parameterization: `[[1, shear_x], [shear_y, 1 + shear_x*shear_y]]` always has
+determinant `1` (area- and orientation-preserving, never singular) for any finite coefficients,
+unlike the naive-looking `[[1, shear_x], [shear_y, 1]]`, which becomes singular whenever
+`shear_x * shear_y == 1` and flips orientation beyond that -- `improcv` never uses the naive form.
+A very large shear coefficient is still accepted, but can strongly deform the image or push its
+content outside the canvas; there is no automatic protection against that. Each `*_range` is a
+`(low, high)` tuple sampled independently via `Generator.uniform` -- `low` is always reachable,
+equal endpoints sample that exact constant, but hitting `high` itself is not guaranteed for a
+non-degenerate range (an ordinary property of continuous floating-point sampling). The transform is
+always shear x, then shear y, then rotation + isotropic scale (all around the image center), then
+translated -- this composition order is fixed and documented, not an implementation detail, since
+shear does not commute with rotation, and translation does not commute with the rest in general.
 `AffineParameters.matrix` (the `(2, 3)` matrix actually applied) is the sole source of truth for
-replay; `angle`/`translation`/`scale` are sampling metadata kept for debugging/logging/`repr` only
-and are never used to reconstruct or cross-check the matrix. Output spatial size always equals the
-source size -- this slice does not expand the canvas the way `im.rotate_bound` does. The mask is
-always warped with nearest-neighbor interpolation and a constant border (`mask_border_value`,
-default `0`); the caller cannot change the mask's interpolation or border mode, only the fill value.
+replay; `angle`/`translation`/`scale`/`shear` are sampling metadata kept for debugging/logging/
+`repr` only and are never used to reconstruct or cross-check the matrix. When `shear_x_range`/
+`shear_y_range` are left at their `(0.0, 0.0)` default, no extra `rng` draw happens and the matrix
+is bit-for-bit identical to what `sample_affine` produced before shear existed -- code written
+before this feature keeps sampling `angle`/`translation`/`scale` from the exact same `rng` sequence,
+call after call. Output spatial size always equals the source size -- this slice does not expand
+the canvas the way `im.rotate_bound` does. The mask is always warped with nearest-neighbor
+interpolation and a constant border (`mask_border_value`, default `0`); the caller cannot change
+the mask's interpolation or border mode, only the fill value.
 
-This slice covers flip, crop, and a rotation+translation+isotropic-scale affine transform: no
-shear yet (a separate, future extension), no perspective warp, no photometric augmentation
+This slice covers flip, crop, and a shear+rotation+translation+isotropic-scale affine transform: no
+perspective warp, no anisotropic scale, no canvas expansion, no photometric augmentation
 (brightness/contrast/blur/noise), no bounding box/keypoint/polygon support, and no `Compose`-style
 augmentation pipeline.
 

@@ -1,4 +1,5 @@
 import dataclasses
+import warnings
 
 import cv2
 import numpy as np
@@ -1573,3 +1574,621 @@ def test_apply_affine_rejects_manually_constructed_bad_translation(
     )
     with pytest.raises(expected_exception):
         apply_affine(image, bad_params)
+
+
+# --- shear: pure algebra (no sample_affine involved) ---
+
+
+def _sh_xy(sx: float, sy: float) -> np.ndarray:
+    return np.array([[1.0, sx], [sy, 1.0 + sx * sy]])
+
+
+def _shx(sx: float) -> np.ndarray:
+    return np.array([[1.0, sx], [0.0, 1.0]])
+
+
+def _shy(sy: float) -> np.ndarray:
+    return np.array([[1.0, 0.0], [sy, 1.0]])
+
+
+def test_shear_sequential_formula_matches_shy_matmul_shx() -> None:
+    sx, sy = 0.7, -0.4
+    np.testing.assert_allclose(_shy(sy) @ _shx(sx), _sh_xy(sx, sy))
+
+
+@pytest.mark.parametrize(
+    "sx, sy", [(0.5, 0.5), (0.2, -0.3), (-0.7, 0.1), (0.0, 0.6), (0.6, 0.0), (0.0, 0.0)]
+)
+def test_shear_sequential_determinant_is_one(sx: float, sy: float) -> None:
+    assert np.linalg.det(_sh_xy(sx, sy)) == pytest.approx(1.0)
+
+
+def test_shear_sequential_x_then_y_is_not_commutative() -> None:
+    sx, sy = 0.7, -0.4
+    xy = _shy(sy) @ _shx(sx)
+    yx = _shx(sx) @ _shy(sy)
+    assert not np.allclose(xy, yx)
+
+
+def test_shear_single_axis_x_reduces_to_elementary_shx() -> None:
+    sx = 0.42
+    np.testing.assert_allclose(_sh_xy(sx, 0.0), _shx(sx))
+
+
+def test_shear_single_axis_y_reduces_to_elementary_shy() -> None:
+    sy = -0.37
+    np.testing.assert_allclose(_sh_xy(0.0, sy), _shy(sy))
+
+
+def test_shear_sequential_inverse_is_shx_neg_matmul_shy_neg() -> None:
+    sx, sy = 0.3, 0.6
+    forward = _sh_xy(sx, sy)
+    inverse = _shx(-sx) @ _shy(-sy)
+    np.testing.assert_allclose(forward @ inverse, np.eye(2), atol=1e-12)
+    np.testing.assert_allclose(inverse @ forward, np.eye(2), atol=1e-12)
+
+
+def test_shear_sequential_preserves_orientation() -> None:
+    for sx, sy in [(0.5, 0.5), (-3.0, 2.0), (10.0, -10.0)]:
+        assert np.linalg.det(_sh_xy(sx, sy)) > 0
+
+
+# --- sample_affine: shear sampling ---
+
+
+def test_sample_affine_shear_zero_defaults() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8))
+    assert params.shear == (0.0, 0.0)
+
+
+def test_sample_affine_shear_singleton_x() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        params = sample_affine(rng, source_size=(10, 8), shear_x_range=(0.3, 0.3))
+        assert params.shear[0] == 0.3
+
+
+def test_sample_affine_shear_singleton_y() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        params = sample_affine(rng, source_size=(10, 8), shear_y_range=(-0.2, -0.2))
+        assert params.shear[1] == -0.2
+
+
+def test_sample_affine_shear_both_directions_within_range() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        params = sample_affine(
+            rng, source_size=(10, 8), shear_x_range=(-0.5, 0.5), shear_y_range=(-0.3, 0.3)
+        )
+        assert -0.5 <= params.shear[0] <= 0.5
+        assert -0.3 <= params.shear[1] <= 0.3
+
+
+def test_sample_affine_shear_negative_values_legal() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), shear_x_range=(-5.0, -5.0))
+    assert params.shear[0] == -5.0
+
+
+def test_sample_affine_shear_same_seed_gives_same_shear() -> None:
+    a = sample_affine(
+        np.random.default_rng(7),
+        source_size=(10, 8),
+        shear_x_range=(-0.4, 0.4),
+        shear_y_range=(-0.4, 0.4),
+    )
+    b = sample_affine(
+        np.random.default_rng(7),
+        source_size=(10, 8),
+        shear_x_range=(-0.4, 0.4),
+        shear_y_range=(-0.4, 0.4),
+    )
+    assert a == b
+
+
+@pytest.mark.parametrize("bad", [[0.1, 0.2], None, "0.1"])
+def test_sample_affine_rejects_non_tuple_shear_range(bad: object) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(TypeError, match="tuple"):
+        sample_affine(rng, source_size=(10, 8), shear_x_range=bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad", [(0.1,), (0.1, 0.2, 0.3)])
+def test_sample_affine_rejects_wrong_length_shear_range(bad: tuple) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="exactly 2 elements"):
+        sample_affine(rng, source_size=(10, 8), shear_y_range=bad)  # type: ignore[arg-type]
+
+
+def test_sample_affine_rejects_bool_in_shear_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(TypeError):
+        sample_affine(rng, source_size=(10, 8), shear_x_range=(True, 0.5))  # type: ignore[arg-type]
+
+
+def test_sample_affine_rejects_nan_in_shear_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError):
+        sample_affine(rng, source_size=(10, 8), shear_x_range=(float("nan"), 0.5))
+
+
+def test_sample_affine_rejects_inf_in_shear_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError):
+        sample_affine(rng, source_size=(10, 8), shear_y_range=(0.0, float("inf")))
+
+
+def test_sample_affine_rejects_low_greater_than_high_shear_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="low"):
+        sample_affine(rng, source_size=(10, 8), shear_x_range=(0.5, -0.5))
+
+
+def test_sample_affine_shear_overflow_raises_value_error_not_warning() -> None:
+    rng = np.random.default_rng(0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match="finite"):
+            sample_affine(
+                rng,
+                source_size=(10, 8),
+                shear_x_range=(1e200, 1e200),
+                shear_y_range=(1e200, 1e200),
+            )
+
+
+# --- compatibility: shear must not disturb the pre-shear contract ---
+
+
+def test_sample_affine_zero_shear_matches_pre_shear_matrix_bit_for_bit() -> None:
+    source_size = (37, 23)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+
+    rng_new = np.random.default_rng(123)
+    new_params = sample_affine(
+        rng_new,
+        source_size=source_size,
+        angle_range=(-10.0, 10.0),
+        translation_x_range=(-8.0, 8.0),
+        translation_y_range=(-8.0, 8.0),
+        scale_range=(0.9, 1.1),
+    )
+
+    rng_old = np.random.default_rng(123)
+    angle = float(rng_old.uniform(-10.0, 10.0))
+    dx = float(rng_old.uniform(-8.0, 8.0))
+    dy = float(rng_old.uniform(-8.0, 8.0))
+    scale = float(rng_old.uniform(0.9, 1.1))
+    old_matrix = cv2.getRotationMatrix2D(center, angle, scale)
+    old_matrix[0, 2] += dx
+    old_matrix[1, 2] += dy
+
+    np.testing.assert_array_equal(new_params.matrix, old_matrix)
+    assert new_params.angle == angle
+    assert new_params.translation == (dx, dy)
+    assert new_params.scale == scale
+
+
+def test_sample_affine_default_shear_preserves_rng_sequence_across_calls() -> None:
+    rng_a = np.random.default_rng(999)
+    first_a = sample_affine(rng_a, source_size=(10, 8), angle_range=(-5.0, 5.0))
+    second_a = sample_affine(rng_a, source_size=(10, 8), angle_range=(-5.0, 5.0))
+
+    rng_b = np.random.default_rng(999)
+    first_b = sample_affine(rng_b, source_size=(10, 8), angle_range=(-5.0, 5.0))
+    second_b = sample_affine(rng_b, source_size=(10, 8), angle_range=(-5.0, 5.0))
+
+    assert first_a == first_b
+    assert second_a == second_b
+
+
+def test_affine_parameters_five_positional_arguments_still_construct() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0)
+    assert params.shear == (0.0, 0.0)
+
+
+def test_affine_parameters_shear_is_keyword_only_sixth_positional_rejected() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    with pytest.raises(TypeError):
+        AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, (0.2, -0.1))  # type: ignore[misc]
+
+
+def test_affine_parameters_shear_accepted_as_keyword() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, shear=(0.2, -0.1))
+    assert params.shear == (0.2, -0.1)
+
+
+def test_affine_parameters_match_args_excludes_shear() -> None:
+    assert AffineParameters.__match_args__ == (
+        "matrix",
+        "source_size",
+        "angle",
+        "translation",
+        "scale",
+    )
+
+
+def test_affine_parameters_five_positional_pattern_matching_still_works() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 1.5, (2.0, 3.0), 1.1, shear=(0.1, 0.2))
+    match params:
+        case AffineParameters(m, s, a, t, sc):
+            assert m is params.matrix
+            assert s == (10, 8)
+            assert a == 1.5
+            assert t == (2.0, 3.0)
+            assert sc == 1.1
+        case _:
+            pytest.fail("pattern match failed")
+
+
+def test_affine_parameters_equality_includes_shear() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    a = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, shear=(0.1, 0.2))
+    b = AffineParameters(matrix.copy(), (10, 8), 0.0, (0.0, 0.0), 1.0, shear=(0.1, 0.2))
+    c = AffineParameters(matrix.copy(), (10, 8), 0.0, (0.0, 0.0), 1.0, shear=(0.1, 0.3))
+    assert a == b
+    assert a != c
+
+
+def test_affine_parameters_repr_and_asdict_contain_shear() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, shear=(0.25, -0.5))
+    assert "shear" in repr(params)
+    d = dataclasses.asdict(params)
+    assert d["shear"] == (0.25, -0.5)
+
+
+def test_affine_parameters_default_shear_is_exactly_zero_zero() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0)
+    assert params.shear == (0.0, 0.0)
+    assert isinstance(params.shear[0], float)
+    assert isinstance(params.shear[1], float)
+
+
+# --- matrix semantics with shear ---
+
+
+def test_sample_affine_pure_shear_x_matches_manual_centered_matrix() -> None:
+    source_size = (21, 21)
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=source_size, shear_x_range=(0.5, 0.5))
+
+    t_neg = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+    t_pos = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+    shx = np.array([[1, 0.5, 0], [0, 1, 0], [0, 0, 1]])
+    expected = (t_pos @ shx @ t_neg)[:2, :]
+    np.testing.assert_allclose(params.matrix, expected)
+
+
+def test_sample_affine_pure_shear_y_matches_manual_centered_matrix() -> None:
+    source_size = (21, 21)
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=source_size, shear_y_range=(-0.4, -0.4))
+
+    t_neg = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+    t_pos = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+    shy = np.array([[1, 0, 0], [-0.4, 1, 0], [0, 0, 1]])
+    expected = (t_pos @ shy @ t_neg)[:2, :]
+    np.testing.assert_allclose(params.matrix, expected)
+
+
+def test_sample_affine_shear_x_then_y_matches_manual_sequential_matrix() -> None:
+    source_size = (21, 21)
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    sx, sy = 0.4, -0.2
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng, source_size=source_size, shear_x_range=(sx, sx), shear_y_range=(sy, sy)
+    )
+
+    t_neg = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+    t_pos = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+    sh_xy_3x3 = np.array([[1, sx, 0], [sy, 1 + sx * sy, 0], [0, 0, 1]])
+    expected = (t_pos @ sh_xy_3x3 @ t_neg)[:2, :]
+    np.testing.assert_allclose(params.matrix, expected)
+
+
+def test_apply_affine_positive_shear_x_moves_bottom_right_relative_to_top() -> None:
+    image = np.zeros((21, 21), dtype=np.uint8)
+    image[15, 10] = 255  # below center
+    image[5, 10] = 254  # above center
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(21, 21), shear_x_range=(0.5, 0.5))
+    result = apply_affine(image, params, interpolation=cv2.INTER_NEAREST)
+
+    below_ys, below_xs = np.where(result == 255)
+    above_ys, above_xs = np.where(result == 254)
+    assert below_xs[0] > above_xs[0]
+
+
+def test_apply_affine_positive_shear_y_moves_right_side_down_relative_to_left() -> None:
+    image = np.zeros((21, 21), dtype=np.uint8)
+    image[10, 15] = 255  # right of center
+    image[10, 5] = 254  # left of center
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(21, 21), shear_y_range=(0.5, 0.5))
+    result = apply_affine(image, params, interpolation=cv2.INTER_NEAREST)
+
+    right_ys, right_xs = np.where(result == 255)
+    left_ys, left_xs = np.where(result == 254)
+    assert right_ys[0] > left_ys[0]
+
+
+@pytest.mark.parametrize("source_size", [(20, 20), (21, 21), (20, 21), (21, 20)])
+def test_sample_affine_shear_pivot_matches_center_for_even_and_odd_sizes(
+    source_size: tuple[int, int],
+) -> None:
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=source_size, shear_x_range=(0.3, 0.3))
+    # the center itself must be a fixed point of the shear
+    center_point = np.array([cx, cy, 1.0])
+    transformed = params.matrix @ center_point
+    np.testing.assert_allclose(transformed, [cx, cy], atol=1e-9)
+
+
+def test_sample_affine_shear_on_1x1_image() -> None:
+    rng = np.random.default_rng(0)
+    image = np.array([[7]], dtype=np.uint8)
+    params = sample_affine(rng, source_size=(1, 1), shear_x_range=(5.0, 5.0))
+    result = apply_affine(image, params)
+    assert result.shape == (1, 1)
+
+
+def test_sample_affine_shear_on_1xn_image() -> None:
+    rng = np.random.default_rng(0)
+    image = np.arange(10, dtype=np.uint8).reshape(1, 10)
+    params = sample_affine(rng, source_size=(10, 1), shear_x_range=(2.0, 2.0))
+    result = apply_affine(image, params)
+    np.testing.assert_array_equal(result, image)
+
+
+def test_sample_affine_shear_on_nx1_image() -> None:
+    rng = np.random.default_rng(0)
+    image = np.arange(10, dtype=np.uint8).reshape(10, 1)
+    params = sample_affine(rng, source_size=(1, 10), shear_y_range=(2.0, 2.0))
+    result = apply_affine(image, params)
+    np.testing.assert_array_equal(result, image)
+
+
+def test_sample_affine_shear_before_rotation_matches_manual_composition() -> None:
+    source_size = (21, 21)
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng,
+        source_size=source_size,
+        angle_range=(30.0, 30.0),
+        scale_range=(1.2, 1.2),
+        shear_x_range=(0.4, 0.4),
+        shear_y_range=(-0.2, -0.2),
+    )
+
+    rs_3x3 = np.eye(3)
+    rs_3x3[:2, :] = cv2.getRotationMatrix2D((cx, cy), 30.0, 1.2)
+    sx, sy = 0.4, -0.2
+    sh_3x3 = np.array([[1, sx, 0], [sy, 1 + sx * sy, 0], [0, 0, 1]])
+    t_neg = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+    t_pos = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+    sh_centered = t_pos @ sh_3x3 @ t_neg
+
+    shear_then_rotate = (rs_3x3 @ sh_centered)[:2, :]
+    rotate_then_shear = (sh_centered @ rs_3x3)[:2, :]
+
+    np.testing.assert_allclose(params.matrix, shear_then_rotate)
+    assert not np.allclose(params.matrix, rotate_then_shear)
+
+
+def test_sample_affine_translation_applied_after_shear_and_rotation() -> None:
+    source_size = (21, 21)
+    rng = np.random.default_rng(0)
+    without_translation = sample_affine(
+        rng,
+        source_size=source_size,
+        angle_range=(20.0, 20.0),
+        shear_x_range=(0.3, 0.3),
+    )
+    rng2 = np.random.default_rng(0)
+    with_translation = sample_affine(
+        rng2,
+        source_size=source_size,
+        angle_range=(20.0, 20.0),
+        translation_x_range=(5.0, 5.0),
+        translation_y_range=(-3.0, -3.0),
+        shear_x_range=(0.3, 0.3),
+    )
+    diff = with_translation.matrix - without_translation.matrix
+    expected_diff = np.array([[0.0, 0.0, 5.0], [0.0, 0.0, -3.0]])
+    np.testing.assert_allclose(diff, expected_diff, atol=1e-9)
+
+
+def test_sample_affine_shear_matches_manual_synthetic_grid_transform() -> None:
+    source_size = (21, 15)
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng,
+        source_size=source_size,
+        angle_range=(12.0, 12.0),
+        scale_range=(1.1, 1.1),
+        shear_x_range=(0.3, 0.3),
+        shear_y_range=(0.15, 0.15),
+    )
+    xs, ys = np.meshgrid(np.arange(0, 21, 3), np.arange(0, 15, 3))
+    points = np.stack([xs.ravel(), ys.ravel(), np.ones(xs.size)])
+    transformed = params.matrix @ points
+
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rs_3x3 = np.eye(3)
+    rs_3x3[:2, :] = cv2.getRotationMatrix2D((cx, cy), 12.0, 1.1)
+    sx, sy = 0.3, 0.15
+    sh_3x3 = np.array([[1, sx, 0], [sy, 1 + sx * sy, 0], [0, 0, 1]])
+    t_neg = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+    t_pos = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+    expected_matrix = (rs_3x3 @ (t_pos @ sh_3x3 @ t_neg))[:2, :]
+    expected = expected_matrix @ points
+
+    np.testing.assert_allclose(transformed, expected)
+
+
+# --- apply image/mask with nonzero shear ---
+
+
+@pytest.mark.parametrize("channels", [None, 3, 4])
+def test_apply_affine_shear_preserves_layout(channels: int | None) -> None:
+    image = _make_image(10, 12, channels=channels)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.2, 0.2))
+    result = apply_affine(image, params)
+    assert result.shape == image.shape
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.int16, np.float32, np.float64])
+def test_apply_affine_shear_supported_image_dtypes(dtype: type) -> None:
+    image = _make_image(10, 12).astype(dtype)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.2, 0.2))
+    result = apply_affine(image, params)
+    assert result.dtype == dtype
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.int16])
+def test_apply_affine_shear_supported_mask_dtypes(dtype: type) -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12, dtype=dtype)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.2, 0.2))
+    result = apply_affine(image, params, mask=mask)
+    assert result.mask.dtype == dtype
+
+
+def test_apply_affine_shear_mask_alignment_on_synthetic_object() -> None:
+    image = np.zeros((21, 21), dtype=np.uint8)
+    mask = np.zeros((21, 21), dtype=np.uint8)
+    image[15, 10] = 200
+    mask[15, 10] = 5
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(21, 21), shear_x_range=(0.4, 0.4))
+    result = apply_affine(image, params, mask=mask, interpolation=cv2.INTER_NEAREST)
+    image_ys, image_xs = np.where(result.image == 200)
+    mask_ys, mask_xs = np.where(result.mask == 5)
+    assert (image_ys.tolist(), image_xs.tolist()) == (mask_ys.tolist(), mask_xs.tolist())
+
+
+def test_apply_affine_shear_mask_hw1_shape_preserved() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12).reshape(10, 12, 1)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.2, 0.2))
+    result = apply_affine(image, params, mask=mask)
+    assert result.mask.shape == (10, 12, 1)
+
+
+def test_apply_affine_shear_mask_signed_negative_ignore_label_preserved() -> None:
+    image = _make_image(10, 12)
+    mask = np.zeros((10, 12), dtype=np.int16)
+    mask[5, 6] = -1
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.1, 0.1))
+    result = apply_affine(image, params, mask=mask)
+    assert -1 in np.unique(result.mask)
+
+
+def test_apply_affine_shear_mask_no_new_values_beyond_input_and_border() -> None:
+    image = _make_image(20, 20)
+    mask = _make_mask(20, 20)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(20, 20), shear_x_range=(0.5, 0.5))
+    result = apply_affine(image, params, mask=mask, mask_border_value=9)
+    allowed = set(np.unique(mask).tolist()) | {9}
+    assert set(np.unique(result.mask).tolist()) <= allowed
+
+
+def test_apply_affine_large_shear_pushes_content_partially_outside_canvas() -> None:
+    image = np.full((20, 20), 100, dtype=np.uint8)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(20, 20), shear_x_range=(50.0, 50.0))
+    result = apply_affine(image, params, border_value=0)
+    assert np.any(result == 0)
+
+
+def test_apply_affine_shear_rejects_source_size_mismatch() -> None:
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(999, 999), shear_x_range=(0.2, 0.2))
+    with pytest.raises(ValueError, match="source_size"):
+        apply_affine(image, params)
+
+
+def test_apply_affine_shear_does_not_mutate_or_alias() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12)
+    image_before = image.copy()
+    mask_before = mask.copy()
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.2, 0.2))
+    result = apply_affine(image, params, mask=mask)
+    np.testing.assert_array_equal(image, image_before)
+    np.testing.assert_array_equal(mask, mask_before)
+    assert not np.shares_memory(result.image, image)
+    assert not np.shares_memory(result.mask, mask)
+
+
+def test_apply_affine_shear_params_are_replayable() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(-0.4, 0.4))
+    image = _make_image(10, 12)
+    first = apply_affine(image, params)
+    second = apply_affine(image, params)
+    np.testing.assert_array_equal(first, second)
+
+
+def test_apply_affine_shear_legal_singleton_squeeze() -> None:
+    image = _make_image(10, 12, channels=None)
+    image_hw1 = image.reshape(10, 12, 1)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.3, 0.3))
+    result = apply_affine(image_hw1, params)
+    assert result.shape == (10, 12, 1)
+
+
+def test_apply_affine_shear_arbitrary_same_size_wrong_shape_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    image = np.arange(4 * 5 * 3, dtype=np.uint8).reshape(4, 5, 3)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(5, 4), shear_x_range=(0.2, 0.2))
+
+    monkeypatch.setattr(
+        augmentation_module,
+        "_warp_affine",
+        lambda *a, **k: np.zeros((4, 15), dtype=image.dtype),
+    )
+    with pytest.raises(RuntimeError, match="shape"):
+        apply_affine(image, params)
+
+
+def test_apply_affine_shear_maps_unexpected_opencv_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import improcv.augmentation as augmentation_module
+
+    error = cv2.error("simulated failure")
+    monkeypatch.setattr(
+        augmentation_module,
+        "_warp_affine",
+        lambda *a, **k: (_ for _ in ()).throw(error),
+    )
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(12, 10), shear_x_range=(0.2, 0.2))
+    with pytest.raises(RuntimeError, match="OpenCV failed") as exc_info:
+        apply_affine(image, params)
+    assert exc_info.value.__cause__ is error
