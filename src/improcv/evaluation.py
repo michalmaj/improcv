@@ -1092,12 +1092,19 @@ def _normalize_score_sequence(value: object, name: str) -> npt.NDArray[np.float6
     ndarray.
 
     Accepts a real `collections.abc.Sequence` (explicitly excluding `str`/`bytes`/`bytearray`)
-    of Python/NumPy `int`/`float` scalars, or a 1-D `ndarray` with an integer or `float16`/
-    `float32`/`float64` dtype -- a generator/iterator, a 2-D (or 0-D) array, a `bool`/complex/
-    object/wider-than-`float64` floating dtype array, and an empty container are all rejected.
-    Every element/value is normalized into an independent, newly allocated `float64` array
-    (never a view of `value`); NaN and +/-Inf are rejected, and an integer value not exactly
-    representable as `float64` (e.g. `2**53 + 1`) is rejected rather than silently rounded.
+    of Python `int`/`float` or NumPy `float16`/`float32`/`float64` scalars, or a 1-D `ndarray`
+    with an integer or `float16`/`float32`/`float64` dtype -- a generator/iterator, a 2-D (or
+    0-D) array, a `bool`/complex/object/wider-than-`float64` floating dtype array or scalar
+    (e.g. `np.longdouble` where it is genuinely wider than `float64` on the current platform),
+    and an empty container are all rejected -- the same floating-width policy applies whether
+    the wide dtype arrives as an `ndarray` or as an individual `Sequence` element. Every
+    element/value is normalized into an independent, newly allocated `float64` array (never a
+    view of `value`); NaN and +/-Inf are rejected, and an integer value that is not exactly
+    representable as `float64` -- whether because it loses precision (e.g. `2**53 + 1`) or
+    because it is too large to convert to `float` at all (e.g. `10**400`) -- is rejected with
+    `ValueError` rather than silently rounded or left to raise a raw `OverflowError`. Every zero
+    in the result is canonicalized to positive zero (`+0.0`), so a threshold derived from a tied
+    `+0.0`/`-0.0` group never depends on which sign of zero happened to appear first in `value`.
     """
     if isinstance(value, (str, bytes, bytearray)):
         raise TypeError(
@@ -1117,6 +1124,7 @@ def _normalize_score_sequence(value: object, name: str) -> npt.NDArray[np.float6
     normalized = np.empty(len(value), dtype=np.float64)
     for index, element in enumerate(value):
         normalized[index] = _normalize_score_scalar(element, f"{name}[{index}]")
+    _canonicalize_signed_zero(normalized)
     return normalized
 
 
@@ -1125,15 +1133,32 @@ def _normalize_score_scalar(value: object, name: str) -> float:
         raise TypeError(f"{name} must be a real number, not bool")
     if isinstance(value, numbers.Integral):
         integer = int(value)
-        converted = float(integer)
+        try:
+            converted = float(integer)
+        except OverflowError as exc:
+            raise ValueError(f"{name} is not exactly representable as float64") from exc
         if not math.isfinite(converted) or int(converted) != integer:
             raise ValueError(f"{name} is not exactly representable as float64")
         return converted
-    if isinstance(value, (float, np.floating)):
+    if isinstance(value, np.floating):
+        # A NumPy floating scalar's own dtype can be wider than float64 (e.g. `np.longdouble`
+        # on a platform where it is a genuine extended-precision type) -- checked explicitly
+        # here rather than relying on `float(value)`, which would silently narrow it and could
+        # collapse two distinct `longdouble` values into the same `float64` value.
+        dtype = np.asarray(value).dtype
+        if dtype not in _ALLOWED_SCORE_FLOAT_DTYPES:
+            raise TypeError(
+                f"{name} must be a Python float or a NumPy float16/float32/float64 scalar, "
+                f"got {dtype}"
+            )
         converted = float(value)
         if not math.isfinite(converted):
             raise ValueError(f"{name} must be finite, got {value}")
         return converted
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value}")
+        return value
     raise TypeError(f"{name} must be a Python/NumPy int or float, got {type(value).__name__}")
 
 
@@ -1158,7 +1183,19 @@ def _normalize_score_ndarray(value: np.ndarray, name: str) -> npt.NDArray[np.flo
 
     if not np.all(np.isfinite(converted)):
         raise ValueError(f"{name} must contain only finite values (no NaN or Inf)")
+    _canonicalize_signed_zero(converted)
     return converted
+
+
+def _canonicalize_signed_zero(array: npt.NDArray[np.float64]) -> None:
+    """Replace every negative zero in `array` with positive zero, in place.
+
+    `array` is always a freshly allocated buffer owned exclusively by the caller at this point
+    (never yet exposed to the public result), so mutating it here is safe and keeps the public
+    contract simple: a threshold derived from a tied `+0.0`/`-0.0` group is always `+0.0`,
+    regardless of which sign of zero happened to appear first in the input.
+    """
+    array[array == 0.0] = 0.0
 
 
 def _exact_integer_ndarray_to_float64(value: np.ndarray, name: str) -> npt.NDArray[np.float64]:

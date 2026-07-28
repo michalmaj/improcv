@@ -750,6 +750,18 @@ automatic inference of which label is positive. A threshold classifies a sample 
 FPR/TPR/precision/recall is computed there, so permuting the order of tied samples (or of the whole
 input) never changes the result.
 
+`y_score` accepts a `Sequence` of Python `int`/`float` or NumPy `float16`/`float32`/`float64`
+scalars, or a 1-D `ndarray` with an integer or `float16`/`float32`/`float64` dtype -- not "any
+NumPy floating dtype": a NumPy floating scalar or `ndarray` wider than `float64` (e.g.
+`np.longdouble` where it is a genuine extended-precision type on the current platform) is rejected
+with `TypeError` either way, since narrowing it could silently collapse two distinct scores into
+the same tied threshold. An integer score (Python or NumPy, in a `Sequence` or an `ndarray`) is
+legal only when it converts to `float64` exactly -- both an out-of-range magnitude (e.g. `10**400`,
+which would otherwise raise a raw `OverflowError`) and an in-range value that would lose precision
+(e.g. `2**53 + 1`) raise the same documented `ValueError` instead. Every zero in the normalized
+score array is canonicalized to positive zero, so a threshold derived from a tied `+0.0`/`-0.0`
+group is always `+0.0` regardless of which sign happened to appear first in the input.
+
 Both curves start at the same sentinel threshold `+inf` (predicting nothing positive): ROC starts
 at `(FPR, TPR) = (0.0, 0.0)`, precision-recall starts at `(precision, recall) = (1.0, 0.0)` with no
 corresponding real threshold. `thresholds[1:]` holds every distinct observed score in strictly

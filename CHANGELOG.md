@@ -235,6 +235,10 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   producing a negative `support`; the total is now computed exactly (falling back to arbitrary-
   precision Python `int` arithmetic when a native `int64` sum could overflow) and raises `ValueError`
   if it exceeds what `int64` can represent, rather than silently wrapping around.
+- `improcv.evaluation`: binary ranking score normalization now maps oversized Python integers to
+  the documented `ValueError`, rejects wider-than-`float64` NumPy floating scalars consistently
+  with `ndarray` inputs, and canonicalizes signed zero so tied zero thresholds are
+  permutation-deterministic.
 
 ## [0.2.0a1] - 2026-07-26
 
