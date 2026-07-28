@@ -870,7 +870,11 @@ skipped, along with everything under it -- there is no `follow_symlinks` option.
 or directory whose name starts with `.` is skipped by default (this never applies to `root` itself,
 so an explicitly given `root` like `".dataset"` is still searched); pass `include_hidden=True` to
 include them. Filesystem errors are fail-fast: a missing/inaccessible `root`, or a permission error
-encountered anywhere during traversal, raises immediately rather than silently skipping data. An
+encountered anywhere during traversal, raises immediately rather than silently skipping data --
+every descendant is classified from a fresh filesystem check at inspection time, not a stale result
+from listing the directory, so a file deleted or replaced right before being inspected still raises
+rather than passing through unnoticed (a file changed *after* that check is an ordinary, undetected
+race, same as with any filesystem operation). An
 empty directory, or a directory with no matching files, returns `()`, not an error. This slice does
 not pair images with masks, infer classes from directory names, produce dataset splits, or load/
 decode any image, and adds no new dependency.
