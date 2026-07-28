@@ -1,14 +1,15 @@
 """Classification evaluation core: confusion matrices, precision/recall/F1/support, and
-binary ranking curves (ROC, precision-recall, ROC AUC).
+binary ranking curves (ROC, precision-recall, ROC AUC, average precision).
 
 `confusion_matrix`/`classification_metrics` are single-label multiclass only: exactly one
 true class and one predicted class per sample, integer labels only. `roc_curve`/
-`precision_recall_curve`/`roc_auc_score` are binary, one-vs-rest: an explicit `positive_label`
-picks the positive class, every other observed label is negative, regardless of how many
-distinct negative labels occur -- there is no automatic inference of which label is positive.
-Does not cover plotting, multilabel classification, sample weights, `average="binary"`,
-multiclass ranking curves/averaging, a generic `auc(x, y)` helper, average precision, or
-trapezoidal PR AUC -- those are separate, later concerns, not part of this core.
+`precision_recall_curve`/`roc_auc_score`/`average_precision_score` are binary, one-vs-rest: an
+explicit `positive_label` picks the positive class, every other observed label is negative,
+regardless of how many distinct negative labels occur -- there is no automatic inference of
+which label is positive. `average_precision_score` is classification ranking average
+precision, not object-detection AP or mAP. Does not cover plotting, multilabel classification,
+sample weights, `average="binary"`, multiclass ranking curves/averaging, a generic `auc(x, y)`
+helper, or trapezoidal PR AUC -- those are separate, later concerns, not part of this core.
 
 Several deliberate departures from `scikit-learn.metrics`'s well-known behavior (documented at
 the call sites that enforce them): a duplicate value in an explicit `labels` sequence raises
@@ -40,6 +41,7 @@ __all__ = [
     "ConfusionMatrixResult",
     "PrecisionRecallCurve",
     "RocCurve",
+    "average_precision_score",
     "classification_metrics",
     "classification_metrics_from_confusion_matrix",
     "confusion_matrix",
@@ -916,13 +918,7 @@ def precision_recall_curve(
         If the computed result fails this function's own postconditions.
     """
     core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=False)
-    true_positive = core.true_positives.astype(np.float64)
-    false_positive = core.false_positives.astype(np.float64)
-
-    precision = np.empty_like(true_positive)
-    precision[0] = 1.0
-    precision[1:] = true_positive[1:] / (true_positive[1:] + false_positive[1:])
-    recall = true_positive / core.n_positive
+    precision, recall = _compute_precision_recall_arrays(core)
 
     precision.flags.writeable = False
     recall.flags.writeable = False
@@ -936,6 +932,64 @@ def precision_recall_curve(
         positive_label=core.positive_label,
     )
     _check_pr_curve_postconditions(result)
+    return result
+
+
+def average_precision_score(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    positive_label: int,
+) -> float:
+    """Compute binary, one-vs-rest average precision: a non-interpolated ranking-quality score.
+
+    This is classification ranking average precision, not object-detection AP or mAP (which
+    additionally require matching predictions to ground truth by IoU) -- see `roc_curve` for
+    the shared one-vs-rest/`positive_label`/`y_score`/tie-aggregation contract, which applies
+    identically here (same input and error contract as `precision_recall_curve`, including that
+    a `y_true` with no negative sample is legal).
+
+    Defined as the weighted mean of precision, using each recall increment as its weight:
+    `AP = sum((recall[i] - recall[i - 1]) * precision[i] for i in 1..K)`, over the same `K + 1`
+    grouped-threshold points `precision_recall_curve` would return (`precision[i]` is always
+    taken from the *right* end of each recall increment, never `precision[i - 1]`) -- this is
+    not linear interpolation and not the trapezoidal area under the PR curve, which is a
+    distinct quantity that this function does not compute: depending on the shape of the curve
+    and its ties, the trapezoidal area can be larger or smaller than this average precision,
+    never consistently one or the other.
+
+    A perfectly reversed ranking does not give `0.0` -- unlike ROC AUC, average precision has no
+    symmetric complement relation (`average_precision_score` of the negated scores is not
+    `1 - average_precision_score`). A `y_true` with no negative sample gives exactly `1.0`
+    (returned directly, not computed through a `0/0`-adjacent division); constant scores (no
+    discriminative power) give exactly the positive prevalence `P / len(y_true)` -- these are
+    the only two inputs with a closed-form result documented here; no other ranking's average
+    precision is claimed to equal prevalence.
+
+    Raises
+    ------
+    TypeError
+        Same as `roc_curve`.
+    ValueError
+        Same as `roc_curve`, except a `y_true` with no negative sample is accepted rather than
+        rejected (same relaxation as `precision_recall_curve`).
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+    """
+    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=False)
+
+    if core.n_negative == 0:
+        result = 1.0
+    else:
+        precision, recall = _compute_precision_recall_arrays(core)
+        result = float(
+            np.sum(
+                np.diff(recall) * precision[1:],
+                dtype=np.float64,
+            )
+        )
+
+    _check_average_precision_postconditions(result)
     return result
 
 
@@ -1078,6 +1132,28 @@ def _compute_ranking_core(
         n_negative=n_negative,
         positive_label=positive_label_value,
     )
+
+
+def _compute_precision_recall_arrays(
+    core: _RankingCore,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Compute the precision/recall arrays shared by `precision_recall_curve` and
+    `average_precision_score`.
+
+    Returns new, independent, still-writeable `float64` buffers (never a view of `core`'s own
+    `int64` arrays) -- the caller is responsible for setting them read-only before exposing them
+    in a public result, or may consume them directly (e.g. `average_precision_score` never makes
+    them read-only at all, since they never leave this function's caller as a public value).
+    """
+    true_positive = core.true_positives.astype(np.float64)
+    false_positive = core.false_positives.astype(np.float64)
+
+    precision = np.empty_like(true_positive)
+    precision[0] = 1.0
+    precision[1:] = true_positive[1:] / (true_positive[1:] + false_positive[1:])
+
+    recall = true_positive / core.n_positive
+    return precision, recall
 
 
 _ALLOWED_SCORE_FLOAT_DTYPES = (
@@ -1306,3 +1382,20 @@ def _check_roc_auc_postconditions(value: float) -> None:
     tolerance = 1e-9
     if not (-tolerance <= value <= 1.0 + tolerance):
         raise RuntimeError(f"internal error: roc_auc_score result {value!r} is outside [0, 1]")
+
+
+def _check_average_precision_postconditions(value: float) -> None:
+    if not isinstance(value, float):
+        raise RuntimeError(
+            f"internal error: average_precision_score result is not a float, got "
+            f"{type(value).__name__}"
+        )
+    if not math.isfinite(value):
+        raise RuntimeError(
+            f"internal error: average_precision_score result {value!r} is not finite"
+        )
+    tolerance = 1e-9
+    if not (-tolerance <= value <= 1.0 + tolerance):
+        raise RuntimeError(
+            f"internal error: average_precision_score result {value!r} is outside [0, 1]"
+        )
