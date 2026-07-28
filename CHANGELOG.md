@@ -119,6 +119,9 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   compatible future extension, not added here). No new dependency.
 
 ### Fixed
+- `improcv.augmentation`: `apply_affine` now rejects `WARP_INVERSE_MAP` and other non-interpolation
+  flag bits passed through the `interpolation` parameter, preventing a saved affine matrix from
+  being silently interpreted in the opposite direction.
 - `improcv.evaluation`: F1 was computed as `2*precision*recall/(precision+recall)`, which loses the
   distinction between "precision and recall are both correctly `0`" (real, nonzero `FP`/`FN`, `TP =
   0` -- F1 is well-defined as `0`) and "precision and recall are both undefined" (class completely

@@ -1044,6 +1044,109 @@ def test_apply_affine_interpolation_linear_vs_nearest_differ() -> None:
     assert not np.array_equal(linear, nearest)
 
 
+def test_apply_affine_rejects_inverse_mapping_flag() -> None:
+    image = np.zeros((5, 7), dtype=np.uint8)
+    image[2, 1] = 255
+
+    params = sample_affine(
+        np.random.default_rng(0),
+        source_size=(7, 5),
+        translation_x_range=(2.0, 2.0),
+    )
+
+    with pytest.raises(ValueError, match="interpolation"):
+        apply_affine(
+            image,
+            params,
+            interpolation=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+        )
+
+
+def test_apply_affine_does_not_call_warp_affine_after_bad_interpolation_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    def boom(*args, **kwargs):
+        pytest.fail("_warp_affine must not be called after a validation error")
+
+    monkeypatch.setattr(augmentation_module, "_warp_affine", boom)
+
+    image = np.zeros((5, 7), dtype=np.uint8)
+    params = sample_affine(np.random.default_rng(0), source_size=(7, 5))
+    with pytest.raises(ValueError):
+        apply_affine(image, params, interpolation=cv2.WARP_INVERSE_MAP)
+
+
+@pytest.mark.parametrize(
+    "bad_interpolation",
+    [
+        cv2.WARP_INVERSE_MAP,
+        cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        cv2.WARP_FILL_OUTLIERS,
+        -1,
+    ],
+)
+def test_apply_affine_rejects_warp_modifier_flags(bad_interpolation: int) -> None:
+    image = _make_image(10, 12)
+    params = sample_affine(np.random.default_rng(0), source_size=(12, 10))
+    with pytest.raises(ValueError, match="interpolation|warp modifier flags"):
+        apply_affine(image, params, interpolation=bad_interpolation)
+
+
+@pytest.mark.parametrize("bad_interpolation", [True, 1.5, "nearest", None])
+def test_apply_affine_rejects_non_integral_interpolation(bad_interpolation: object) -> None:
+    image = _make_image(10, 12)
+    params = sample_affine(np.random.default_rng(0), source_size=(12, 10))
+    with pytest.raises(TypeError):
+        apply_affine(image, params, interpolation=bad_interpolation)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "interpolation",
+    [
+        cv2.INTER_NEAREST,
+        cv2.INTER_LINEAR,
+        cv2.INTER_CUBIC,
+        cv2.INTER_AREA,
+        cv2.INTER_LANCZOS4,
+    ],
+)
+def test_apply_affine_accepts_legal_interpolation_modes(interpolation: int) -> None:
+    image = _make_image(10, 12)
+    params = sample_affine(np.random.default_rng(0), source_size=(12, 10), angle_range=(9.0, 9.0))
+    result = apply_affine(image, params, interpolation=interpolation)
+    assert result.shape == image.shape
+
+
+@pytest.mark.parametrize("attr_name", ["INTER_LINEAR_EXACT", "INTER_NEAREST_EXACT"])
+def test_apply_affine_accepts_exact_interpolation_modes_if_available(attr_name: str) -> None:
+    interpolation = getattr(cv2, attr_name, None)
+    if interpolation is None:
+        pytest.skip(f"cv2.{attr_name} not available on this OpenCV build")
+
+    image = _make_image(10, 12)
+    params = sample_affine(np.random.default_rng(0), source_size=(12, 10), angle_range=(9.0, 9.0))
+    try:
+        result = apply_affine(image, params, interpolation=interpolation)
+    except RuntimeError as exc:
+        assert isinstance(exc.__cause__, cv2.error)
+    else:
+        assert result.shape == image.shape
+
+
+def test_apply_affine_positive_dx_still_moves_content_right_with_explicit_interpolation() -> None:
+    image = np.zeros((5, 7), dtype=np.uint8)
+    image[2, 1] = 255
+    params = sample_affine(
+        np.random.default_rng(0), source_size=(7, 5), translation_x_range=(2.0, 2.0)
+    )
+    result = apply_affine(image, params, interpolation=cv2.INTER_NEAREST)
+    ys, xs = np.where(result == 255)
+    assert xs.tolist() == [1 + 2]
+    assert ys.tolist() == [2]
+
+
 def test_apply_affine_border_value_fills_exposed_pixels() -> None:
     image = np.full((10, 10), 5, dtype=np.uint8)
     rng = np.random.default_rng(0)
@@ -1416,4 +1519,57 @@ def test_apply_affine_rejects_manually_constructed_wrong_matrix_shape() -> None:
         scale=0.0,
     )
     with pytest.raises((TypeError, ValueError)):
+        apply_affine(image, bad_params)
+
+
+@pytest.mark.parametrize(
+    "source_size, expected_exception",
+    [
+        ([12, 10], TypeError),
+        (None, TypeError),
+        ((12,), ValueError),
+        ((12, 10, 8), ValueError),
+        ((np.int64(12), 10), TypeError),
+        ((True, 10), TypeError),
+        ((0, 10), ValueError),
+    ],
+)
+def test_apply_affine_rejects_manually_constructed_bad_source_size(
+    source_size: object, expected_exception: type[Exception]
+) -> None:
+    image = _make_image(10, 12)
+    bad_params = AffineParameters(
+        matrix=np.eye(2, 3, dtype=np.float64),
+        source_size=source_size,  # type: ignore[arg-type]
+        angle=0.0,
+        translation=(0.0, 0.0),
+        scale=1.0,
+    )
+    with pytest.raises(expected_exception):
+        apply_affine(image, bad_params)
+
+
+@pytest.mark.parametrize(
+    "translation, expected_exception",
+    [
+        ([0.0, 0.0], TypeError),
+        (None, TypeError),
+        ((0.0,), ValueError),
+        ((0.0, 1.0, 2.0), ValueError),
+        ((True, 0.0), TypeError),
+        ((0.0, float("inf")), ValueError),
+    ],
+)
+def test_apply_affine_rejects_manually_constructed_bad_translation(
+    translation: object, expected_exception: type[Exception]
+) -> None:
+    image = _make_image(10, 12)
+    bad_params = AffineParameters(
+        matrix=np.eye(2, 3, dtype=np.float64),
+        source_size=(12, 10),
+        angle=0.0,
+        translation=translation,  # type: ignore[arg-type]
+        scale=1.0,
+    )
+    with pytest.raises(expected_exception):
         apply_affine(image, bad_params)
