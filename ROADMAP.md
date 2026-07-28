@@ -52,11 +52,10 @@ version decided at the time each is actually published, rather than mechanically
   Phase 3 (confusion matrix and accuracy/precision/recall/F1 core implemented; ROC/PR curves, AUC,
   and plotting remain planned, not started, see [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
-  rotation/translation/isotropic-scale sampling/replay implemented; shear remains planned/deliberately
-  deferred pending its own parameterization/singularity audit; perspective and canvas expansion
-  remain planned, not started), and dataset discovery -- dataset discovery remains planned, not
-  started. Bounding boxes/keypoints/polygons in augmentation, a `Compose`-style augmentation
-  pipeline, dataset manifests/batching, and DNN
+  shear/rotation/translation/isotropic-scale sampling/replay implemented; perspective, anisotropic
+  scale, and canvas expansion remain planned, not started), and dataset discovery -- dataset
+  discovery remains planned, not started. Bounding boxes/keypoints/polygons in augmentation, a
+  `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as
   each slice ships.
 - [ ] **Phase 6** — Camera calibration and 3D geometry. Release version to be decided when this
