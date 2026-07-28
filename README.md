@@ -737,8 +737,9 @@ y_score = [0.1, 0.4, 0.35, 0.8]
 
 roc = im.roc_curve(y_true, y_score, positive_label=1)
 pr = im.precision_recall_curve(y_true, y_score, positive_label=1)
-auc = im.roc_auc_score(y_true, y_score, positive_label=1)
+roc_auc = im.roc_auc_score(y_true, y_score, positive_label=1)
 ap = im.average_precision_score(y_true, y_score, positive_label=1)
+pr_auc = im.auc(pr.recall, pr.precision)  # trapezoidal PR-curve area -- distinct from `ap`
 ```
 
 `y_score` is a ranking score, not a predicted label or a probability -- it does not need to lie in
@@ -777,8 +778,11 @@ sample is legal, giving `precision == 1.0` at every real threshold.
 `roc_auc_score` integrates the ROC curve with the trapezoidal rule (equivalent to the probability
 that a random positive sample outranks a random negative one, with a tied pair counted as
 one-half) -- it never calls `np.trapz`/`np.trapezoid`, since neither name exists across this
-project's full supported NumPy range. `roc_curve`/`precision_recall_curve`/`roc_auc_score` return
-new, independent, read-only `float64` arrays -- never a view of `y_true`/`y_score`.
+project's full supported NumPy range: `np.trapezoid` was only introduced in NumPy 2.0, and
+`np.trapz` was removed in NumPy 2.4, so no single name works across this project's full
+`numpy>=1.24` support range. `roc_curve`/`precision_recall_curve` return new, independent,
+read-only `float64` arrays -- never a view of `y_true`/`y_score`; `roc_auc_score`,
+`average_precision_score`, and `auc` (below) return a plain Python `float`, not an array.
 
 `average_precision_score` is binary classification ranking average precision -- **not**
 object-detection AP or mAP (which additionally require matching predictions to ground truth by
@@ -798,9 +802,27 @@ weak or random ranking. `average_precision_score` shares `roc_curve`'s input and
 except a `y_true` with no negative sample is accepted rather than rejected (same relaxation as
 `precision_recall_curve`).
 
-All four functions run in `O(N log N)` time, `O(N)` memory. This slice covers binary ROC/PR/
-ROC-AUC/average-precision only: no multiclass score matrix, no averaging, no sample weights, no
-trapezoidal PR AUC, no generic `auc(x, y)` helper, and no plotting.
+`auc(x, y)` is a general-purpose trapezoidal area-under-curve helper with no ranking semantics of
+its own -- no `positive_label`, no tie-aggregation, no notion of positive/negative samples. `x`
+must be non-decreasing or non-increasing throughout (duplicate `x` values are legal either way and
+contribute a zero-width segment; constant `x` gives exactly `0.0`); a non-increasing `x` gives the
+same positive geometric area a non-decreasing order of the same points would, not a signed integral
+-- the result never depends on which direction a monotonic `x` happens to be given in. Unlike
+`roc_auc_score`/`average_precision_score`, whose inputs and outputs are always in `[0, 1]` by
+construction, `auc`'s `y` may be negative and so may its result. An intermediate segment width,
+height sum, or product that would overflow `float64` is recovered through an exact,
+power-of-two-scaled fallback wherever the true geometric area is still finite and representable;
+only an input whose true area is not representable as a finite `float64` raises `ValueError` -- this
+never silently returns `inf`/`-inf`/`NaN`, and never emits a NumPy warning for an accepted input.
+`auc` computes the trapezoidal area under the precision-recall curve when called as
+`auc(curve.recall, curve.precision)` -- this is a distinct quantity from `average_precision_score`
+(a non-interpolated, non-trapezoidal definition, see above), and this is the complete, supported way
+to compute it: there is no separate score-level function for it, to avoid one more symbol that could
+be confused with `average_precision_score`.
+
+All five functions run in `O(N log N)` time, `O(N)` memory. This slice covers binary ROC/PR/
+ROC-AUC/average-precision plus a generic trapezoidal `auc` helper: no multiclass score matrix, no
+averaging, no sample weights, and no plotting.
 
 Augmentation sampling and replay -- flip:
 
