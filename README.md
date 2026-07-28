@@ -727,7 +727,7 @@ memory even though improcv checks the allocation is at least representable first
 This is a numeric core only: no plotting, no multilabel classification, no sample weights, and no
 `scikit-learn` dependency.
 
-Binary one-vs-rest ranking curves -- ROC, precision-recall, and ROC AUC:
+Binary one-vs-rest ranking curves -- ROC, precision-recall, ROC AUC, and average precision:
 
 ```python
 import improcv as im
@@ -738,17 +738,18 @@ y_score = [0.1, 0.4, 0.35, 0.8]
 roc = im.roc_curve(y_true, y_score, positive_label=1)
 pr = im.precision_recall_curve(y_true, y_score, positive_label=1)
 auc = im.roc_auc_score(y_true, y_score, positive_label=1)
+ap = im.average_precision_score(y_true, y_score, positive_label=1)
 ```
 
 `y_score` is a ranking score, not a predicted label or a probability -- it does not need to lie in
 `[0, 1]`, and a larger score means greater confidence in the positive class. `roc_curve`/
-`precision_recall_curve`/`roc_auc_score` are binary, one-vs-rest: `positive_label` is always
-required and explicit -- a sample is positive iff its label equals `positive_label`; every other
-observed label is negative, regardless of how many distinct negative labels occur, and there is no
-automatic inference of which label is positive. A threshold classifies a sample positive iff
-`score >= threshold`; every sample sharing the same score is aggregated into one threshold before
-FPR/TPR/precision/recall is computed there, so permuting the order of tied samples (or of the whole
-input) never changes the result.
+`precision_recall_curve`/`roc_auc_score`/`average_precision_score` are binary, one-vs-rest:
+`positive_label` is always required and explicit -- a sample is positive iff its label equals
+`positive_label`; every other observed label is negative, regardless of how many distinct negative
+labels occur, and there is no automatic inference of which label is positive. A threshold
+classifies a sample positive iff `score >= threshold`; every sample sharing the same score is
+aggregated into one threshold before FPR/TPR/precision/recall is computed there, so permuting the
+order of tied samples (or of the whole input) never changes the result.
 
 `y_score` accepts a `Sequence` of Python `int`/`float` or NumPy `float16`/`float32`/`float64`
 scalars, or a 1-D `ndarray` with an integer or `float16`/`float32`/`float64` dtype -- not "any
@@ -776,10 +777,30 @@ sample is legal, giving `precision == 1.0` at every real threshold.
 `roc_auc_score` integrates the ROC curve with the trapezoidal rule (equivalent to the probability
 that a random positive sample outranks a random negative one, with a tied pair counted as
 one-half) -- it never calls `np.trapz`/`np.trapezoid`, since neither name exists across this
-project's full supported NumPy range. All three functions return new, independent, read-only
-`float64` arrays -- never a view of `y_true`/`y_score` -- and run in `O(N log N)` time, `O(N)`
-memory. This slice covers binary ROC/PR/ROC-AUC only: no multiclass score matrix, no averaging, no
-sample weights, no average precision, no trapezoidal PR AUC, and no plotting.
+project's full supported NumPy range. `roc_curve`/`precision_recall_curve`/`roc_auc_score` return
+new, independent, read-only `float64` arrays -- never a view of `y_true`/`y_score`.
+
+`average_precision_score` is binary classification ranking average precision -- **not**
+object-detection AP or mAP (which additionally require matching predictions to ground truth by
+IoU; this function has no notion of bounding boxes, IoU, or per-class averaging). It is a
+non-interpolated weighted mean of precision, using each recall increment as its weight:
+`sum((recall[i] - recall[i - 1]) * precision[i] for i in 1..K)` over the same grouped-threshold
+points `precision_recall_curve` returns, with `precision[i]` always taken from the *right* end of
+each recall increment. This is not linear interpolation and not the trapezoidal area under the PR
+curve, which is a distinct quantity `average_precision_score` does not compute -- depending on the
+shape of the curve and its ties, that trapezoidal area can be larger or smaller than average
+precision, never consistently one or the other, so no fixed relationship between the two should be
+assumed. A perfectly reversed ranking does not give `0.0` (average precision has no complement
+relation the way ROC AUC does); a `y_true` with no negative sample gives exactly `1.0`; constant
+scores (no discriminative power) give exactly the positive prevalence `P / len(y_true)` -- these
+are the only two inputs with a closed-form result documented here, not a general property of every
+weak or random ranking. `average_precision_score` shares `roc_curve`'s input and error contract,
+except a `y_true` with no negative sample is accepted rather than rejected (same relaxation as
+`precision_recall_curve`).
+
+All four functions run in `O(N log N)` time, `O(N)` memory. This slice covers binary ROC/PR/
+ROC-AUC/average-precision only: no multiclass score matrix, no averaging, no sample weights, no
+trapezoidal PR AUC, no generic `auc(x, y)` helper, and no plotting.
 
 Augmentation sampling and replay -- flip:
 

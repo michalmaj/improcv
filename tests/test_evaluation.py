@@ -16,6 +16,7 @@ from improcv.evaluation import (
     ConfusionMatrixResult,
     PrecisionRecallCurve,
     RocCurve,
+    average_precision_score,
     classification_metrics,
     classification_metrics_from_confusion_matrix,
     confusion_matrix,
@@ -804,13 +805,15 @@ def test_evaluation_exports_from_top_level_package() -> None:
     assert im.roc_auc_score is roc_auc_score
     assert im.RocCurve is RocCurve
     assert im.PrecisionRecallCurve is PrecisionRecallCurve
+    assert im.average_precision_score is average_precision_score
 
 
 # =====================================================================================
-# Binary one-vs-rest ranking curves: roc_curve / precision_recall_curve / roc_auc_score
+# Binary one-vs-rest ranking curves: roc_curve / precision_recall_curve / roc_auc_score /
+# average_precision_score
 # =====================================================================================
 
-_RANKING_FUNCTIONS = (roc_curve, precision_recall_curve, roc_auc_score)
+_RANKING_FUNCTIONS = (roc_curve, precision_recall_curve, roc_auc_score, average_precision_score)
 
 
 def _mann_whitney_auc(y_true, y_score, positive_label) -> float:
@@ -1430,6 +1433,257 @@ def test_roc_auc_score_does_not_use_trapz_or_trapezoid() -> None:
         if isinstance(node, ast.Attribute) and node.attr in ("trapz", "trapezoid")
     }
     assert forbidden == set()
+
+
+# --- average precision ---
+
+
+def _grouped_threshold_ap_oracle(y_true, y_score, positive_label) -> float:
+    """Independent oracle: group by distinct score, then sum recall-increment-weighted
+    precision using cumulative recall (never a single division applied after summing raw
+    count-weighted increments) -- deliberately not the algebraically-equivalent-but-
+    differently-rounded transformed form the approved audit correction rejected."""
+    pairs = sorted(zip(y_score, y_true, strict=True), key=lambda item: item[0], reverse=True)
+    n_positive = sum(1 for _, label in pairs if label == positive_label)
+
+    groups: list[tuple[float, int, int]] = []
+    index = 0
+    while index < len(pairs):
+        score = pairs[index][0]
+        tp = 0
+        fp = 0
+        while index < len(pairs) and pairs[index][0] == score:
+            if pairs[index][1] == positive_label:
+                tp += 1
+            else:
+                fp += 1
+            index += 1
+        groups.append((score, tp, fp))
+
+    cumulative_tp = 0
+    cumulative_fp = 0
+    previous_recall = 0.0
+    ap = 0.0
+    for _, tp, fp in groups:
+        cumulative_tp += tp
+        cumulative_fp += fp
+        recall = cumulative_tp / n_positive
+        precision = cumulative_tp / (cumulative_tp + cumulative_fp)
+        ap += (recall - previous_recall) * precision
+        previous_recall = recall
+    return ap
+
+
+def test_average_precision_standard_example() -> None:
+    result = average_precision_score([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    assert result == pytest.approx(5 / 6)
+
+
+def test_average_precision_perfect_ranking_is_one() -> None:
+    result = average_precision_score([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9], positive_label=1)
+    assert result == 1.0
+
+
+def test_average_precision_reverse_ranking_is_not_zero() -> None:
+    # 5/12 exactly in real-number arithmetic, but the curve-based float64 computation does not
+    # land on the same bit pattern as the literal Python division `5 / 12` -- pytest.approx
+    # is deliberately used here (unlike the exact-equality regression below, which was built
+    # specifically so the curve-based result lands on an exact bit pattern).
+    result = average_precision_score([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1], positive_label=1)
+    assert result == pytest.approx(5 / 12)
+    assert result != 0.0
+
+
+def test_average_precision_all_positive_is_exactly_one() -> None:
+    result = average_precision_score([1, 1, 1], [0.1, 0.2, 0.3], positive_label=1)
+    assert result == 1.0
+
+
+def test_average_precision_allows_no_negative_samples() -> None:
+    result = average_precision_score([1, 1, 1], [0.1, 0.2, 0.3], positive_label=1)
+    assert result == 1.0
+
+
+def test_average_precision_constant_score_is_prevalence() -> None:
+    result = average_precision_score([0, 0, 1, 1, 1], [0.5] * 5, positive_label=1)
+    assert result == pytest.approx(3 / 5)
+
+
+def test_average_precision_one_positive_no_ties() -> None:
+    # A single positive at rank 2 (1-indexed, descending by score) among distinct scores:
+    # precision at that rank is 1/2, and it is the only nonzero recall-increment term.
+    result = average_precision_score([0, 1, 0], [0.9, 0.8, 0.5], positive_label=1)
+    assert result == pytest.approx(1 / 2)
+
+
+def test_average_precision_many_positives() -> None:
+    y_true = [0, 1, 0, 1, 1, 0, 1]
+    y_score = [0.05, 0.9, 0.1, 0.8, 0.6, 0.2, 0.4]
+    result = average_precision_score(y_true, y_score, positive_label=1)
+    expected = _grouped_threshold_ap_oracle(y_true, y_score, 1)
+    assert result == pytest.approx(expected)
+
+
+def test_average_precision_many_distinct_negative_labels() -> None:
+    y_true = [5, 7, 2, 1, 5, 7]
+    y_score = [0.9, 0.1, 0.2, 0.8, 0.3, 0.05]
+    result = average_precision_score(y_true, y_score, positive_label=5)
+    expected = _grouped_threshold_ap_oracle(y_true, y_score, 5)
+    assert result == pytest.approx(expected)
+
+
+def test_average_precision_mixed_ties() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.5, 0.5, 0.5, 0.9, 0.9, 0.1]
+    result = average_precision_score(y_true, y_score, positive_label=1)
+    expected = _grouped_threshold_ap_oracle(y_true, y_score, 1)
+    assert result == pytest.approx(expected)
+
+
+def test_average_precision_all_scores_tied_is_prevalence() -> None:
+    result = average_precision_score([0, 1, 0, 1, 1], [0.5] * 5, positive_label=1)
+    assert result == pytest.approx(3 / 5)
+
+
+def test_average_precision_signed_zero_ties() -> None:
+    first = average_precision_score([0, 1], [0.0, -0.0], positive_label=1)
+    second = average_precision_score([1, 0], [-0.0, 0.0], positive_label=1)
+    assert first == second
+
+
+def test_average_precision_extreme_finite_score_no_warning() -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = average_precision_score(y_true, y_score, positive_label=1)
+    assert 0.0 <= result <= 1.0
+
+
+def test_average_precision_permutation_invariance() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.2, 0.5, 0.5, 0.5, 0.9]
+    baseline = average_precision_score(y_true, y_score, positive_label=1)
+
+    rng = np.random.default_rng(0)
+    indices = np.arange(len(y_true))
+    for _ in range(20):
+        rng.shuffle(indices)
+        permuted_true = [y_true[i] for i in indices]
+        permuted_score = [y_score[i] for i in indices]
+        assert average_precision_score(permuted_true, permuted_score, positive_label=1) == baseline
+
+
+def test_average_precision_tie_permutation_invariance() -> None:
+    # All samples in the tie group at score 0.5 are permuted independently of the rest.
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.9, 0.5, 0.5, 0.5, 0.5, 0.1]
+    baseline = average_precision_score(y_true, y_score, positive_label=1)
+
+    tie_true = y_true[1:5]
+    rng = np.random.default_rng(1)
+    indices = np.arange(4)
+    for _ in range(10):
+        rng.shuffle(indices)
+        permuted = [y_true[0]] + [tie_true[i] for i in indices] + [y_true[5]]
+        assert average_precision_score(permuted, y_score, positive_label=1) == baseline
+
+
+def test_average_precision_strictly_increasing_transform_invariance() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.5, 0.1, 0.9, 0.5, 0.5]
+    baseline = average_precision_score(y_true, y_score, positive_label=1)
+    transformed_score = [math.exp(s) for s in y_score]
+    transformed = average_precision_score(y_true, transformed_score, positive_label=1)
+    assert transformed == pytest.approx(baseline)
+
+
+def test_average_precision_score_result_is_plain_float() -> None:
+    result = average_precision_score([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1)
+    assert type(result) is float
+
+
+def test_average_precision_score_bounds() -> None:
+    for y_true, y_score in (
+        ([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8]),
+        ([0, 1], [0.5, 0.5]),
+        ([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1]),
+    ):
+        result = average_precision_score(y_true, y_score, positive_label=1)
+        assert 0.0 <= result <= 1.0
+
+
+def test_average_precision_equals_public_curve_arithmetic() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.5, 0.1, 0.9, 0.5, 0.5]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    expected = float(np.sum(np.diff(pr.recall) * pr.precision[1:], dtype=np.float64))
+    result = average_precision_score(y_true, y_score, positive_label=1)
+    assert result == expected
+
+
+def test_average_precision_uses_public_curve_arithmetic_order() -> None:
+    # Constructed so the algebraically-equivalent "single division after summing raw
+    # count-weighted increments" form rounds to a different float64 bit pattern than the
+    # public curve-based definition -- verified directly (see the approved audit correction).
+    y_true = [1, 0, 0, 0, 0, 0, 1, 1, 0]
+    y_score = [2, 2, 2, 2, 2, 2, 1, 1, 1]
+
+    pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    expected = float(np.sum(np.diff(pr.recall) * pr.precision[1:], dtype=np.float64))
+
+    result = average_precision_score(y_true, y_score, positive_label=1)
+
+    assert expected == 5 / 18
+    assert result == expected
+
+    # The rejected, algebraically-equivalent transformed form gives a different float64 bit
+    # pattern on this exact input -- demonstrating why the public definition's arithmetic
+    # order is a real, load-bearing part of the contract, not an implementation detail.
+    true_positive = np.array([0, 1, 3], dtype=np.float64)
+    false_positive = np.array([0, 5, 6], dtype=np.float64)
+    group_increment = np.array([1, 2], dtype=np.float64)
+    precision = true_positive[1:] / (true_positive[1:] + false_positive[1:])
+    transformed = float(np.sum(group_increment * precision, dtype=np.float64) / 3)
+    assert transformed != expected
+    assert transformed == 0.27777777777777773
+
+
+def test_average_precision_vs_trapezoidal_pr_auc_trapezoid_larger() -> None:
+    y_true = [0, 1, 0]
+    y_score = [3, 3, 2]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    ap = average_precision_score(y_true, y_score, positive_label=1)
+    trapezoid = float(
+        np.sum(
+            np.diff(pr.recall) * (pr.precision[:-1] + pr.precision[1:]) * 0.5,
+            dtype=np.float64,
+        )
+    )
+    assert ap == pytest.approx(1 / 2)
+    assert trapezoid == pytest.approx(3 / 4)
+    assert trapezoid > ap
+
+
+def test_average_precision_vs_trapezoidal_pr_auc_trapezoid_smaller() -> None:
+    y_true = [0, 0, 1]
+    y_score = [3, 3, 2]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1)
+    ap = average_precision_score(y_true, y_score, positive_label=1)
+    trapezoid = float(
+        np.sum(
+            np.diff(pr.recall) * (pr.precision[:-1] + pr.precision[1:]) * 0.5,
+            dtype=np.float64,
+        )
+    )
+    assert ap == pytest.approx(1 / 3)
+    assert trapezoid == pytest.approx(1 / 6)
+    assert trapezoid < ap
 
 
 # --- result types: RocCurve / PrecisionRecallCurve ---

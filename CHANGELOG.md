@@ -195,6 +195,25 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   return new, independent, read-only `float64` arrays, never a view of `y_true`/`y_score`. No
   generic `auc(x, y)` helper, no average precision, no trapezoidal PR AUC, no multiclass score
   matrix/averaging, no sample weights, and no plotting in this slice.
+- `improcv.evaluation`, Phase 5 slice: binary one-vs-rest non-interpolated average precision --
+  `average_precision_score`, sharing the exact grouped-threshold tie contract, input contract, and
+  error contract as `precision_recall_curve` (including that a `y_true` with no negative sample is
+  legal). This is classification ranking average precision, not object-detection AP or mAP (no
+  bounding boxes, no IoU matching, no per-class averaging). Defined as the non-interpolated
+  weighted mean of precision using each recall increment as its weight -- `sum((recall[i] -
+  recall[i - 1]) * precision[i] for i in 1..K)`, with `precision[i]` always taken from the right
+  end of each recall increment -- computed directly from the private grouped-threshold core
+  (without constructing a public `PrecisionRecallCurve`) using the exact same `float64` arithmetic
+  order as `precision_recall_curve`'s public arrays would produce (`sum(diff(recall) *
+  precision[1:])`), not an algebraically-equivalent but differently-rounded single-division-after-
+  summing form -- verified directly that the two orders can disagree in the last bit on a
+  constructed input. `average_precision_score` is not the trapezoidal area under the PR curve
+  (a distinct quantity, not added in this slice): depending on the curve's shape and its ties, that
+  trapezoidal area can be larger or smaller than average precision, never consistently one or the
+  other -- verified with two concrete examples in opposite directions. A `y_true` with no negative
+  sample returns exactly `1.0`; constant scores return exactly the positive prevalence. No
+  trapezoidal PR AUC, no generic `auc(x, y)` helper, no interpolated/VOC/COCO-style AP, no
+  object-detection AP/mAP, no new public result type, and no new dependency in this slice.
 
 ### Fixed
 - `improcv.discovery`: `discover_images` now classifies descendants using a fresh path-based
