@@ -126,8 +126,9 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   positional pattern matching all keep working exactly as before. Shear is parameterized as a raw,
   dimensionless coefficient (not degrees -- a degrees-based `tan()` conversion has a practically
   unguarded singularity at ±90° that a raw coefficient doesn't), applied as `Shy(shear_y) @
-  Shx(shear_x)` (`[[1, shear_x], [shear_y, 1 + shear_x*shear_y]]`): determinant `1` for any finite
-  coefficients, so it's never singular and never flips orientation, unlike the naive-looking
+  Shx(shear_x)` (`[[1, shear_x], [shear_y, 1 + shear_x*shear_y]]`): determinant `1` mathematically
+  for any finite coefficients (a statement about the exact real-number parameterization, not a
+  promise of infinite `float64` precision -- see the `Fixed` entry below), unlike the naive-looking
   `[[1, shear_x], [shear_y, 1]]` (determinant `1 - shear_x*shear_y`), which `improcv` does not use.
   Composition order is shear x, then shear y, then rotation + isotropic scale around the same
   center as before, then translation -- shear does not commute with rotation, so this is a fixed,
@@ -140,6 +141,20 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   unchanged. No new dependency.
 
 ### Fixed
+- `improcv.augmentation`: reject sequential affine-shear coefficients when `float64` rounding
+  removes the unit determinant term, preventing a mathematically invertible shear from being stored
+  as a singular matrix. `sample_affine`'s sequential shear matrix (`[[1, shear_x], [shear_y, 1 +
+  shear_x*shear_y]]`) has determinant `1` for any finite `shear_x`/`shear_y` as an exact real-number
+  statement, but `1.0 + shear_x*shear_y` silently rounds down to exactly `shear_x*shear_y` in
+  `float64` once `|shear_x*shear_y|` is roughly `2**52` or larger (e.g. `shear_x=shear_y=1e8`) --
+  the previous code accepted this (the resulting matrix is still finite, so the existing
+  finite-matrix check didn't catch it), silently storing a singular matrix for shear coefficients
+  that were, mathematically, perfectly invertible. `sample_affine` now checks this specific
+  condition directly and raises `ValueError` before the matrix is built, in addition to (not instead
+  of) the pre-existing finite-matrix check for genuine overflow to `inf`/`NaN`. No arbitrary
+  `abs(shear)` limit or condition-number threshold was introduced -- a large, but still
+  representable and invertible, shear coefficient remains accepted even though it can produce a
+  very poorly conditioned matrix.
 - `improcv.augmentation`: `apply_affine` now rejects `WARP_INVERSE_MAP` and other non-interpolation
   flag bits passed through the `interpolation` parameter, preventing a saved affine matrix from
   being silently interpreted in the opposite direction.
