@@ -139,6 +139,29 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `scale` from exactly the same `rng` sequence, call after call, as they did before shear existed.
   `apply_affine`'s public signature, the mask dtype contract, and `transforms.py` are all
   unchanged. No new dependency.
+- New `improcv.discovery` module, Phase 5 slice (deterministic extension-based dataset image
+  discovery): `discover_images`, finding candidate image files under a directory by filename
+  extension only -- a file's content is never opened or decoded, so an empty, corrupted, or
+  non-image file with a matching extension is still discovered. `recursive` (default `True`)
+  controls whether subdirectories are descended into; `extensions` (default: seven common raster
+  extensions -- `.jpg`/`.jpeg`/`.png`/`.bmp`/`.tif`/`.tiff`/`.webp` -- covering five widely-used
+  formats, not derived from what the local OpenCV build happens to support) accepts any
+  `Collection[str]`, case-insensitively, with or without a leading dot, including multi-part
+  extensions like `.nii.gz`; a bare `str`/`bytes`/`bytearray`, a `Mapping`, or a generator/iterator
+  passed where a collection of extensions is expected are all rejected with `TypeError` rather than
+  silently misinterpreted. `include_hidden` (default `False`) skips a descendant file or directory
+  whose name starts with `.` (and everything under a skipped directory) -- this never applies to
+  `root` itself, so an explicitly given dot-prefixed `root` is still searched. A symlink or Windows
+  reparse point (including a junction) found while traversing `root`'s contents is always skipped,
+  along with everything under it -- there is no `follow_symlinks` option -- but `root` itself may be
+  a symlink to a directory. The result is a materialized, globally-sorted `tuple[Path, ...]` (sorted
+  by each path's POSIX-style form relative to `root`, independent of traversal order or the
+  platform's path separator), anchored under `root` exactly as given (never resolved or made
+  absolute). Filesystem errors are fail-fast (a missing/inaccessible `root`, or a permission error
+  encountered anywhere during traversal, propagates immediately as a native `OSError` subclass,
+  never silently skipped or wrapped in a new exception type -- there is no OpenCV/NumPy involvement
+  in this module at all). No image/mask pairing, class inference from directory names, dataset
+  splits, manifests, or loading/decoding in this slice, and no new dependency.
 
 ### Fixed
 - `improcv.augmentation`: reject sequential affine-shear coefficients when `float64` rounding

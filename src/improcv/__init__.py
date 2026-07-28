@@ -81,6 +81,7 @@ from improcv.detectors import (
     detect_fast_keypoints,
     detect_mser_regions,
 )
+from improcv.discovery import discover_images
 from improcv.dnn import (
     create_dnn_batch_blob,
     create_dnn_blob,
@@ -282,6 +283,7 @@ __all__ = [
     "detect_fast_keypoints",
     "detect_mser_regions",
     "dilate",
+    "discover_images",
     "distance_transform",
     "draw_bounding_boxes",
     "draw_contours",
