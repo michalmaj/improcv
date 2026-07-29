@@ -811,18 +811,23 @@ same positive geometric area a non-decreasing order of the same points would, no
 `roc_auc_score`/`average_precision_score`, whose inputs and outputs are always in `[0, 1]` by
 construction, `auc`'s `y` may be negative and so may its result. Ordinary calls use a fast,
 canonical `float64` summation; if an intermediate segment width, height sum, or product would
-overflow `float64`, `auc` falls back to computing the exact trapezoidal sum as a rational number
-(`fractions.Fraction`, standard library, used only on this rare path) over the already-normalized
-`float64` values, converting only the final total back to `float` -- this correctly preserves
-cancellation between huge intermediate contributions and a subnormal residual that a naive
-rescale-based fallback could otherwise underflow away to `0.0`. Only an input whose true, exact area
-is not representable as a finite `float64` raises `ValueError` -- this never silently returns
-`inf`/`-inf`/`NaN`, and never emits a NumPy warning for an accepted input. `auc` computes the
-trapezoidal area under the precision-recall curve when called as `auc(curve.recall, curve.precision)`
--- this is a distinct quantity from `average_precision_score` (a non-interpolated, non-trapezoidal
-definition, see above), and this is the complete, supported way to compute it: there is no separate
-score-level function for it, to avoid one more symbol that could be confused with
-`average_precision_score`.
+overflow `float64`, or if a segment's own contribution would underflow in a way that could lose it
+before it has a chance to be summed with its neighbors, `auc` falls back to computing the exact
+trapezoidal sum as a rational number (`fractions.Fraction`, standard library, used only on this rare
+path) over the already-normalized `float64` values, converting only the final total back to `float`
+-- this correctly preserves cancellation between huge intermediate contributions and an accumulated
+subnormal residual (several segments that each round to `0.0` on their own, but whose exact total is
+a representable positive subnormal `float64`) that a fast, per-segment `float64` computation could
+otherwise lose. A segment whose exact contribution genuinely is closer to `0.0` than to the smallest
+positive subnormal `float64` still legitimately rounds to `0.0` -- the exact fallback decides this
+correctly rather than the fast path guessing. Only an input whose true, exact area is not
+representable as a finite `float64` raises `ValueError` -- this never silently returns
+`inf`/`-inf`/`NaN`, and never emits a NumPy warning for an accepted input regardless of the caller's
+own `np.seterr`/`np.errstate` configuration. `auc` computes the trapezoidal area under the
+precision-recall curve when called as `auc(curve.recall, curve.precision)` -- this is a distinct
+quantity from `average_precision_score` (a non-interpolated, non-trapezoidal definition, see above),
+and this is the complete, supported way to compute it: there is no separate score-level function for
+it, to avoid one more symbol that could be confused with `average_precision_score`.
 
 `roc_curve`/`precision_recall_curve`/`roc_auc_score`/`average_precision_score` run in `O(N log N)`
 time, `O(N)` memory, dominated by sorting scores by rank. `auc` needs no sorting: its ordinary,

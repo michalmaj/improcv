@@ -222,16 +222,20 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   same points would, not a signed integral. `y` may be negative and so may the result -- unlike
   `roc_auc_score`/`average_precision_score`, whose domain is always `[0, 1]` by construction, `auc`
   has no such bound. Ordinary calls use a fast, canonical `float64` summation; if an intermediate
-  segment width, height sum, or product would overflow `float64`, `auc` falls back to computing the
-  exact trapezoidal sum as a rational number (`fractions.Fraction`, standard library, used only on
-  this rare path) over the already-normalized `float64` values, converting only the final total back
-  to `float` -- verified directly for a height-sum overflow with a finite result, a width overflow
-  with a finite result, constant `x` with an extreme finite `y`, a width overflow combined with a
-  tiny `y` giving a finite nonzero result, cancellation between huge intermediate contributions
-  (summing exactly to `0.0` and to `1.0` in two constructed examples), and a subnormal residual
-  (summing exactly to `5e-324`, the smallest positive subnormal `float64`), all without emitting a
-  NumPy warning; only an input whose true, exact area is not representable as a finite `float64`
-  raises `ValueError`, never silently `inf`/`-inf`/`NaN`. `auc` computes the trapezoidal area under
+  segment width, height sum, or product would overflow `float64`, or if a segment's own
+  contribution would underflow in a way that could lose it before it has a chance to be summed
+  with its neighbors, `auc` falls back to computing the exact trapezoidal sum as a rational number
+  (`fractions.Fraction`, standard library, used only on this rare path) over the already-normalized
+  `float64` values, converting only the final total back to `float` -- verified directly for a
+  height-sum overflow with a finite result, a width overflow with a finite result, constant `x`
+  with an extreme finite `y`, a width overflow combined with a tiny `y` giving a finite nonzero
+  result, cancellation between huge intermediate contributions (summing exactly to `0.0` and to
+  `1.0` in two constructed examples), a subnormal residual accumulated from several underflowing
+  segments (summing exactly to `5e-324`, the smallest positive subnormal `float64`), and a segment
+  whose exact contribution genuinely rounds to `0.0` (legal, not an error), all without emitting a
+  NumPy warning regardless of the caller's own `np.seterr`/`np.errstate` configuration; only an
+  input whose true, exact area is not representable as a finite `float64` raises `ValueError`,
+  never silently `inf`/`-inf`/`NaN`. `auc` computes the trapezoidal area under
   the precision-recall curve when called as
   `auc(curve.recall, curve.precision)` -- a distinct quantity from `average_precision_score` (see
   above), and the complete, supported way to obtain it: there is no separate score-level function
@@ -244,6 +248,21 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   slice.
 
 ### Fixed
+- `improcv.evaluation`: `auc`'s fast `float64` path (`_trapezoidal_area_float64`) previously only
+  guarded against overflow and invalid (NaN-producing) operations, not underflow -- so an
+  individual segment's own contribution could round to `0.0` under plain `float64` arithmetic
+  before it ever had a chance to be summed with its neighbors, even when several such segments'
+  *exact* contributions summed to a representable positive subnormal `float64`: `auc` could
+  therefore silently return `0.0` for an input whose true trapezoidal area is a nonzero subnormal
+  value. The fast path now also raises on underflow (`np.errstate(..., under="raise")`), routing
+  such an input to the existing exact `fractions.Fraction` fallback (added in the previous fix,
+  below) the same way an overflow already does -- that fallback's exact rational summation
+  correctly distinguishes a genuinely-zero result from several separately-underflowing
+  contributions whose true sum is a representable positive subnormal `float64`, without emitting
+  a NumPy warning regardless of the caller's own `np.seterr`/`np.errstate` configuration. The
+  ordinary fast path for non-underflowing, non-overflowing data (and therefore `roc_auc_score`'s
+  own bit-identical result on its own `[0, 1]`-bounded domain, which never reaches either
+  fallback trigger) is unchanged.
 - `improcv.evaluation`: `auc`'s overflow fallback (introduced alongside `auc` itself, in this same
   `[Unreleased]` series) previously rescaled every value by a single `0.5`/`2.0` factor before
   recombining, which is not actually exact at the extremes: (1) it wrongly raised `ValueError` for
