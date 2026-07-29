@@ -1071,23 +1071,31 @@ def auc(
     the trapezoidal PR-curve area under its own name: `auc(curve.recall, curve.precision)` is
     the complete, supported way to compute it.
 
-    Ordinary calls use a fast, canonical `float64` summation. If an intermediate segment width,
-    height sum, or product would overflow `float64`, or if a segment's own contribution would
-    underflow in a way that could lose it before it has a chance to be summed with its
-    neighbors, this falls back to computing the exact trapezoidal sum as a rational number
-    (`fractions.Fraction`, standard library, used only on this rare path) over the
-    already-normalized `float64` values, then converts only the final total to `float` -- this
-    correctly preserves cancellation between huge intermediate contributions (e.g. two segments
-    whose true areas are individually far larger than `float64`'s range but whose sum is exactly
-    representable) and an accumulated subnormal residual (e.g. several segments that each round
-    to `0.0` on their own, but whose exact total is a representable positive subnormal
-    `float64`) that a fast, per-segment `float64` computation could otherwise lose. A segment
-    whose exact contribution genuinely is closer to `0.0` than to the smallest positive
-    subnormal `float64` still legitimately rounds to `0.0` -- the exact fallback decides this
-    correctly rather than the fast path guessing. Only an input whose true, exact area is not
-    representable as a finite `float64` raises `ValueError`. No NumPy warning is ever emitted for
-    an accepted input regardless of the caller's own `np.seterr`/`np.errstate` configuration,
-    and this never silently returns `inf`/`-inf`/`NaN`.
+    Ordinary calls -- `y` entirely non-negative or entirely non-positive, with no intermediate
+    overflow/underflow -- use a fast, canonical `float64` summation (this is the path
+    `roc_auc_score`'s always-non-negative TPR and `auc(curve.recall, curve.precision)`'s
+    always-non-negative precision both take). This falls back to computing the exact
+    trapezoidal sum as a rational number (`fractions.Fraction`, standard library, used only on
+    these rare paths) over the already-normalized `float64` values, then converts only the final
+    total to `float`, in three situations: (1) an intermediate segment width, height sum, or
+    product would overflow `float64`; (2) a segment's own contribution would underflow in a way
+    that could lose it before it has a chance to be summed with its neighbors; or (3) `y`
+    contains both a positive and a negative value, since opposite-signed contributions can
+    cancel in the final sum in a way no NumPy overflow/underflow/invalid signal would ever catch.
+    This correctly preserves cancellation between huge intermediate contributions (e.g. two
+    segments whose true areas are individually far larger than `float64`'s range but whose sum
+    is exactly representable), an accumulated subnormal residual (e.g. several segments that
+    each round to `0.0` on their own, but whose exact total is a representable positive
+    subnormal `float64`), and a residual from cancellation between oppositely-signed
+    contributions (e.g. `y=[1.0, 1e-20, -1.0]`, whose exact area is `1e-20` but whose plain
+    `float64` segment contributions of `0.5` and `-0.5` would otherwise cancel to `0.0`) -- all
+    cases a fast, per-segment `float64` computation could otherwise lose. A contribution whose
+    exact value genuinely is closer to `0.0` than to the smallest positive subnormal `float64`
+    still legitimately rounds to `0.0` -- the exact fallback decides this correctly rather than
+    the fast path guessing. Only an input whose true, exact area is not representable as a
+    finite `float64` raises `ValueError`. No NumPy warning is ever emitted for an accepted input
+    regardless of the caller's own `np.seterr`/`np.errstate` configuration, and this never
+    silently returns `inf`/`-inf`/`NaN`.
 
     Raises
     ------
@@ -1252,23 +1260,42 @@ def _trapezoidal_area(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) ->
     reproduces `roc_auc_score`'s previous bit-for-bit result on representative curves, ties,
     constant scores, and 1000 random deterministic rankings).
 
-    Tries `_trapezoidal_area_float64` first (the plain, canonical `float64` operation order --
-    for `roc_auc_score`'s own `[0, 1]`-bounded domain this can never overflow *or* underflow:
-    its FPR/TPR values come from `int64` counts, so even the smallest nonzero increments and
-    their products stay many orders of magnitude above the subnormal range, and that fast path
-    is always the one taken there, unchanged). Only on `FloatingPointError` -- raised for an
-    intermediate overflow, an invalid (NaN-producing) operation, *or* an intermediate underflow
-    that could lose a segment's contribution before it has a chance to be summed with its
-    neighbors -- does this fall back to `_trapezoidal_area_exact_fallback`, which recomputes the
-    same sum exactly (via `fractions.Fraction`) on the already-normalized `float64` values, so
-    none of those three failure modes ever turns into a wrong or falsely-rejected result:
-    cancelling huge intermediate contributions and an accumulated subnormal residual are both
-    preserved exactly (see that function's docstring for why a naive power-of-two-scaled
-    fallback previously got both wrong). Not every underflow changes the final result -- a
-    segment whose exact contribution is genuinely closer to `0.0` than to the smallest positive
-    subnormal `float64` legitimately rounds to `0.0` either way; the exact fallback decides this
-    correctly, rather than the fast path guessing wrong in either direction.
+    Routes to the exact fallback in two situations:
+
+    - `y` has both a positive and a negative value (checked first, unconditionally): every
+      segment's width is already non-negative (`abs()`), so a `y` that is entirely non-negative
+      or entirely non-positive can only ever produce same-signed contributions -- nothing to
+      cancel, so the fast path is safe (and is what `roc_auc_score`'s always-non-negative TPR,
+      and `auc(curve.recall, curve.precision)`'s always-non-negative precision, both use). Once
+      `y` has mixed signs, contributions of opposite sign can cancel in the final sum, and a
+      `float64` `y[i] + y[i+1]` can round away a residual that survives in exact arithmetic --
+      verified directly: `x=[0,1,2], y=[1.0, 1e-20, -1.0]` has exact area `1e-20`, but
+      `1.0 + 1e-20 == 1.0` and `1e-20 - 1.0 == -1.0` in `float64`, so the fast path's two
+      segment contributions round to `0.5` and `-0.5` and cancel to `0.0` -- silently, with no
+      overflow, underflow, or invalid operation for `np.errstate` to catch. Checked globally
+      across all of `y`, not pairwise between neighbors: even non-adjacent positive and negative
+      contributions can cancel in the final sum.
+    - `_trapezoidal_area_float64` raises `FloatingPointError` -- for an intermediate overflow,
+      an invalid (NaN-producing) operation, or an intermediate underflow that could lose a
+      segment's contribution before it has a chance to be summed with its neighbors (only
+      possible here when `y` is single-signed, since mixed-sign `y` is already routed to the
+      exact fallback above).
+
+    Either way, `_trapezoidal_area_exact_fallback` recomputes the same sum exactly (via
+    `fractions.Fraction`) on the already-normalized `float64` values, so none of these failure
+    modes ever turns into a wrong or falsely-rejected result: cancelling huge intermediate
+    contributions, an accumulated subnormal residual, and a mixed-sign cancellation residual are
+    all preserved exactly (see that function's docstring). Not every underflow or cancellation
+    changes the final result -- a contribution genuinely closer to `0.0` than to the smallest
+    positive subnormal `float64` legitimately rounds to `0.0` either way; the exact fallback
+    decides this correctly, rather than the fast path guessing wrong in either direction.
+
+    For `roc_auc_score`'s own `[0, 1]`-bounded, always-non-negative-TPR domain, none of this
+    ever triggers, so that fast path is always the one taken there, unchanged.
     """
+    if np.any(y > 0.0) and np.any(y < 0.0):
+        return _trapezoidal_area_exact_fallback(x, y)
+
     try:
         return _trapezoidal_area_float64(x, y)
     except FloatingPointError:
@@ -1278,6 +1305,14 @@ def _trapezoidal_area(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) ->
 def _trapezoidal_area_float64(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> float:
     """The canonical, fast `float64` trapezoidal sum -- raises `FloatingPointError` instead of
     silently returning a wrong result for an intermediate overflow *or* underflow.
+
+    Only ever called by `_trapezoidal_area` when `y` is entirely non-negative or entirely
+    non-positive (mixed-sign `y` is routed directly to the exact fallback instead, before this
+    function is reached -- see `_trapezoidal_area`'s own docstring for why cancellation between
+    opposite-signed contributions can silently lose a representable residual in a way
+    `np.errstate` cannot detect). For single-signed `y`, every segment's contribution has the
+    same sign, so no cancellation between segments is possible here -- only overflow, an
+    invalid operation, or underflow within a single segment's own computation can occur.
 
     Wrapped in `np.errstate(over="raise", invalid="raise", under="raise")`. `over`/`invalid`:
     verified directly that NumPy's default ("warn") mode silently returns `inf` (with only a
@@ -1299,19 +1334,28 @@ def _trapezoidal_area_float64(x: npt.NDArray[np.float64], y: npt.NDArray[np.floa
 def _trapezoidal_area_exact_fallback(
     x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
 ) -> float:
-    """Recompute the trapezoidal sum exactly (via `fractions.Fraction`), for the rare case
-    where `_trapezoidal_area_float64` overflows on an intermediate width/height-sum/product.
+    """Recompute the trapezoidal sum exactly (via `fractions.Fraction`), for every case where
+    `_trapezoidal_area_float64`'s fast, canonical `float64` arithmetic cannot be trusted to give
+    the correctly-rounded result: an overflow or invalid (NaN-producing) intermediate operation,
+    an intermediate underflow that could lose a segment's own contribution before summation, or
+    `y` containing both a positive and a negative value (routed here directly, without ever
+    calling `_trapezoidal_area_float64` at all -- see `_trapezoidal_area`'s docstring).
 
     Every `float64` value converts to an exact `Fraction` (`Fraction.from_float`), so summing
     every segment's exact contribution and converting only the final total back to `float`
-    -- rather than rescaling each segment individually with `float64` arithmetic of its own --
-    correctly preserves both cancellation between huge intermediate contributions (verified
+    -- rather than computing each segment (or the whole sum) with `float64` arithmetic of its
+    own -- correctly preserves cancellation between huge intermediate contributions (verified
     directly: `x=[-M, -M/3, M/3, M], y=[M, M, -M, -M]` sums exactly to `0.0`, and a second,
-    similarly-cancelling input sums exactly to `1.0`) and a subnormal residual that a
+    similarly-cancelling input sums exactly to `1.0`), a subnormal residual that a
     power-of-two-scaled `float64` fallback would otherwise underflow away to `0.0` (verified
     directly: a sum whose exact value is `5e-324`, the smallest positive subnormal `float64`,
     previously came back as exactly `0.0` from a naive halve-then-double `float64` fallback,
-    because halving a value already at the edge of the subnormal range loses it entirely).
+    because halving a value already at the edge of the subnormal range loses it entirely), and a
+    residual from cancellation between *opposite-signed* contributions (verified directly:
+    `x=[0,1,2], y=[1.0, 1e-20, -1.0]` has exact area `1e-20`, but plain `float64` rounds
+    `1.0 + 1e-20` to `1.0` and `1e-20 - 1.0` to `-1.0`, so the two segments' `float64`
+    contributions of `0.5` and `-0.5` cancel to `0.0` with no overflow, underflow, or invalid
+    operation for `np.errstate` to catch at all).
 
     `float(Fraction)` gives the correctly-rounded nearest `float64` for the exact total, and
     raises `OverflowError` when the true magnitude is too large for any finite `float64` --
@@ -1324,7 +1368,8 @@ def _trapezoidal_area_exact_fallback(
     that assumption were ever wrong).
 
     `fractions.Fraction` is standard library, not a new runtime dependency, and is used only on
-    this rare, overflow-triggered path -- ordinary calls never construct a `Fraction`.
+    these rare paths (overflow, invalid, underflow, or mixed-sign `y`) -- ordinary calls with
+    single-signed, non-overflowing, non-underflowing data never construct a `Fraction`.
     """
     total = Fraction()
     for index in range(x.shape[0] - 1):
