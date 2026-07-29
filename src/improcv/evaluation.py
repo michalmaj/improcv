@@ -34,6 +34,7 @@ import numbers
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Literal, NamedTuple
 
 import numpy as np
@@ -1070,11 +1071,17 @@ def auc(
     the trapezoidal PR-curve area under its own name: `auc(curve.recall, curve.precision)` is
     the complete, supported way to compute it.
 
-    An intermediate segment width, height sum, or product that would overflow `float64` is
-    recovered through an exact, power-of-two-scaled fallback where the true geometric area is
-    still finite and representable; only an input whose true area is not representable as a
-    finite `float64` raises `ValueError`. No NumPy warning is ever emitted for an accepted
-    input, and this never silently returns `inf`/`-inf`/`NaN`.
+    Ordinary calls use a fast, canonical `float64` summation. If an intermediate segment width,
+    height sum, or product would overflow `float64`, this falls back to computing the exact
+    trapezoidal sum as a rational number (`fractions.Fraction`, standard library, used only on
+    this rare path) over the already-normalized `float64` values, then converts only the final
+    total to `float` -- this correctly preserves cancellation between huge intermediate
+    contributions (e.g. two segments whose true areas are individually far larger than
+    `float64`'s range but whose sum is exactly representable) and a subnormal residual that a
+    naive rescale-based fallback could otherwise underflow away to `0.0`. Only an input whose
+    true, exact area is not representable as a finite `float64` raises `ValueError`. No NumPy
+    warning is ever emitted for an accepted input, and this never silently returns
+    `inf`/`-inf`/`NaN`.
 
     Raises
     ------
@@ -1239,46 +1246,81 @@ def _trapezoidal_area(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) ->
     reproduces `roc_auc_score`'s previous bit-for-bit result on representative curves, ties,
     constant scores, and 1000 random deterministic rankings).
 
-    Tries the plain operation order first, under `np.errstate(over="raise", invalid="raise")`
-    so an overflowing/NaN-producing intermediate raises `FloatingPointError` instead of
-    silently returning `inf`/`NaN` with only a printed (and easily missed) `RuntimeWarning` --
-    verified directly that NumPy's default ("warn") mode does exactly that for a genuinely
-    finite, representable input (e.g. `x=[0, 1e250], y=[1e200, 1e200]`). For `roc_auc_score`'s
-    own `[0, 1]`-bounded domain this can never overflow, so that fast path is always the one
-    taken, unchanged.
-
-    If the fast path overflows, falls back to an exact, power-of-two-scaled recomputation:
-    scaling by `0.5`/`2.0` is always exact under IEEE 754 (only the exponent changes, never the
-    mantissa, short of underflow/overflow at the very extremes), so halving both operands
-    before combining them and rescaling once at the end recovers a segment whose true
-    contribution is finite even though the direct computation of its width, height sum, or
-    product would overflow -- verified directly for a height-sum overflow with finite result
-    (`x=[0,1], y=[M,M]` -> exactly `M`), a width overflow with finite result (`x=[-M,M],
-    y=[0,0]` -> exactly `0.0`), constant `x` with an extreme finite `y` (`x=[0,0], y=[M,M]` ->
-    exactly `0.0`), and a width overflow combined with a tiny `y` giving a finite, nonzero
-    result, all without emitting any NumPy warning. Deferring the final `*2.0` rescale until
-    after summing every segment (rather than rescaling each segment individually) gives the
-    aggregate sum extra headroom before it, itself, could overflow.
-
-    Only raises `ValueError` if even this safe fallback cannot produce a finite result (i.e.
-    the true geometric area genuinely is not representable as a finite `float64`, such as
-    `x=[-M,M], y=[M,M]`) -- never claims non-representability merely because the first,
-    unscaled attempt happened to overflow.
+    Tries `_trapezoidal_area_float64` first (the plain, canonical `float64` operation order --
+    for `roc_auc_score`'s own `[0, 1]`-bounded domain this can never overflow, so that fast path
+    is always the one taken, unchanged). Only on `FloatingPointError` does this fall back to
+    `_trapezoidal_area_exact_fallback`, which recomputes the same sum exactly (via
+    `fractions.Fraction`) on the already-normalized `float64` values, so a fast-path overflow
+    never turns into a wrong or falsely-rejected result: cancelling huge intermediate
+    contributions and a subnormal residual are both preserved exactly (see that function's
+    docstring for why a naive power-of-two-scaled fallback previously got both wrong).
     """
     try:
-        with np.errstate(over="raise", invalid="raise"):
-            return float(np.sum(np.abs(np.diff(x)) * (y[:-1] + y[1:]) * 0.5, dtype=np.float64))
+        return _trapezoidal_area_float64(x, y)
     except FloatingPointError:
-        pass
+        return _trapezoidal_area_exact_fallback(x, y)
+
+
+def _trapezoidal_area_float64(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> float:
+    """The canonical, fast `float64` trapezoidal sum -- raises `FloatingPointError` instead of
+    silently returning `inf`/`NaN` for an intermediate overflow.
+
+    Wrapped in `np.errstate(over="raise", invalid="raise")`: verified directly that NumPy's
+    default ("warn") mode silently returns `inf` (with only a printed, easily-missed
+    `RuntimeWarning`) for a genuinely finite, representable input (e.g. `x=[0, 1e250],
+    y=[1e200, 1e200]`) -- this makes that failure loud and catchable instead.
+    """
+    with np.errstate(over="raise", invalid="raise"):
+        return float(np.sum(np.abs(np.diff(x)) * (y[:-1] + y[1:]) * 0.5, dtype=np.float64))
+
+
+def _trapezoidal_area_exact_fallback(
+    x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
+) -> float:
+    """Recompute the trapezoidal sum exactly (via `fractions.Fraction`), for the rare case
+    where `_trapezoidal_area_float64` overflows on an intermediate width/height-sum/product.
+
+    Every `float64` value converts to an exact `Fraction` (`Fraction.from_float`), so summing
+    every segment's exact contribution and converting only the final total back to `float`
+    -- rather than rescaling each segment individually with `float64` arithmetic of its own --
+    correctly preserves both cancellation between huge intermediate contributions (verified
+    directly: `x=[-M, -M/3, M/3, M], y=[M, M, -M, -M]` sums exactly to `0.0`, and a second,
+    similarly-cancelling input sums exactly to `1.0`) and a subnormal residual that a
+    power-of-two-scaled `float64` fallback would otherwise underflow away to `0.0` (verified
+    directly: a sum whose exact value is `5e-324`, the smallest positive subnormal `float64`,
+    previously came back as exactly `0.0` from a naive halve-then-double `float64` fallback,
+    because halving a value already at the edge of the subnormal range loses it entirely).
+
+    `float(Fraction)` gives the correctly-rounded nearest `float64` for the exact total, and
+    raises `OverflowError` when the true magnitude is too large for any finite `float64` --
+    converted here to the same `ValueError` `auc`/`roc_auc_score` already document, so `auc`'s
+    contract (`ValueError` only when the true area is not representable as a finite `float64`)
+    holds exactly, rather than firing merely because the fast, unscaled `float64` attempt
+    happened to overflow. `math.isfinite` is checked too, as a last-resort defense (`float()`
+    on a `Fraction` should never itself produce a non-finite result without raising, but this
+    keeps the postcondition -- "finite or `ValueError`, never anything else" -- honest even if
+    that assumption were ever wrong).
+
+    `fractions.Fraction` is standard library, not a new runtime dependency, and is used only on
+    this rare, overflow-triggered path -- ordinary calls never construct a `Fraction`.
+    """
+    total = Fraction()
+    for index in range(x.shape[0] - 1):
+        x0 = Fraction.from_float(float(x[index]))
+        x1 = Fraction.from_float(float(x[index + 1]))
+        y0 = Fraction.from_float(float(y[index]))
+        y1 = Fraction.from_float(float(y[index + 1]))
+        width = abs(x1 - x0)
+        height_sum = y0 + y1
+        total += width * height_sum / 2
 
     try:
-        with np.errstate(over="raise", invalid="raise"):
-            half_width = np.abs(x[1:] * 0.5 - x[:-1] * 0.5)
-            half_height_sum = y[:-1] * 0.5 + y[1:] * 0.5
-            half_total = np.sum(half_width * half_height_sum, dtype=np.float64)
-            return float(half_total * 2.0)
-    except FloatingPointError as exc:
+        result = float(total)
+    except OverflowError as exc:
         raise ValueError("the trapezoidal area could not be computed as a finite float64") from exc
+    if not math.isfinite(result):
+        raise ValueError("the trapezoidal area could not be computed as a finite float64")
+    return result
 
 
 _ALLOWED_SCORE_FLOAT_DTYPES = (
