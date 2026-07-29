@@ -888,7 +888,10 @@ def roc_curve(
     `sample_weight` dynamic range (e.g. one sample weighing `1e16` and another `1.0`) can make a
     later, individually-positive-weight group fail to change the cumulative `float64` sum at
     all; this is detected explicitly and raises `ValueError` rather than silently dropping that
-    group's contribution to the curve.
+    group's contribution to the curve. This is distinct from a rate that legitimately rounds to
+    `0.0` through ordinary `float64` underflow (e.g. one weight many orders of magnitude smaller
+    than another) -- that is a correctly-rounded result, not an error, and never raises or warns
+    regardless of the caller's own `np.seterr`/`np.errstate` configuration.
 
     Raises
     ------
@@ -964,11 +967,12 @@ def precision_recall_curve(
     `(precision, recall) = (1.0, 0.0)` with no corresponding real threshold. `recall` is
     non-decreasing and its final value is `1.0`; the final `precision` is the overall positive
     prevalence (predicting everything positive) -- `P / len(y_true)` without `sample_weight`, or
-    the weighted prevalence when `sample_weight` is given. `precision` is computed with a
-    scale-based division rather than a direct `tp / (tp + fp)`, so a threshold where both the
-    effective positive and negative weight are individually huge (near `float64`'s max) still
-    gives the mathematically correct ratio instead of silently underflowing to `0.0` from an
-    intermediate `tp + fp` overflow.
+    the weighted prevalence when `sample_weight` is given. `precision` matches a direct
+    `tp / (tp + fp)` bit for bit at every threshold where that division would not itself
+    overflow; only a threshold where both the effective positive and negative weight are
+    individually huge enough that `tp + fp` would overflow (near `float64`'s max) instead uses a
+    scale-based division there, giving the mathematically correct ratio rather than silently
+    underflowing to `0.0`.
 
     Raises
     ------
@@ -1046,7 +1050,9 @@ def average_precision_score(
     exactly `1.0`); constant scores (no discriminative power) give exactly the positive
     prevalence (`P / len(y_true)` without `sample_weight`, the weighted prevalence with it) --
     these are the only two inputs with a closed-form result documented here; no other ranking's
-    average precision is claimed to equal prevalence.
+    average precision is claimed to equal prevalence. A weighted recall increment or precision
+    value that legitimately rounds to `0.0`/underflows during this sum never raises or warns,
+    regardless of the caller's own `np.seterr`/`np.errstate` configuration.
 
     Raises
     ------
@@ -1078,12 +1084,18 @@ def average_precision_score(
             result = 1.0
         else:
             precision, recall = _compute_weighted_precision_recall_arrays(weighted_core)
-            result = float(
-                np.sum(
-                    np.diff(recall) * precision[1:],
-                    dtype=np.float64,
+            # A tiny recall increment times a small precision (e.g. a recall increment near
+            # np.nextafter(0.0, 1.0)) can legitimately underflow to a correctly-rounded 0.0
+            # contribution -- not an error that should depend on the caller's own np.seterr
+            # configuration (verified directly: np.seterr(all="raise") previously turned this
+            # legal underflow into an uncaught FloatingPointError).
+            with np.errstate(under="ignore"):
+                result = float(
+                    np.sum(
+                        np.diff(recall) * precision[1:],
+                        dtype=np.float64,
+                    )
                 )
-            )
 
     _check_average_precision_postconditions(result)
     return result
@@ -1584,11 +1596,19 @@ def _stable_precision_ratio(
     non-overflowing values (verified directly: `tp=3.0, fp=2.0` gives `0.6` via plain division
     but `0.6000000000000001` via this formula) -- which is exactly why `_precision_ratio` only
     routes the overflowing entries here, rather than falling back for the whole array.
+
+    Dividing by `scale` can legitimately underflow to `0.0` when one operand is many orders of
+    magnitude smaller than the other (e.g. `true_positive=tiny, false_positive=1.0`) -- a
+    correctly-rounded result, not an error, so both divisions run under
+    `np.errstate(under="ignore")`: a caller's own `np.seterr(under="raise"/"warn")` must not leak
+    into this function's result (verified directly: `np.seterr(all="raise")` previously turned
+    this legal underflow into an uncaught `FloatingPointError`).
     """
     scale = np.maximum(true_positive, false_positive)
-    scaled_true_positive = true_positive / scale
-    scaled_false_positive = false_positive / scale
-    return scaled_true_positive / (scaled_true_positive + scaled_false_positive)
+    with np.errstate(under="ignore"):
+        scaled_true_positive = true_positive / scale
+        scaled_false_positive = false_positive / scale
+        return scaled_true_positive / (scaled_true_positive + scaled_false_positive)
 
 
 def _precision_ratio(
@@ -1606,16 +1626,25 @@ def _precision_ratio(
     actually overflowed. `true_positive + false_positive` is computed under
     `np.errstate(over="ignore")`: the overflow this deliberately allows (only to detect via
     `np.isinf` immediately after) would otherwise raise or warn.
+
+    The ordinary division below can legitimately underflow to `0.0` (e.g. `true_positive=tiny,
+    false_positive=1.0` gives a correctly-rounded `0.0` ratio) -- computed under
+    `np.errstate(under="ignore")` for the same reason `_stable_precision_ratio` is: a caller's own
+    `np.seterr(under="raise"/"warn")` must not leak into this function's result. `over`/`invalid`
+    are deliberately left at their default (raising) sensitivity here -- an overflow in the
+    ordinary branch, or a NaN/inf anywhere in `true_positive`/`false_positive`, would mean this
+    function's own `overflowed` mask is wrong, an internal error this should not paper over.
     """
     with np.errstate(over="ignore"):
         combined = true_positive + false_positive
     overflowed = np.isinf(combined)
-    if not np.any(overflowed):
-        return true_positive / combined
+    with np.errstate(under="ignore"):
+        if not np.any(overflowed):
+            return true_positive / combined
 
-    result = np.empty_like(true_positive)
-    ordinary = ~overflowed
-    result[ordinary] = true_positive[ordinary] / combined[ordinary]
+        result = np.empty_like(true_positive)
+        ordinary = ~overflowed
+        result[ordinary] = true_positive[ordinary] / combined[ordinary]
     result[overflowed] = _stable_precision_ratio(
         true_positive[overflowed], false_positive[overflowed]
     )
@@ -1634,9 +1663,18 @@ def _compute_weighted_roc_rates(
     division never needs `_stable_precision_ratio`'s scaling (that helper exists only for
     `tp + fp`, an unbounded sum of two independently-growing quantities, not for a bounded
     quantity divided by a fixed total).
+
+    Run under `np.errstate(under="ignore")`: a tiny `true_positive_weight`/`false_positive_weight`
+    divided by a huge total is a legitimate, correctly-rounded `0.0` rate, not an error -- a
+    caller's own `np.seterr(under="raise"/"warn")` must not leak into this result (verified
+    directly). `over`/`invalid` are deliberately left at their default sensitivity: both totals
+    are already-overflow-checked positive scalars and every numerator is `<=` its total by
+    construction, so neither should ever occur here -- if one did, that would be a real internal
+    error, not a legal edge case to silence.
     """
-    false_positive_rate = core.false_positive_weight / core.total_negative_weight
-    true_positive_rate = core.true_positive_weight / core.total_positive_weight
+    with np.errstate(under="ignore"):
+        false_positive_rate = core.false_positive_weight / core.total_negative_weight
+        true_positive_rate = core.true_positive_weight / core.total_positive_weight
     return false_positive_rate, true_positive_rate
 
 
@@ -1652,6 +1690,11 @@ def _compute_weighted_precision_recall_arrays(
     since both operands here can independently grow large (unlike `recall`, divided by the fixed
     `total_positive_weight`) -- but `_precision_ratio` still matches that direct division bit for
     bit whenever it would not have overflowed.
+
+    `recall`'s division runs under `np.errstate(under="ignore")` for the same reason
+    `_compute_weighted_roc_rates` does: a tiny `true_positive_weight` divided by a huge
+    `total_positive_weight` is a legitimate, correctly-rounded `0.0`, not an error that should
+    depend on the caller's own `np.seterr` configuration.
     """
     true_positive = core.true_positive_weight
     false_positive = core.false_positive_weight
@@ -1660,7 +1703,8 @@ def _compute_weighted_precision_recall_arrays(
     precision[0] = 1.0
     precision[1:] = _precision_ratio(true_positive[1:], false_positive[1:])
 
-    recall = true_positive / core.total_positive_weight
+    with np.errstate(under="ignore"):
+        recall = true_positive / core.total_positive_weight
     return precision, recall
 
 

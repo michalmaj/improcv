@@ -305,6 +305,30 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   public result type, no multiclass score matrix, and no new dependency in this slice.
 
 ### Fixed
+- `improcv.evaluation`: the weighted ROC/precision-recall/ROC-AUC/average-precision path
+  (`sample_weight`, added earlier in this same `[Unreleased]` series) could leak a raw
+  `FloatingPointError` or `RuntimeWarning` for legal, extreme-but-finite weights whenever the
+  caller had previously called `np.seterr(under="raise")`/`np.seterr(under="warn")` -- a public
+  function's result must not depend on the caller's own global NumPy error-state configuration.
+  Three call sites divided or multiplied values that can legitimately underflow to a
+  correctly-rounded `0.0` for extreme weight ratios: `_compute_weighted_roc_rates`'s
+  `false_positive_rate`/`true_positive_rate` normalization and
+  `_compute_weighted_precision_recall_arrays`'s `recall` normalization (e.g. a weight of
+  `np.nextafter(0.0, 1.0)` next to one of
+  `np.finfo(np.float64).max`), `_precision_ratio`/`_stable_precision_ratio`'s ordinary and
+  scale-based divisions (e.g. `sample_weight=[1.0, np.finfo(np.float64).max]`), and
+  `average_precision_score`'s weighted `np.diff(recall) * precision[1:]` product/sum. Each now
+  runs under a local `np.errstate(under="ignore")` around only that operation, rather than
+  changing the caller's global `np.seterr` state -- `over`/`invalid`/`divide` are deliberately
+  left at the caller's own sensitivity, since none of those should occur at these call sites by
+  construction, and are still not silenced. This is unrelated to the existing dynamic-range
+  `ValueError` for an absorbed positive-weight group or a genuine cumulative-weight overflow, both
+  of which remain unchanged, explicitly-detected errors -- only ordinary, correctly-rounded
+  underflow within a single ratio/product no longer depends on the caller's `np.seterr`
+  configuration. No exact/`Fraction`-based fallback was added for this: the weighted core's
+  cumulative sums, rates, precision, and average precision remain defined by plain, deterministic
+  `float64` arithmetic, and a ratio or product that legitimately rounds to `0.0` is an accepted
+  result of that contract, not an error.
 - `improcv.evaluation`: `auc`'s fast `float64` path could silently lose a representable residual
   through catastrophic cancellation when `y` contained both a positive and a negative value --
   `x=[0.0, 1.0, 2.0], y=[1.0, 1e-20, -1.0]` has exact trapezoidal area `1e-20`, but plain `float64`

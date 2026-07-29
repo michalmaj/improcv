@@ -3183,3 +3183,255 @@ def test_sample_weight_no_floating_point_error_under_seterr_raise() -> None:
         average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
     finally:
         np.seterr(**old_state)
+
+
+# --- weighted metrics: legal underflow must not depend on the caller's np.seterr state ---
+
+_RAISE_STATE = {"divide": "raise", "over": "raise", "under": "raise", "invalid": "raise"}
+
+
+def test_sample_weight_roc_normalization_underflow_matches_baseline_under_seterr_raise() -> None:
+    # tiny / M rounds to a legitimate 0.0 -- reproducer for a FloatingPointError previously
+    # leaking out of roc_curve/precision_recall_curve/roc_auc_score/average_precision_score's
+    # rate/recall normalization whenever the caller had np.seterr(under="raise") active.
+    M = np.finfo(np.float64).max
+    tiny = np.nextafter(0.0, 1.0)
+    y_true = [1, 1, 0]
+    y_score = [2.0, 1.0, 0.0]
+    sample_weight = [tiny, M, 1.0]
+
+    baseline_roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    baseline_pr = precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    baseline_auc = roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    baseline_ap = average_precision_score(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    assert_array_equal(baseline_roc.true_positive_rate, [0.0, 0.0, 1.0, 1.0])
+    assert_array_equal(baseline_roc.false_positive_rate, [0.0, 0.0, 0.0, 1.0])
+    assert_array_equal(baseline_pr.recall, [0.0, 0.0, 1.0, 1.0])
+    assert baseline_auc == 1.0
+    assert baseline_ap == 1.0
+
+    previous = np.seterr(all="raise")
+    try:
+        roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        auc_value = roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        ap_value = average_precision_score(
+            y_true, y_score, positive_label=1, sample_weight=sample_weight
+        )
+        assert np.geterr() == _RAISE_STATE
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+    assert roc == baseline_roc
+    assert pr == baseline_pr
+    assert auc_value == baseline_auc
+    assert ap_value == baseline_ap
+
+
+def test_sample_weight_roc_normalization_underflow_emits_no_warning_under_seterr_warn() -> None:
+    M = np.finfo(np.float64).max
+    tiny = np.nextafter(0.0, 1.0)
+    y_true = [1, 1, 0]
+    y_score = [2.0, 1.0, 0.0]
+    sample_weight = [tiny, M, 1.0]
+
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+            pr = precision_recall_curve(
+                y_true, y_score, positive_label=1, sample_weight=sample_weight
+            )
+            auc_value = roc_auc_score(
+                y_true, y_score, positive_label=1, sample_weight=sample_weight
+            )
+            ap_value = average_precision_score(
+                y_true, y_score, positive_label=1, sample_weight=sample_weight
+            )
+    finally:
+        np.seterr(**previous)
+
+    assert_array_equal(roc.true_positive_rate, [0.0, 0.0, 1.0, 1.0])
+    assert_array_equal(roc.false_positive_rate, [0.0, 0.0, 0.0, 1.0])
+    assert_array_equal(pr.recall, [0.0, 0.0, 1.0, 1.0])
+    assert auc_value == 1.0
+    assert ap_value == 1.0
+
+
+def test_sample_weight_precision_ratio_underflow_matches_baseline_under_seterr_raise() -> None:
+    # Reproducer for a FloatingPointError previously leaking out of precision_recall_curve/
+    # average_precision_score's precision division (1.0 / M rounds to a legitimate, tiny but
+    # nonzero float64 value) whenever the caller had np.seterr(under="raise") active.
+    M = np.finfo(np.float64).max
+    y_true = [1, 0]
+    y_score = [0.0, 0.0]
+    sample_weight = [1.0, M]
+
+    baseline_pr = precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    baseline_ap = average_precision_score(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    assert baseline_pr.precision[-1] > 0.0
+    assert baseline_ap > 0.0
+
+    previous = np.seterr(all="raise")
+    try:
+        pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        ap_value = average_precision_score(
+            y_true, y_score, positive_label=1, sample_weight=sample_weight
+        )
+        assert np.geterr() == _RAISE_STATE
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+    assert pr == baseline_pr
+    assert ap_value == baseline_ap
+    assert pr.precision[-1] == pytest.approx(1.0 / M)
+
+
+def test_sample_weight_precision_ratio_underflow_emits_no_warning_under_seterr_warn() -> None:
+    M = np.finfo(np.float64).max
+    y_true = [1, 0]
+    y_score = [0.0, 0.0]
+    sample_weight = [1.0, M]
+
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            pr = precision_recall_curve(
+                y_true, y_score, positive_label=1, sample_weight=sample_weight
+            )
+            ap_value = average_precision_score(
+                y_true, y_score, positive_label=1, sample_weight=sample_weight
+            )
+    finally:
+        np.seterr(**previous)
+
+    assert pr.precision[-1] > 0.0
+    assert ap_value > 0.0
+
+
+def test_sample_weight_ap_product_underflow_matches_baseline_under_seterr_raise() -> None:
+    # Reproducer for a FloatingPointError previously leaking out of average_precision_score's
+    # np.diff(recall) * precision[1:] product (a tiny recall increment times 0.5 rounds to a
+    # legitimate 0.0 contribution) whenever the caller had np.seterr(under="raise") active.
+    M = np.finfo(np.float64).max
+    tiny = np.nextafter(0.0, 1.0)
+    w = M * tiny
+    y_true = [1, 0, 1]
+    y_score = [2.0, 2.0, 1.0]
+    sample_weight = [w, w, M]
+
+    baseline_pr = precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    baseline_ap = average_precision_score(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    assert_array_equal(baseline_pr.precision, [1.0, 0.5, 1.0])
+    assert_array_equal(baseline_pr.recall, [0.0, tiny, 1.0])
+    assert baseline_ap == 1.0
+
+    previous = np.seterr(all="raise")
+    try:
+        pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        ap_value = average_precision_score(
+            y_true, y_score, positive_label=1, sample_weight=sample_weight
+        )
+        assert np.geterr() == _RAISE_STATE
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+    assert pr == baseline_pr
+    assert ap_value == baseline_ap
+
+
+def test_sample_weight_ap_product_underflow_emits_no_warning_under_seterr_warn() -> None:
+    M = np.finfo(np.float64).max
+    tiny = np.nextafter(0.0, 1.0)
+    w = M * tiny
+    y_true = [1, 0, 1]
+    y_score = [2.0, 2.0, 1.0]
+    sample_weight = [w, w, M]
+
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            pr = precision_recall_curve(
+                y_true, y_score, positive_label=1, sample_weight=sample_weight
+            )
+            ap_value = average_precision_score(
+                y_true, y_score, positive_label=1, sample_weight=sample_weight
+            )
+    finally:
+        np.seterr(**previous)
+
+    assert_array_equal(pr.precision, [1.0, 0.5, 1.0])
+    assert_array_equal(pr.recall, [0.0, tiny, 1.0])
+    assert ap_value == 1.0
+
+
+def test_sample_weight_dynamic_range_and_overflow_errors_still_raise_under_seterr_raise() -> None:
+    # The local under="ignore" scoping introduced above must not swallow the two ValueErrors
+    # that are still supposed to fire: an absorbed positive-weight group (dynamic range) and a
+    # genuine cumulative-weight overflow.
+    y_true_absorbed = [1, 1, 0]
+    y_score_absorbed = [0.9, 0.1, 0.05]
+    absorbing_weight = [1e16, 1.0, 1.0]
+
+    huge = np.finfo(np.float64).max
+    y_true_overflow = [1, 1, 0, 0]
+    y_score_overflow = [0.9, 0.8, 0.5, 0.1]
+    overflow_weight = [huge, huge, 1.0, 1.0]
+
+    previous = np.seterr(all="raise")
+    try:
+        for func in _RANKING_FUNCTIONS:
+            with pytest.raises(ValueError, match="dynamic range"):
+                func(
+                    y_true_absorbed,
+                    y_score_absorbed,
+                    positive_label=1,
+                    sample_weight=absorbing_weight,
+                )
+            with pytest.raises(ValueError):
+                func(
+                    y_true_overflow,
+                    y_score_overflow,
+                    positive_label=1,
+                    sample_weight=overflow_weight,
+                )
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+
+def test_precision_ratio_still_raises_on_genuine_invalid_operation() -> None:
+    # The under="ignore" scoping in _precision_ratio is deliberately narrow: over/invalid are
+    # left at the caller's own sensitivity, so a genuine 0/0 (never reachable through the public
+    # API, since every real curve point has true_positive + false_positive > 0 by construction)
+    # still surfaces as an internal error rather than being silently absorbed alongside the
+    # legal underflow case this fix targets.
+    from improcv import evaluation
+
+    true_positive = np.array([0.0], dtype=np.float64)
+    false_positive = np.array([0.0], dtype=np.float64)
+
+    previous = np.seterr(all="raise")
+    try:
+        with pytest.raises(FloatingPointError, match="invalid"):
+            evaluation._precision_ratio(true_positive, false_positive)
+    finally:
+        np.seterr(**previous)
