@@ -7,14 +7,20 @@ true class and one predicted class per sample, integer labels only. `roc_curve`/
 `precision_recall_curve`/`roc_auc_score`/`average_precision_score` are binary, one-vs-rest: an
 explicit `positive_label` picks the positive class, every other observed label is negative,
 regardless of how many distinct negative labels occur -- there is no automatic inference of
-which label is positive. `average_precision_score` is classification ranking average
-precision, not object-detection AP or mAP. `auc` is a general-purpose trapezoidal
-area-under-curve helper with no ranking semantics of its own -- it also computes the
-trapezoidal area under the precision-recall curve (`auc(curve.recall, curve.precision)`), a
-distinct quantity from `average_precision_score` that this module deliberately does not expose
-under a separate name (see `auc`'s docstring). Does not cover plotting, multilabel
-classification, sample weights, `average="binary"`, or multiclass ranking curves/averaging --
-those are separate, later concerns, not part of this core.
+which label is positive. These four functions also accept an optional, keyword-only
+`sample_weight` (see each function's own docstring for the full contract); `confusion_matrix`/
+`classification_metrics`/`classification_metrics_from_confusion_matrix`/`auc` do not, and
+weighting them is a separate, unresolved concern, not part of this core (weighting the
+confusion-matrix-based functions would require widening their `int64` matrix/support contract
+to `float64`, which is a bigger, separate design question -- see their docstrings; `auc`'s
+`x`/`y` are curve points, not observations, so a per-observation weight has no meaning there).
+`average_precision_score` is classification ranking average precision, not object-detection AP
+or mAP. `auc` is a general-purpose trapezoidal area-under-curve helper with no ranking
+semantics of its own -- it also computes the trapezoidal area under the precision-recall curve
+(`auc(curve.recall, curve.precision)`), a distinct quantity from `average_precision_score` that
+this module deliberately does not expose under a separate name (see `auc`'s docstring). Does
+not cover plotting, multilabel classification, `average="binary"`, or multiclass ranking
+curves/averaging -- those are separate, later concerns, not part of this core.
 
 Several deliberate departures from `scikit-learn.metrics`'s well-known behavior (documented at
 the call sites that enforce them): a duplicate value in an explicit `labels` sequence raises
@@ -807,9 +813,11 @@ class PrecisionRecallCurve:
     corresponding real threshold); `thresholds[1:]` holds every distinct observed score in
     strictly decreasing order, so all three arrays share the same length `K + 1` for `K`
     distinct scores. `recall` is non-decreasing and its final value is always `1.0`; the final
-    `precision` equals the overall positive prevalence `P / len(y_true)` (predicting everything
-    positive). All three arrays are new, independent, read-only `float64` arrays -- never views
-    of `y_true`/`y_score` or of each other.
+    `precision` equals the overall positive prevalence -- `P / len(y_true)` without
+    `sample_weight`, or the weighted prevalence (total effective positive weight divided by
+    total effective weight) when `sample_weight` is given (predicting everything positive). All
+    three arrays are new, independent, read-only `float64` arrays -- never views of
+    `y_true`/`y_score` or of each other.
 
     Equality (`==`) compares `positive_label` and all three arrays by value (via
     `np.array_equal`), never by identity. Instances are unhashable (`hash()` raises
@@ -839,6 +847,10 @@ def roc_curve(
     y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
     *,
     positive_label: int,
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
 ) -> RocCurve:
     """Compute a binary, one-vs-rest ROC curve: false/true positive rate at each threshold.
 
@@ -859,35 +871,69 @@ def roc_curve(
     raises `ValueError` rather than emitting a warning and returning a degenerate curve (compare
     `sklearn.metrics.roc_curve`, which emits `UndefinedMetricWarning` instead).
 
+    `sample_weight=None` (the default) uses the unweighted computation above unchanged, bit for
+    bit. Given explicitly, `sample_weight` must be a `Sequence`/1-D `ndarray` the same length as
+    `y_true`/`y_score`, holding the same accepted numeric types as `y_score` (Python/NumPy
+    int/float, or `float16`/`float32`/`float64`), but non-negative and with at least one positive
+    value -- NaN/Inf, negative values (which would otherwise make `true_positive_rate` a
+    non-monotonic function of the threshold, verified directly against a reference
+    implementation that permits them), and an integer not exactly representable as `float64` are
+    all rejected the same way they are for `y_score`. A sample with `sample_weight == 0.0` is
+    removed entirely before thresholds are built: a score that appears only at zero weight never
+    produces a threshold. `TP(t)`/`FP(t)` become the *sum of weights* of the effective positive/
+    negative samples with `score >= t` (instead of a plain count); `true_positive_rate`/
+    `false_positive_rate` divide those sums by the total effective positive/negative weight.
+    Requires positive total effective weight for both classes -- a class present only among
+    zero-weight samples is treated the same as a class that is entirely absent. An extreme
+    `sample_weight` dynamic range (e.g. one sample weighing `1e16` and another `1.0`) can make a
+    later, individually-positive-weight group fail to change the cumulative `float64` sum at
+    all; this is detected explicitly and raises `ValueError` rather than silently dropping that
+    group's contribution to the curve.
+
     Raises
     ------
     TypeError
         If `y_true` is not a `Sequence`/1-D integer `ndarray`, if any of its elements is not
         integral (including `bool`/`np.bool_`), if `positive_label` is not a Python/NumPy
-        integral value (including `bool`/`np.bool_`), if `y_score` is not a `Sequence`/1-D
-        float-or-integer `ndarray`, if `y_score` has a `bool`/complex/object/wider-than-`float64`
-        floating dtype, or if a `y_score` element is not a Python/NumPy int or float.
+        integral value (including `bool`/`np.bool_`), if `y_score`/`sample_weight` is not a
+        `Sequence`/1-D float-or-integer `ndarray`, if `y_score`/`sample_weight` has a
+        `bool`/complex/object/wider-than-`float64` floating dtype, or if a `y_score`/
+        `sample_weight` element is not a Python/NumPy int or float.
     ValueError
-        If `y_true`/`y_score` is empty, if their lengths differ, if any `y_true`/`y_score`
-        `ndarray` is not 1-D, if a `y_score` element is NaN/`Inf` (or an integer not exactly
-        representable as `float64`), if `y_true` has no sample equal to `positive_label`, or if
-        `y_true` has no sample different from `positive_label`.
+        If `y_true`/`y_score` is empty, if `y_true`/`y_score`/`sample_weight` lengths differ, if
+        any `y_true`/`y_score`/`sample_weight` `ndarray` is not 1-D, if a `y_score`/
+        `sample_weight` element is NaN/`Inf` (or an integer not exactly representable as
+        `float64`), if a `sample_weight` element is negative or every element is zero, if
+        `y_true` has no sample equal to `positive_label` (after removing zero-weight samples,
+        when `sample_weight` is given), if `y_true` has no sample different from
+        `positive_label` (likewise), or if `sample_weight`'s dynamic range is too large to
+        preserve every threshold's contribution in `float64`.
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
-    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=True)
-    false_positive_rate = core.false_positives.astype(np.float64) / core.n_negative
-    true_positive_rate = core.true_positives.astype(np.float64) / core.n_positive
+    if sample_weight is None:
+        core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=True)
+        false_positive_rate = core.false_positives.astype(np.float64) / core.n_negative
+        true_positive_rate = core.true_positives.astype(np.float64) / core.n_positive
+        thresholds = core.thresholds
+        result_positive_label = core.positive_label
+    else:
+        weighted_core = _compute_weighted_ranking_core(
+            y_true, y_score, sample_weight, positive_label, require_negative=True
+        )
+        false_positive_rate, true_positive_rate = _compute_weighted_roc_rates(weighted_core)
+        thresholds = weighted_core.thresholds
+        result_positive_label = weighted_core.positive_label
+
     false_positive_rate.flags.writeable = False
     true_positive_rate.flags.writeable = False
-    thresholds = core.thresholds
     thresholds.flags.writeable = False
 
     result = RocCurve(
         false_positive_rate=false_positive_rate,
         true_positive_rate=true_positive_rate,
         thresholds=thresholds,
-        positive_label=core.positive_label,
+        positive_label=result_positive_label,
     )
     _check_roc_curve_postconditions(result)
     return result
@@ -898,45 +944,64 @@ def precision_recall_curve(
     y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
     *,
     positive_label: int,
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
 ) -> PrecisionRecallCurve:
     """Compute a binary, one-vs-rest precision-recall curve at each distinct score threshold.
 
-    See `roc_curve` for the shared one-vs-rest/`positive_label`/`y_score`/tie-aggregation
-    contract, which applies identically here. Requires at least one positive sample; unlike
-    `roc_curve`, a `y_true` with no negative sample is legal (precision is then `1.0` at every
-    real threshold, since there is never a false positive to count) -- a deliberate departure
-    from `sklearn.metrics.precision_recall_curve`'s own length/ordering conventions, made so that
-    `precision`/`recall`/`thresholds` always share one length (`K + 1` for `K` distinct scores)
-    and the same descending-threshold/ascending-recall pairing as `roc_curve`.
+    See `roc_curve` for the shared one-vs-rest/`positive_label`/`y_score`/`sample_weight`/
+    tie-aggregation contract, which applies identically here. Requires at least one (effective)
+    positive sample; unlike `roc_curve`, a `y_true` with no (effective) negative sample is legal
+    (precision is then `1.0` at every real threshold, since there is never a false positive to
+    count) -- a deliberate departure from `sklearn.metrics.precision_recall_curve`'s own
+    length/ordering conventions, made so that `precision`/`recall`/`thresholds` always share one
+    length (`K + 1` for `K` distinct scores) and the same descending-threshold/ascending-recall
+    pairing as `roc_curve`.
 
     `thresholds[0]` is `+inf`, giving the synthetic starting point
     `(precision, recall) = (1.0, 0.0)` with no corresponding real threshold. `recall` is
     non-decreasing and its final value is `1.0`; the final `precision` is the overall positive
-    prevalence `P / len(y_true)` (predicting everything positive).
+    prevalence (predicting everything positive) -- `P / len(y_true)` without `sample_weight`, or
+    the weighted prevalence when `sample_weight` is given. `precision` is computed with a
+    scale-based division rather than a direct `tp / (tp + fp)`, so a threshold where both the
+    effective positive and negative weight are individually huge (near `float64`'s max) still
+    gives the mathematically correct ratio instead of silently underflowing to `0.0` from an
+    intermediate `tp + fp` overflow.
 
     Raises
     ------
     TypeError
         Same as `roc_curve`.
     ValueError
-        Same as `roc_curve`, except a `y_true` with no negative sample is accepted rather than
-        rejected.
+        Same as `roc_curve`, except a `y_true` with no (effective) negative sample is accepted
+        rather than rejected.
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
-    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=False)
-    precision, recall = _compute_precision_recall_arrays(core)
+    if sample_weight is None:
+        core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=False)
+        precision, recall = _compute_precision_recall_arrays(core)
+        thresholds = core.thresholds
+        result_positive_label = core.positive_label
+    else:
+        weighted_core = _compute_weighted_ranking_core(
+            y_true, y_score, sample_weight, positive_label, require_negative=False
+        )
+        precision, recall = _compute_weighted_precision_recall_arrays(weighted_core)
+        thresholds = weighted_core.thresholds
+        result_positive_label = weighted_core.positive_label
 
     precision.flags.writeable = False
     recall.flags.writeable = False
-    thresholds = core.thresholds
     thresholds.flags.writeable = False
 
     result = PrecisionRecallCurve(
         precision=precision,
         recall=recall,
         thresholds=thresholds,
-        positive_label=core.positive_label,
+        positive_label=result_positive_label,
     )
     _check_pr_curve_postconditions(result)
     return result
@@ -947,14 +1012,18 @@ def average_precision_score(
     y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
     *,
     positive_label: int,
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
 ) -> float:
     """Compute binary, one-vs-rest average precision: a non-interpolated ranking-quality score.
 
     This is classification ranking average precision, not object-detection AP or mAP (which
     additionally require matching predictions to ground truth by IoU) -- see `roc_curve` for
-    the shared one-vs-rest/`positive_label`/`y_score`/tie-aggregation contract, which applies
-    identically here (same input and error contract as `precision_recall_curve`, including that
-    a `y_true` with no negative sample is legal).
+    the shared one-vs-rest/`positive_label`/`y_score`/`sample_weight`/tie-aggregation contract,
+    which applies identically here (same input and error contract as `precision_recall_curve`,
+    including that a `y_true` with no effective negative sample is legal).
 
     Defined as the weighted mean of precision, using each recall increment as its weight:
     `AP = sum((recall[i] - recall[i - 1]) * precision[i] for i in 1..K)`, over the same `K + 1`
@@ -963,38 +1032,58 @@ def average_precision_score(
     not linear interpolation and not the trapezoidal area under the PR curve, which is a
     distinct quantity that this function does not compute: depending on the shape of the curve
     and its ties, the trapezoidal area can be larger or smaller than this average precision,
-    never consistently one or the other.
+    never consistently one or the other. `sample_weight` (see `roc_curve` for the full contract)
+    changes `recall`/`precision` the same way it does in `precision_recall_curve`, so, unlike the
+    unweighted case, two samples with different weights no longer contribute equally to this sum
+    even when their score ranks them identically.
 
     A perfectly reversed ranking does not give `0.0` -- unlike ROC AUC, average precision has no
     symmetric complement relation (`average_precision_score` of the negated scores is not
-    `1 - average_precision_score`). A `y_true` with no negative sample gives exactly `1.0`
-    (returned directly, not computed through a `0/0`-adjacent division); constant scores (no
-    discriminative power) give exactly the positive prevalence `P / len(y_true)` -- these are
-    the only two inputs with a closed-form result documented here; no other ranking's average
-    precision is claimed to equal prevalence.
+    `1 - average_precision_score`). A `y_true` with no effective negative sample gives exactly
+    `1.0` (returned directly, not computed through a `0/0`-adjacent division, and not by summing
+    `precision_recall_curve`'s own recall increments, which -- for weighted input -- can differ
+    from `1.0` by a rounding residual even when every recall increment's underlying ratio is
+    exactly `1.0`); constant scores (no discriminative power) give exactly the positive
+    prevalence (`P / len(y_true)` without `sample_weight`, the weighted prevalence with it) --
+    these are the only two inputs with a closed-form result documented here; no other ranking's
+    average precision is claimed to equal prevalence.
 
     Raises
     ------
     TypeError
         Same as `roc_curve`.
     ValueError
-        Same as `roc_curve`, except a `y_true` with no negative sample is accepted rather than
-        rejected (same relaxation as `precision_recall_curve`).
+        Same as `roc_curve`, except a `y_true` with no effective negative sample is accepted
+        rather than rejected (same relaxation as `precision_recall_curve`).
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
-    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=False)
-
-    if core.n_negative == 0:
-        result = 1.0
-    else:
-        precision, recall = _compute_precision_recall_arrays(core)
-        result = float(
-            np.sum(
-                np.diff(recall) * precision[1:],
-                dtype=np.float64,
+    if sample_weight is None:
+        core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=False)
+        if core.n_negative == 0:
+            result = 1.0
+        else:
+            precision, recall = _compute_precision_recall_arrays(core)
+            result = float(
+                np.sum(
+                    np.diff(recall) * precision[1:],
+                    dtype=np.float64,
+                )
             )
+    else:
+        weighted_core = _compute_weighted_ranking_core(
+            y_true, y_score, sample_weight, positive_label, require_negative=False
         )
+        if weighted_core.total_negative_weight == 0.0:
+            result = 1.0
+        else:
+            precision, recall = _compute_weighted_precision_recall_arrays(weighted_core)
+            result = float(
+                np.sum(
+                    np.diff(recall) * precision[1:],
+                    dtype=np.float64,
+                )
+            )
 
     _check_average_precision_postconditions(result)
     return result
@@ -1005,17 +1094,27 @@ def roc_auc_score(
     y_score: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
     *,
     positive_label: int,
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
 ) -> float:
     """Compute the area under the binary, one-vs-rest ROC curve.
 
     Uses the same false/true positive rate points `roc_curve` would return (see `roc_curve` for
-    the full `positive_label`/`y_score`/tie-aggregation/error contract, which applies
-    identically here), integrated with the trapezoidal rule -- equivalent to the probability
-    that a uniformly random positive sample outranks a uniformly random negative sample, with a
-    tied pair counted as one-half. Does not call `np.trapz` or `np.trapezoid`: neither name
-    exists across the full range of NumPy versions this project supports (verified directly:
-    `np.trapz` is gone in current NumPy, `np.trapezoid` does not exist on this project's NumPy
-    floor), so the trapezoidal sum is computed directly from basic array arithmetic instead.
+    the full `positive_label`/`y_score`/`sample_weight`/tie-aggregation/error contract, which
+    applies identically here), integrated with the trapezoidal rule -- equivalent to the
+    probability that a uniformly random positive sample outranks a uniformly random negative
+    sample, with a tied pair counted as one-half (weighted by `sample_weight` when given). Does
+    not call `np.trapz` or `np.trapezoid`: neither name exists across the full range of NumPy
+    versions this project supports (verified directly: `np.trapz` is gone in current NumPy,
+    `np.trapezoid` does not exist on this project's NumPy floor), so the trapezoidal sum is
+    computed directly from basic array arithmetic instead. Does not call the public `roc_curve`
+    internally (even though it shares that function's inputs and error contract exactly) --
+    both functions build their false/true positive rate arrays from the same private ranking
+    core, so `roc_auc_score(..., sample_weight=w)` always equals
+    `auc(*the equivalent roc_curve(..., sample_weight=w)'s rate arrays*)` bit for bit, without
+    paying for `RocCurve`'s own allocation/postcondition overhead here.
 
     A perfect ranking gives `1.0`; a perfectly reversed ranking gives `0.0`; a `y_score` with no
     discriminative power (e.g. every sample given the same score) gives `0.5`.
@@ -1029,9 +1128,15 @@ def roc_auc_score(
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
-    core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=True)
-    false_positive_rate = core.false_positives.astype(np.float64) / core.n_negative
-    true_positive_rate = core.true_positives.astype(np.float64) / core.n_positive
+    if sample_weight is None:
+        core = _compute_ranking_core(y_true, y_score, positive_label, require_negative=True)
+        false_positive_rate = core.false_positives.astype(np.float64) / core.n_negative
+        true_positive_rate = core.true_positives.astype(np.float64) / core.n_positive
+    else:
+        weighted_core = _compute_weighted_ranking_core(
+            y_true, y_score, sample_weight, positive_label, require_negative=True
+        )
+        false_positive_rate, true_positive_rate = _compute_weighted_roc_rates(weighted_core)
 
     area = _trapezoidal_area(false_positive_rate, true_positive_rate)
     _check_roc_auc_postconditions(area)
@@ -1147,6 +1252,41 @@ class _RankingCore(NamedTuple):
     positive_label: int
 
 
+def _sort_and_group_by_score(
+    scores: npt.NDArray[np.float64],
+) -> tuple[
+    npt.NDArray[np.intp], npt.NDArray[np.float64], npt.NDArray[np.intp], npt.NDArray[np.intp]
+]:
+    """Shared by the unweighted and weighted ranking cores: descending sort order, the
+    resulting sorted scores, and each distinct-score group's start/end index within that
+    sorted order.
+
+    Returns `(order, sorted_scores, group_start_indices, group_end_indices)`: `order` is a
+    descending permutation of `scores` (via a stable ascending sort, reversed -- cheaper than a
+    dedicated descending sort, and the within-tie order it produces is irrelevant either way,
+    since every sample sharing a score is aggregated into one group); `sorted_scores =
+    scores[order]`; group `i` spans sorted positions `group_start_indices[i]` through
+    `group_end_indices[i]` inclusive, for `K` distinct scores in strictly decreasing order.
+
+    Grouping uses direct comparison (`sorted_scores[1:] != sorted_scores[:-1]`), not
+    `np.diff(sorted_scores) != 0`: subtracting two finite scores near +-float64 max can overflow
+    to +-inf and raise a spurious "overflow encountered in subtract" warning -- verified
+    directly.
+    """
+    order = np.argsort(scores, kind="stable")[::-1]
+    sorted_scores = scores[order]
+
+    distinct = sorted_scores[1:] != sorted_scores[:-1]
+    group_end_mask = np.concatenate((distinct, np.array([True], dtype=bool)))
+    group_end_indices = np.flatnonzero(group_end_mask)
+
+    group_start_indices = np.empty_like(group_end_indices)
+    group_start_indices[0] = 0
+    group_start_indices[1:] = group_end_indices[:-1] + 1
+
+    return order, sorted_scores, group_start_indices, group_end_indices
+
+
 def _compute_ranking_core(
     y_true: object,
     y_score: object,
@@ -1185,19 +1325,8 @@ def _compute_ranking_core(
             f"positive_label={positive_label_value!r})"
         )
 
-    # Descending order via a stable ascending sort, reversed: cheaper than a dedicated
-    # descending sort, and the within-tie order it produces is irrelevant either way, since
-    # every sample sharing a score is aggregated into one threshold below.
-    order = np.argsort(scores, kind="stable")[::-1]
-    sorted_scores = scores[order]
+    order, sorted_scores, _group_start_indices, group_end_indices = _sort_and_group_by_score(scores)
     sorted_is_positive = is_positive[order]
-
-    # Direct comparison, not `np.diff(sorted_scores) != 0`: subtracting two finite scores near
-    # +-float64 max can overflow to +-inf and raise a spurious "overflow encountered in
-    # subtract" warning -- verified directly.
-    distinct = sorted_scores[1:] != sorted_scores[:-1]
-    group_end_mask = np.concatenate((distinct, np.array([True], dtype=bool)))
-    group_end_indices = np.flatnonzero(group_end_mask)
 
     cumulative_positive = np.cumsum(sorted_is_positive, dtype=np.int64)
     cumulative_total = np.arange(1, len(true_list) + 1, dtype=np.int64)
@@ -1247,6 +1376,291 @@ def _compute_precision_recall_arrays(
     precision[1:] = true_positive[1:] / (true_positive[1:] + false_positive[1:])
 
     recall = true_positive / core.n_positive
+    return precision, recall
+
+
+class _WeightedRankingCore(NamedTuple):
+    """The weighted counterpart of `_RankingCore`, used only when `sample_weight` is given.
+
+    Field names are deliberately different from `_RankingCore`'s (`true_positive_weight`/
+    `false_positive_weight`/`total_positive_weight`/`total_negative_weight`, rather than
+    `true_positives`/`false_positives`/`n_positive`/`n_negative`) so that passing the wrong core
+    to a helper expecting the other one fails a static/attribute-name check rather than silently
+    type-checking as `int64` counts. `thresholds`/`true_positive_weight`/`false_positive_weight`
+    all share length `K + 1` for `K` distinct scores among the *effective* (positive-weight)
+    samples, with index 0 the `+inf` sentinel (`0.0`/`0.0`) and indices `1..K` the cumulative
+    effective weight at each of the `K` distinct scores, in strictly decreasing order.
+    `total_positive_weight`/`total_negative_weight` equal
+    `true_positive_weight[-1]`/`false_positive_weight[-1]` respectively, kept as their own plain
+    `float` fields since every caller needs them as scalars.
+    """
+
+    thresholds: npt.NDArray[np.float64]
+    true_positive_weight: npt.NDArray[np.float64]
+    false_positive_weight: npt.NDArray[np.float64]
+    total_positive_weight: float
+    total_negative_weight: float
+    positive_label: int
+
+
+def _compute_weighted_ranking_core(
+    y_true: object,
+    y_score: object,
+    sample_weight: object,
+    positive_label: object,
+    *,
+    require_negative: bool,
+) -> _WeightedRankingCore:
+    """The weighted counterpart of `_compute_ranking_core`, used only when `sample_weight` is
+    not `None`.
+
+    `y_true`/`y_score`/`sample_weight` are each fully validated first (same as the unweighted
+    core, plus `sample_weight`'s own contract via `_normalize_sample_weight`) -- a bad `y_score`
+    is never "forgiven" merely because its weight happens to be zero. Only after that does a
+    sample with `sample_weight == 0.0` get removed from the effective set, before sorting/
+    grouping -- a score that exists only among zero-weight samples never produces a threshold.
+    "Effective positive/negative support" (at least one *effective* sample of that class) is
+    then checked with a plain integer count, not a weight sum -- exact, with no floating-point
+    edge case, since `sample_weight > 0.0` already defines the effective set.
+
+    Within each distinct-score group, the positive and negative samples' weights are each summed
+    once via `math.fsum` over that group's weights sorted ascending first -- not
+    `np.cumsum(weight, dtype=np.float64)` over individual samples: that would make the tie
+    contract's "permuting samples within a tie never changes the result" promise depend on
+    `float64` summation order (verified directly: `np.cumsum([1e16, 1.0, 1.0])[-1] != np.cumsum(
+    [1.0, 1.0, 1e16])[-1]`), whereas `math.fsum` over a canonically sorted sequence gives the
+    same correctly-rounded total regardless of the input order. `math.fsum` is called once per
+    class per group, not once per prefix, so every sample is still consumed exactly once overall
+    (beyond the cost of sorting).
+
+    The `K`-length per-group weight totals are then turned into the length-`K` cumulative arrays
+    with a single `np.cumsum(..., dtype=np.float64)` under `np.errstate(over="raise",
+    invalid="raise")`, converting any overflow into `ValueError`. A group's own total being
+    `> 0.0` is then required to strictly increase the corresponding cumulative sum over its
+    predecessor (`0.0` for the first group) -- an extreme `sample_weight` dynamic range (e.g.
+    `[1e16, 1.0]` at two different scores) can otherwise make a later, individually-positive
+    group's contribution vanish into the running total's rounding error without ever overflowing
+    or underflowing on its own (verified directly), which this check catches explicitly instead
+    of silently returning a curve that skips that group's effect entirely.
+    """
+    require_integral(positive_label, "positive_label")
+    positive_label_value = int(positive_label)  # type: ignore[call-overload]
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    scores = _normalize_score_sequence(y_score, "y_score")
+    if len(true_list) != scores.shape[0]:
+        raise ValueError(
+            f"y_true and y_score must have the same length, got {len(true_list)} and "
+            f"{scores.shape[0]}"
+        )
+
+    weights = _normalize_sample_weight(sample_weight, len(true_list))
+
+    is_positive = np.fromiter(
+        (label == positive_label_value for label in true_list),
+        dtype=bool,
+        count=len(true_list),
+    )
+
+    effective_mask = weights > 0.0
+    effective_is_positive = is_positive[effective_mask]
+    n_positive_effective = int(np.count_nonzero(effective_is_positive))
+    n_negative_effective = effective_is_positive.shape[0] - n_positive_effective
+    if n_positive_effective == 0:
+        raise ValueError(
+            f"sample_weight assigns zero total weight to positive_label={positive_label_value!r}"
+        )
+    if require_negative and n_negative_effective == 0:
+        raise ValueError("sample_weight assigns zero total weight to negative samples")
+
+    effective_scores = scores[effective_mask]
+    effective_weight = weights[effective_mask]
+
+    order, sorted_scores, group_start_indices, group_end_indices = _sort_and_group_by_score(
+        effective_scores
+    )
+    sorted_is_positive = effective_is_positive[order]
+    sorted_weight = effective_weight[order]
+
+    n_groups = group_end_indices.shape[0]
+    positive_weight_per_score = np.empty(n_groups, dtype=np.float64)
+    negative_weight_per_score = np.empty(n_groups, dtype=np.float64)
+
+    try:
+        for group_index in range(n_groups):
+            start = int(group_start_indices[group_index])
+            end = int(group_end_indices[group_index]) + 1
+            group_is_positive = sorted_is_positive[start:end]
+            group_weight = sorted_weight[start:end]
+            positive_weight_per_score[group_index] = math.fsum(
+                sorted(group_weight[group_is_positive].tolist())
+            )
+            negative_weight_per_score[group_index] = math.fsum(
+                sorted(group_weight[~group_is_positive].tolist())
+            )
+    except OverflowError as exc:
+        raise ValueError(
+            "sample_weight dynamic range is too large to preserve every positive-weight "
+            "threshold in float64"
+        ) from exc
+
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            cumulative_positive = np.cumsum(positive_weight_per_score, dtype=np.float64)
+            cumulative_negative = np.cumsum(negative_weight_per_score, dtype=np.float64)
+    except FloatingPointError as exc:
+        raise ValueError(
+            "sample_weight dynamic range is too large to preserve every threshold in float64"
+        ) from exc
+
+    _check_no_absorbed_weight_group(positive_weight_per_score, cumulative_positive)
+    _check_no_absorbed_weight_group(negative_weight_per_score, cumulative_negative)
+
+    thresholds = np.empty(n_groups + 1, dtype=np.float64)
+    thresholds[0] = np.inf
+    thresholds[1:] = sorted_scores[group_end_indices]
+
+    true_positive_weight = np.empty(n_groups + 1, dtype=np.float64)
+    true_positive_weight[0] = 0.0
+    true_positive_weight[1:] = cumulative_positive
+
+    false_positive_weight = np.empty(n_groups + 1, dtype=np.float64)
+    false_positive_weight[0] = 0.0
+    false_positive_weight[1:] = cumulative_negative
+
+    return _WeightedRankingCore(
+        thresholds=thresholds,
+        true_positive_weight=true_positive_weight,
+        false_positive_weight=false_positive_weight,
+        total_positive_weight=float(cumulative_positive[-1]),
+        total_negative_weight=float(cumulative_negative[-1]),
+        positive_label=positive_label_value,
+    )
+
+
+def _check_no_absorbed_weight_group(
+    weight_per_score: npt.NDArray[np.float64], cumulative: npt.NDArray[np.float64]
+) -> None:
+    """Raise ValueError if any group with a strictly positive weight total failed to strictly
+    increase the running cumulative sum over its predecessor.
+
+    `weight_per_score[i] > 0.0` must always mean `cumulative[i] > cumulative[i - 1]` (`> 0.0` for
+    `i == 0`) -- an extreme dynamic range between groups (e.g. group weights `[1e16, 1.0]`) can
+    make `np.cumsum` silently absorb a later, individually-positive group's entire contribution
+    without raising any overflow/underflow/invalid signal (verified directly:
+    `np.cumsum([1e16, 1.0])` gives `[1e16, 1e16]`, not `[1e16, 1.0000000000000002e16]`). This is
+    deliberately conservative: the weighted core's results are defined by plain, deterministic
+    `float64` arithmetic, but no positive-weight group is allowed to be silently dropped from the
+    resulting curve's cumulative support.
+    """
+    previous = np.empty_like(cumulative)
+    previous[0] = 0.0
+    previous[1:] = cumulative[:-1]
+    absorbed = (weight_per_score > 0.0) & ~(cumulative > previous)
+    if np.any(absorbed):
+        raise ValueError(
+            "sample_weight dynamic range is too large to preserve every positive-weight "
+            "threshold in float64"
+        )
+
+
+def _stable_precision_ratio(
+    true_positive: npt.NDArray[np.float64], false_positive: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Compute `true_positive / (true_positive + false_positive)` elementwise without an
+    intermediate `true_positive + false_positive` overflow.
+
+    Only ever called (by `_precision_ratio`, on the subset of entries that actually overflow)
+    where `true_positive + false_positive > 0` always holds by construction (every group has at
+    least one effective, positive-weight sample). Plain `tp / (tp + fp)` silently returns `0.0`
+    instead of the correct `0.5` when `tp == fp == np.finfo(np.float64).max` -- `tp + fp`
+    overflows to `+inf` under default NumPy semantics there, and `tp / inf == 0.0` -- verified
+    directly. Scaling both operands by their elementwise maximum first keeps every intermediate
+    value within `float64`'s range whenever the true ratio is well-defined, which it always is
+    here. This scaled formula does *not* reproduce plain division's bit pattern for ordinary,
+    non-overflowing values (verified directly: `tp=3.0, fp=2.0` gives `0.6` via plain division
+    but `0.6000000000000001` via this formula) -- which is exactly why `_precision_ratio` only
+    routes the overflowing entries here, rather than falling back for the whole array.
+    """
+    scale = np.maximum(true_positive, false_positive)
+    scaled_true_positive = true_positive / scale
+    scaled_false_positive = false_positive / scale
+    return scaled_true_positive / (scaled_true_positive + scaled_false_positive)
+
+
+def _precision_ratio(
+    true_positive: npt.NDArray[np.float64], false_positive: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Compute `true_positive / (true_positive + false_positive)` elementwise, matching plain
+    `float64` division bit for bit whenever `true_positive + false_positive` does not overflow --
+    only the (rare) overflowing entries are routed through `_stable_precision_ratio`'s
+    scale-based formula instead.
+
+    A single global fallback the moment *any* entry overflows would change every entry's bit
+    pattern, not just the overflowing one's (see `_stable_precision_ratio`'s docstring) -- that
+    would silently break the `sample_weight=[1.0, ...]` (all-ones) bit-for-bit identity with
+    `sample_weight=None` for every threshold in the curve, not only the ones that would have
+    actually overflowed. `true_positive + false_positive` is computed under
+    `np.errstate(over="ignore")`: the overflow this deliberately allows (only to detect via
+    `np.isinf` immediately after) would otherwise raise or warn.
+    """
+    with np.errstate(over="ignore"):
+        combined = true_positive + false_positive
+    overflowed = np.isinf(combined)
+    if not np.any(overflowed):
+        return true_positive / combined
+
+    result = np.empty_like(true_positive)
+    ordinary = ~overflowed
+    result[ordinary] = true_positive[ordinary] / combined[ordinary]
+    result[overflowed] = _stable_precision_ratio(
+        true_positive[overflowed], false_positive[overflowed]
+    )
+    return result
+
+
+def _compute_weighted_roc_rates(
+    core: _WeightedRankingCore,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Compute the false/true positive rate arrays shared by `roc_curve` and `roc_auc_score` for
+    the weighted case.
+
+    `total_positive_weight`/`total_negative_weight` are fixed, already-overflow-checked scalars
+    (see `_compute_weighted_ranking_core`), and `true_positive_weight`/`false_positive_weight`
+    are always `<=` their respective totals by construction -- so this plain elementwise
+    division never needs `_stable_precision_ratio`'s scaling (that helper exists only for
+    `tp + fp`, an unbounded sum of two independently-growing quantities, not for a bounded
+    quantity divided by a fixed total).
+    """
+    false_positive_rate = core.false_positive_weight / core.total_negative_weight
+    true_positive_rate = core.true_positive_weight / core.total_positive_weight
+    return false_positive_rate, true_positive_rate
+
+
+def _compute_weighted_precision_recall_arrays(
+    core: _WeightedRankingCore,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Compute the precision/recall arrays shared by `precision_recall_curve` and
+    `average_precision_score` for the weighted case.
+
+    Returns new, independent, still-writeable `float64` buffers (never a view of `core`'s own
+    arrays), mirroring `_compute_precision_recall_arrays`. `precision[1:]` uses
+    `_precision_ratio` rather than a direct `true_positive / (true_positive + false_positive)`,
+    since both operands here can independently grow large (unlike `recall`, divided by the fixed
+    `total_positive_weight`) -- but `_precision_ratio` still matches that direct division bit for
+    bit whenever it would not have overflowed.
+    """
+    true_positive = core.true_positive_weight
+    false_positive = core.false_positive_weight
+
+    precision = np.empty_like(true_positive)
+    precision[0] = 1.0
+    precision[1:] = _precision_ratio(true_positive[1:], false_positive[1:])
+
+    recall = true_positive / core.total_positive_weight
     return precision, recall
 
 
@@ -1522,6 +1936,40 @@ def _exact_integer_ndarray_to_float64(value: np.ndarray, name: str) -> npt.NDArr
         if int(as_float) != original:
             raise ValueError(f"{name}[{index}] is not exactly representable as float64")
     return converted
+
+
+def _normalize_sample_weight(value: object, expected_length: int) -> npt.NDArray[np.float64]:
+    """Raise TypeError/ValueError unless `value` is a valid `sample_weight`; return `float64`
+    ndarray.
+
+    A deliberate, thin wrapper around `_normalize_score_sequence` -- not a claim that weights and
+    scores share identical semantics. It reuses that function's container/dtype/finiteness/
+    signed-zero policy verbatim (same accepted containers and numeric types as `y_score`, same
+    rejection of `bool`/complex/object/wider-than-`float64`/NaN/Inf/an integer not exactly
+    representable as `float64`), then adds the two checks specific to weights: `sample_weight`
+    must have exactly `expected_length` elements, and every element must be non-negative (a
+    negative weight would make `true_positive_rate` a non-monotonic function of the threshold --
+    verified directly against a reference implementation that permits negative weights) with at
+    least one strictly positive value (an all-zero `sample_weight` assigns no effective weight to
+    any sample at all). Zero itself is legal here and is not rejected by this function -- it
+    carries its own "remove this sample before building thresholds" semantics, handled by the
+    ranking core that calls this, not here.
+    """
+    weights = _normalize_score_sequence(value, "sample_weight")
+
+    if weights.shape[0] != expected_length:
+        raise ValueError(
+            "sample_weight must have the same length as y_true/y_score, expected "
+            f"{expected_length}, got {weights.shape[0]}"
+        )
+
+    if np.any(weights < 0.0):
+        raise ValueError("sample_weight must contain only non-negative values")
+
+    if not np.any(weights > 0.0):
+        raise ValueError("sample_weight must contain at least one positive value")
+
+    return weights
 
 
 def _check_curve_postconditions(

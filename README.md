@@ -740,6 +740,11 @@ pr = im.precision_recall_curve(y_true, y_score, positive_label=1)
 roc_auc = im.roc_auc_score(y_true, y_score, positive_label=1)
 ap = im.average_precision_score(y_true, y_score, positive_label=1)
 pr_auc = im.auc(pr.recall, pr.precision)  # trapezoidal PR-curve area -- distinct from `ap`
+
+# all four accept an optional, keyword-only sample_weight
+weighted_roc_auc = im.roc_auc_score(
+    y_true, y_score, positive_label=1, sample_weight=[2.0, 1.0, 3.0, 1.0]
+)
 ```
 
 `y_score` is a ranking score, not a predicted label or a probability -- it does not need to lie in
@@ -802,6 +807,27 @@ weak or random ranking. `average_precision_score` shares `roc_curve`'s input and
 except a `y_true` with no negative sample is accepted rather than rejected (same relaxation as
 `precision_recall_curve`).
 
+All four functions accept an optional, keyword-only `sample_weight` (`None` by default, which
+preserves the unweighted behavior above bit for bit). Given explicitly, it must be the same length
+as `y_true`/`y_score`, holding the same accepted numeric types as `y_score`, but non-negative with
+at least one positive value. A sample with `sample_weight == 0.0` is removed entirely before
+thresholds are built -- a score that exists only at zero weight never produces a threshold, and a
+class present only among zero-weight samples is treated as absent (raising the same effective-
+support errors as an unweighted `y_true` missing that class). `TP(t)`/`FP(t)` become the *sum of
+weights* of the effective positive/negative samples with `score >= t`; `roc_auc_score`/
+`average_precision_score` use the matching weighted curve internally rather than recomputing
+anything from the public curve types, so `roc_auc_score(..., sample_weight=w)` is always exactly
+`auc(*that same weighted roc_curve's rate arrays*)`. Ties are aggregated the same way regardless of
+weights or input order: every sample sharing a score is grouped and its weight summed via
+`math.fsum` over a canonically sorted sequence, not a plain running `float64` sum, so permuting
+samples within a tie (or the whole input) never changes the result -- a plain per-sample
+`np.cumsum` would not have that guarantee (verified directly: `np.cumsum([1e16, 1.0, 1.0])[-1] !=
+np.cumsum([1.0, 1.0, 1e16])[-1]`). An extreme `sample_weight` dynamic range that would make a whole
+distinct-score group's contribution numerically vanish from the running total raises `ValueError`
+rather than silently dropping that group. `sample_weight=None` is not the only unweighted-compatible
+case: `sample_weight=[1.0, ...]` (all ones) and small-integer weights equivalent to physically
+replicating samples both give bit-identical results to the corresponding unweighted call.
+
 `auc(x, y)` is a general-purpose trapezoidal area-under-curve helper with no ranking semantics of
 its own -- no `positive_label`, no tie-aggregation, no notion of positive/negative samples. `x`
 must be non-decreasing or non-increasing throughout (duplicate `x` values are legal either way and
@@ -845,8 +871,11 @@ fallback instead -- a deliberate, publicly-supported correctness trade-off, not 
 -- built on standard-library arbitrary-precision rational arithmetic, whose cost also depends on how
 large the underlying integer numerator/denominator representations grow, so it is not promised to
 run in strict `O(N)` time independent of the input values themselves; this slice covers binary
-ROC/PR/ROC-AUC/average-precision plus a generic trapezoidal `auc` helper: no multiclass score
-matrix, no averaging, no sample weights, and no plotting.
+ROC/PR/ROC-AUC/average-precision (with optional `sample_weight`) plus a generic trapezoidal `auc`
+helper: no multiclass score matrix, no averaging, no plotting, and no `sample_weight` for `auc`
+itself (it operates on curve points, not observations) or for `confusion_matrix`/
+`classification_metrics` (a separate, unresolved design question -- see those functions' own
+docstrings).
 
 Augmentation sampling and replay -- flip:
 
