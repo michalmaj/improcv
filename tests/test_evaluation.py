@@ -2600,3 +2600,586 @@ def test_precision_recall_curve_no_nan_and_inf_only_at_index_zero() -> None:
     assert np.isinf(pr.thresholds[0])
     assert not np.any(np.isinf(pr.thresholds[1:]))
     assert im.ClassificationMetrics is ClassificationMetrics
+
+
+# --- sample_weight for binary ranking metrics ---
+
+
+def _weighted_mann_whitney_auc(y_true, y_score, sample_weight, positive_label) -> float:
+    """Independent, non-vectorized weighted AUC oracle: weighted fraction of (positive,
+    negative) pairs where the positive outranks the negative, with a tied pair counted as
+    one-half and each pair weighted by the product of its two samples' weights."""
+    triples = list(zip(y_true, y_score, sample_weight, strict=True))
+    positives = [(s, w) for t, s, w in triples if t == positive_label and w > 0.0]
+    negatives = [(s, w) for t, s, w in triples if t != positive_label and w > 0.0]
+    numerator = 0.0
+    denominator = 0.0
+    for p_score, p_weight in positives:
+        for n_score, n_weight in negatives:
+            pair_weight = p_weight * n_weight
+            denominator += pair_weight
+            if p_score > n_score:
+                numerator += pair_weight
+            elif p_score == n_score:
+                numerator += 0.5 * pair_weight
+    return numerator / denominator
+
+
+@pytest.mark.parametrize(
+    ("make_sample_weight", "expected_exception"),
+    [
+        (lambda: (w for w in [1.0, 1.0, 1.0, 1.0]), TypeError),
+        (lambda: iter([1.0, 1.0, 1.0, 1.0]), TypeError),
+        (lambda: "abcd", TypeError),
+        (lambda: b"abcd", TypeError),
+        (lambda: np.array([True, False, True, False]), TypeError),
+        (lambda: np.array([1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j]), TypeError),
+        (lambda: np.array([1.0, 1.0, 1.0, 1.0], dtype=object), TypeError),
+        (lambda: np.array(1.0), ValueError),
+        (lambda: np.array([[1.0], [1.0], [1.0], [1.0]]), ValueError),
+        (lambda: np.array([[1.0, 1.0], [1.0, 1.0]]), ValueError),
+        (lambda: [], ValueError),
+        (lambda: [1.0, 1.0, float("nan"), 1.0], ValueError),
+        (lambda: [1.0, 1.0, float("inf"), 1.0], ValueError),
+        (lambda: [1.0, 1.0, float("-inf"), 1.0], ValueError),
+        (lambda: [1.0, 1.0, Decimal("1.0"), 1.0], TypeError),
+        (lambda: [1.0, 1.0, Fraction(1, 1), 1.0], TypeError),
+        (lambda: [1.0, 1.0, None, 1.0], TypeError),
+        (lambda: [1.0, 1.0, True, 1.0], TypeError),
+        (lambda: [1.0, 1.0, -1.0, 1.0], ValueError),
+        (lambda: [1.0, 1.0, 1.0], ValueError),
+        (lambda: [0.0, 0.0, 0.0, 0.0], ValueError),
+    ],
+)
+def test_sample_weight_rejects_bad_values(make_sample_weight, expected_exception) -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(expected_exception):
+            func(y_true, y_score, positive_label=1, sample_weight=make_sample_weight())
+
+
+@pytest.mark.parametrize(("value", "legal"), [(2**53, True), (2**53 + 1, False), (2**53 + 2, True)])
+def test_sample_weight_exact_integer_representability_boundary(value, legal) -> None:
+    # A single sample per class avoids the (unrelated) dynamic-range absorption check: mixing
+    # this boundary value with a much smaller weight in the *same* class's cumulative sum would
+    # trip that check instead of exercising representability validation in isolation.
+    y_true = [1, 0]
+    y_score = [0.9, 0.1]
+    sample_weight = [value, 1]
+    if legal:
+        roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    else:
+        with pytest.raises(ValueError):
+            roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_sample_weight_accepts_floating_ndarray_dtypes(dtype) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    sample_weight = np.array([1.0, 2.0, 1.0, 3.0], dtype=dtype)
+    roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert roc.thresholds.dtype == np.float64
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint32])
+def test_sample_weight_accepts_integer_ndarray_dtypes(dtype) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    sample_weight = np.array([1, 2, 1, 3], dtype=dtype)
+    roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert roc.thresholds.dtype == np.float64
+
+
+@pytest.mark.parametrize("container", [list, tuple, _CustomScoreSequence])
+def test_sample_weight_accepts_various_sequence_containers(container) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    sample_weight = container([1.0, 2.0, 1.0, 3.0])
+    for func in _RANKING_FUNCTIONS:
+        func(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+
+
+def test_sample_weight_rejects_mismatched_length() -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError):
+            func(y_true, y_score, positive_label=1, sample_weight=[1.0, 1.0, 1.0])
+
+
+# --- zero-weight semantics ---
+
+
+def test_sample_weight_zero_weight_sample_removed_before_thresholds() -> None:
+    y_true = [1, 0, 1, 0]
+    y_score = [0.9, 0.8, 0.5, 0.1]
+    sample_weight = [1.0, 1.0, 0.0, 1.0]
+    roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert 0.5 not in roc.thresholds
+    assert roc.thresholds.shape[0] == 4
+
+
+def test_sample_weight_all_zero_raises() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError, match="sample_weight"):
+            func(y_true, y_score, positive_label=1, sample_weight=[0.0, 0.0, 0.0, 0.0])
+
+
+def test_sample_weight_positive_label_only_at_zero_weight_raises() -> None:
+    y_true = [1, 0, 0]
+    y_score = [0.9, 0.8, 0.1]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError, match="positive_label"):
+            func(y_true, y_score, positive_label=1, sample_weight=[0.0, 1.0, 1.0])
+
+
+def test_sample_weight_negatives_only_zero_weight_roc_raises() -> None:
+    y_true = [1, 0, 0]
+    y_score = [0.9, 0.8, 0.1]
+    with pytest.raises(ValueError, match="negative"):
+        roc_curve(y_true, y_score, positive_label=1, sample_weight=[1.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="negative"):
+        roc_auc_score(y_true, y_score, positive_label=1, sample_weight=[1.0, 0.0, 0.0])
+
+
+def test_sample_weight_negatives_only_zero_weight_pr_ap_legal() -> None:
+    y_true = [1, 0, 0]
+    y_score = [0.9, 0.8, 0.1]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=[1.0, 0.0, 0.0])
+    assert_array_equal(pr.precision, [1.0, 1.0])
+    ap = average_precision_score(y_true, y_score, positive_label=1, sample_weight=[1.0, 0.0, 0.0])
+    assert ap == 1.0
+
+
+# --- bit-identity with the unweighted path ---
+
+
+def test_sample_weight_none_is_same_as_omitting_it() -> None:
+    y_true = [0, 0, 1, 1, 0, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8, 0.6, 0.5]
+    assert roc_curve(y_true, y_score, positive_label=1) == roc_curve(
+        y_true, y_score, positive_label=1, sample_weight=None
+    )
+    assert precision_recall_curve(y_true, y_score, positive_label=1) == precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=None
+    )
+    assert roc_auc_score(y_true, y_score, positive_label=1) == roc_auc_score(
+        y_true, y_score, positive_label=1, sample_weight=None
+    )
+    assert average_precision_score(y_true, y_score, positive_label=1) == average_precision_score(
+        y_true, y_score, positive_label=1, sample_weight=None
+    )
+
+
+def test_sample_weight_all_ones_bit_identical_to_none() -> None:
+    y_true = [0, 0, 1, 1, 0, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8, 0.6, 0.5]
+    ones = [1.0] * len(y_true)
+
+    roc_none = roc_curve(y_true, y_score, positive_label=1)
+    roc_ones = roc_curve(y_true, y_score, positive_label=1, sample_weight=ones)
+    assert_array_equal(roc_none.false_positive_rate, roc_ones.false_positive_rate)
+    assert_array_equal(roc_none.true_positive_rate, roc_ones.true_positive_rate)
+    assert_array_equal(roc_none.thresholds, roc_ones.thresholds)
+
+    pr_none = precision_recall_curve(y_true, y_score, positive_label=1)
+    pr_ones = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=ones)
+    assert_array_equal(pr_none.precision, pr_ones.precision)
+    assert_array_equal(pr_none.recall, pr_ones.recall)
+    assert_array_equal(pr_none.thresholds, pr_ones.thresholds)
+
+    assert roc_auc_score(y_true, y_score, positive_label=1) == roc_auc_score(
+        y_true, y_score, positive_label=1, sample_weight=ones
+    )
+    assert average_precision_score(y_true, y_score, positive_label=1) == average_precision_score(
+        y_true, y_score, positive_label=1, sample_weight=ones
+    )
+
+
+def test_sample_weight_small_integer_replication_bit_identical() -> None:
+    y_true = [1, 0, 1]
+    y_score = [0.9, 0.5, 0.2]
+    sample_weight = [1, 2, 3]
+
+    y_true_replicated = [1, 0, 0, 1, 1, 1]
+    y_score_replicated = [0.9, 0.5, 0.5, 0.2, 0.2, 0.2]
+
+    roc_weighted = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    roc_replicated = roc_curve(y_true_replicated, y_score_replicated, positive_label=1)
+    assert_array_equal(roc_weighted.false_positive_rate, roc_replicated.false_positive_rate)
+    assert_array_equal(roc_weighted.true_positive_rate, roc_replicated.true_positive_rate)
+    assert_array_equal(roc_weighted.thresholds, roc_replicated.thresholds)
+
+    pr_weighted = precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    pr_replicated = precision_recall_curve(y_true_replicated, y_score_replicated, positive_label=1)
+    assert_array_equal(pr_weighted.precision, pr_replicated.precision)
+    assert_array_equal(pr_weighted.recall, pr_replicated.recall)
+
+    auc_weighted = roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    auc_replicated = roc_auc_score(y_true_replicated, y_score_replicated, positive_label=1)
+    assert auc_weighted == auc_replicated
+
+    ap_weighted = average_precision_score(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    ap_replicated = average_precision_score(y_true_replicated, y_score_replicated, positive_label=1)
+    assert ap_weighted == ap_replicated
+
+
+# --- tie/threshold strategy: canonical, order-independent weight aggregation ---
+
+
+def test_sample_weight_tie_order_cancellation_is_bit_identical() -> None:
+    # Plain per-sample np.cumsum would make this order-dependent: verified directly that
+    # np.cumsum([1e16, 1.0, 1.0])[-1] != np.cumsum([1.0, 1.0, 1e16])[-1]. Grouping this tie's
+    # positive weights and summing via math.fsum(sorted(...)) once per group removes that
+    # dependency.
+    y_true = [1, 1, 1, 0]
+    y_score = [0.5, 0.5, 0.5, 0.1]
+    weights_a = [1e16, 1.0, 1.0, 5.0]
+    weights_b = [1.0, 1.0, 1e16, 5.0]
+
+    roc_a = roc_curve(y_true, y_score, positive_label=1, sample_weight=weights_a)
+    roc_b = roc_curve(y_true, y_score, positive_label=1, sample_weight=weights_b)
+    assert_array_equal(roc_a.true_positive_rate, roc_b.true_positive_rate)
+    assert_array_equal(roc_a.false_positive_rate, roc_b.false_positive_rate)
+    assert_array_equal(roc_a.thresholds, roc_b.thresholds)
+
+    pr_a = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=weights_a)
+    pr_b = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=weights_b)
+    assert_array_equal(pr_a.precision, pr_b.precision)
+    assert_array_equal(pr_a.recall, pr_b.recall)
+
+
+def test_sample_weight_permutation_invariance() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.2, 0.5, 0.5, 0.5, 0.9]
+    sample_weight = [3.0, 1.0, 2.0, 4.0, 1.0, 6.0]
+    baseline_roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    baseline_pr = precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=sample_weight
+    )
+    baseline_auc = roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+
+    rng = np.random.default_rng(0)
+    indices = np.arange(len(y_true))
+    for _ in range(20):
+        rng.shuffle(indices)
+        permuted_true = [y_true[i] for i in indices]
+        permuted_score = [y_score[i] for i in indices]
+        permuted_weight = [sample_weight[i] for i in indices]
+        assert (
+            roc_curve(
+                permuted_true, permuted_score, positive_label=1, sample_weight=permuted_weight
+            )
+            == baseline_roc
+        )
+        assert (
+            precision_recall_curve(
+                permuted_true, permuted_score, positive_label=1, sample_weight=permuted_weight
+            )
+            == baseline_pr
+        )
+        assert (
+            roc_auc_score(
+                permuted_true, permuted_score, positive_label=1, sample_weight=permuted_weight
+            )
+            == baseline_auc
+        )
+
+
+def test_sample_weight_within_tie_permutation_invariance() -> None:
+    y_true = [1, 1, 1, 0, 0]
+    y_score = [0.5, 0.5, 0.5, 0.5, 0.1]
+    weight_pool = [7.0, 2.0, 9.0]
+    baseline = roc_curve(y_true, y_score, positive_label=1, sample_weight=[*weight_pool, 4.0, 1.0])
+    for permuted in ([9.0, 7.0, 2.0], [2.0, 9.0, 7.0], [7.0, 9.0, 2.0]):
+        roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=[*permuted, 4.0, 1.0])
+        assert_array_equal(roc.true_positive_rate, baseline.true_positive_rate)
+        assert_array_equal(roc.false_positive_rate, baseline.false_positive_rate)
+        assert_array_equal(roc.thresholds, baseline.thresholds)
+
+
+def test_sample_weight_strictly_increasing_transform_invariance() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.2, 0.5, 0.5, 0.5, 0.9]
+    sample_weight = [3.0, 1.0, 2.0, 4.0, 1.0, 6.0]
+    transformed_score = [s * 10.0 + 1.0 for s in y_score]
+
+    baseline_roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    transformed_roc = roc_curve(
+        y_true, transformed_score, positive_label=1, sample_weight=sample_weight
+    )
+    assert_array_equal(baseline_roc.false_positive_rate, transformed_roc.false_positive_rate)
+    assert_array_equal(baseline_roc.true_positive_rate, transformed_roc.true_positive_rate)
+
+
+# --- numeric/accumulation strategy: overflow and absorbed-group detection ---
+
+
+def test_sample_weight_dynamic_range_absorption_raises() -> None:
+    # np.cumsum([1e16, 1.0]) gives [1e16, 1e16], not [1e16, 1.0000000000000002e16] -- the
+    # second, individually-positive group's contribution is silently absorbed. Detected and
+    # rejected explicitly rather than returned as a curve that quietly drops that group.
+    y_true = [1, 1, 0]
+    y_score = [0.9, 0.1, 0.05]
+    sample_weight = [1e16, 1.0, 1.0]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError, match="dynamic range"):
+            func(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+
+
+def test_sample_weight_overflow_raises() -> None:
+    huge = np.finfo(np.float64).max
+    y_true = [1, 1, 0, 0]
+    y_score = [0.9, 0.8, 0.5, 0.1]
+    sample_weight = [huge, huge, 1.0, 1.0]
+    for func in _RANKING_FUNCTIONS:
+        with pytest.raises(ValueError):
+            func(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+
+
+def test_sample_weight_scaling_by_positive_constant_is_approximately_invariant() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.2, 0.5, 0.5, 0.5, 0.9]
+    sample_weight = [3.0, 1.0, 2.0, 4.0, 1.0, 6.0]
+    scaled_weight = [w * 3.7 for w in sample_weight]
+
+    baseline = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    scaled = roc_curve(y_true, y_score, positive_label=1, sample_weight=scaled_weight)
+    np.testing.assert_allclose(scaled.false_positive_rate, baseline.false_positive_rate)
+    np.testing.assert_allclose(scaled.true_positive_rate, baseline.true_positive_rate)
+
+
+# --- stable precision: no intermediate tp + fp overflow ---
+
+
+def test_sample_weight_precision_overflow_gives_one_half() -> None:
+    huge = np.finfo(np.float64).max
+    y_true = [1, 0]
+    y_score = [0.5, 0.5]
+    sample_weight = [huge, huge]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        ap = average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert pr.precision[-1] == 0.5
+    assert ap == 0.5
+
+
+def test_sample_weight_precision_asymmetric_extreme_matches_stable_formula() -> None:
+    # huge + 1.0 does not itself overflow float64 (it rounds back to huge), so this exercises
+    # the ordinary, non-overflowing division path with a wildly asymmetric ratio -- not the
+    # overflow-triggered stable fallback (that is covered by the M/M case above).
+    huge = np.finfo(np.float64).max
+    y_true = [1, 0]
+    y_score = [0.5, 0.5]
+
+    pr_tp_huge = precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=[huge, 1.0]
+    )
+    assert pr_tp_huge.precision[-1] == 1.0
+
+    pr_fp_huge = precision_recall_curve(
+        y_true, y_score, positive_label=1, sample_weight=[1.0, huge]
+    )
+    assert pr_fp_huge.precision[-1] == pytest.approx(1.0 / huge)
+
+
+# --- relationship between the four public functions ---
+
+
+def test_sample_weight_roc_auc_score_equals_auc_of_public_weighted_curve() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.2, 0.5, 0.5, 0.5, 0.9]
+    for sample_weight in (
+        [3.0, 1.0, 2.0, 4.0, 1.0, 6.0],
+        [1.0] * 6,
+        [1, 2, 1, 3, 1, 2],
+    ):
+        curve = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        expected = auc(curve.false_positive_rate, curve.true_positive_rate)
+        actual = roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        assert actual == expected
+
+
+def test_sample_weight_average_precision_equals_public_curve_arithmetic() -> None:
+    y_true = [0, 1, 0, 1, 1, 0]
+    y_score = [0.2, 0.2, 0.5, 0.5, 0.5, 0.9]
+    sample_weight = [3.0, 1.0, 2.0, 4.0, 1.0, 6.0]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    expected = float(np.sum(np.diff(pr.recall) * pr.precision[1:], dtype=np.float64))
+    result = average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert result == expected
+
+
+def test_sample_weight_average_precision_all_positive_is_one_despite_curve_sum_residual() -> None:
+    # Constructed so that summing precision_recall_curve's own recall increments rounds to
+    # 0.9999999999999999, not 1.0 -- verified directly. average_precision_score's all-positive
+    # shortcut must still give exactly 1.0, never that rounding residual.
+    y_true = [1] * 7
+    y_score = [
+        0.6276391005616293,
+        0.021845499237729826,
+        0.9138811115397377,
+        0.7998245566512758,
+        0.11577939883887689,
+        0.25648877124056624,
+        0.6535669902031535,
+    ]
+    sample_weight = [
+        817.2750465759391,
+        644.9442200334336,
+        115.11819475885562,
+        154.44859243666397,
+        851.241236040027,
+        42.30717902677406,
+        205.74368331164084,
+    ]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    naive_sum = float(np.sum(np.diff(pr.recall) * pr.precision[1:], dtype=np.float64))
+    assert naive_sum != 1.0
+
+    ap = average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert ap == 1.0
+
+
+# --- hand-derived weighted examples ---
+
+
+def test_sample_weight_roc_curve_manual_expected_arrays() -> None:
+    y_true = [1, 0, 1, 0]
+    y_score = [0.9, 0.8, 0.7, 0.1]
+    sample_weight = [2.0, 1.0, 3.0, 1.0]
+    roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    np.testing.assert_allclose(roc.thresholds, [np.inf, 0.9, 0.8, 0.7, 0.1])
+    np.testing.assert_allclose(roc.true_positive_rate, [0.0, 0.4, 0.4, 1.0, 1.0])
+    np.testing.assert_allclose(roc.false_positive_rate, [0.0, 0.0, 0.5, 0.5, 1.0])
+
+
+def test_sample_weight_precision_recall_curve_manual_expected_arrays() -> None:
+    y_true = [1, 0, 1, 0]
+    y_score = [0.9, 0.8, 0.7, 0.1]
+    sample_weight = [2.0, 1.0, 3.0, 1.0]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    np.testing.assert_allclose(pr.recall, [0.0, 0.4, 0.4, 1.0, 1.0])
+    np.testing.assert_allclose(pr.precision, [1.0, 1.0, 2 / 3, 5 / 6, 5 / 7])
+
+
+def test_sample_weight_average_precision_differs_from_unweighted() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.3, 0.6, 0.4, 0.9]
+    unweighted = average_precision_score(y_true, y_score, positive_label=1)
+    weighted = average_precision_score(
+        y_true, y_score, positive_label=1, sample_weight=[1.0, 1.0, 5.0, 1.0]
+    )
+    assert unweighted == pytest.approx(0.8333333333333333)
+    assert weighted == pytest.approx(0.8809523809523809)
+    assert weighted != unweighted
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_score", "sample_weight"),
+    [
+        ([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], [1.0, 2.0, 3.0, 1.0]),
+        ([0, 1, 0, 1, 1, 0], [0.2, 0.5, 0.1, 0.9, 0.5, 0.5], [2.0, 1.0, 3.0, 1.0, 2.0, 1.0]),
+        ([1, 1, 0, 0, 0], [0.9, 0.1, 0.1, 0.1, 0.9], [1.0, 5.0, 1.0, 1.0, 1.0]),
+        ([0, 1], [0.5, 0.5], [4.0, 4.0]),
+    ],
+)
+def test_sample_weight_roc_auc_matches_weighted_mann_whitney_oracle(
+    y_true, y_score, sample_weight
+) -> None:
+    expected = _weighted_mann_whitney_auc(y_true, y_score, sample_weight, positive_label=1)
+    actual = roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert actual == pytest.approx(expected)
+
+
+def test_sample_weight_constant_score_gives_weighted_prevalence() -> None:
+    y_true = [1, 1, 1, 0, 0, 0, 0, 0]
+    y_score = [0.5] * 8
+    sample_weight = [3.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert pr.precision[-1] == pytest.approx(6 / 11)
+    ap = average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    assert ap == pytest.approx(6 / 11)
+
+
+# --- no mutation, dtype, independence, no warnings ---
+
+
+def test_sample_weight_does_not_mutate_or_alias_inputs() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = np.array([0.1, 0.4, 0.35, 0.8], dtype=np.float64)
+    sample_weight = np.array([1.0, 2.0, 3.0, 1.0], dtype=np.float64)
+    y_score_copy = y_score.copy()
+    sample_weight_copy = sample_weight.copy()
+
+    roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+
+    assert_array_equal(y_score, y_score_copy)
+    assert_array_equal(sample_weight, sample_weight_copy)
+    assert not np.shares_memory(roc.thresholds, y_score)
+    assert not np.shares_memory(roc.thresholds, sample_weight)
+    assert not np.shares_memory(roc.false_positive_rate, sample_weight)
+    assert not np.shares_memory(roc.true_positive_rate, sample_weight)
+
+
+def test_sample_weight_result_arrays_are_float64_independent_and_read_only() -> None:
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    sample_weight = [1.0, 2.0, 3.0, 1.0]
+    roc = roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    for arr in (roc.false_positive_rate, roc.true_positive_rate, roc.thresholds):
+        assert arr.dtype == np.float64
+        assert not arr.flags.writeable
+        with pytest.raises(ValueError):
+            arr[0] = 99.0
+    assert not np.shares_memory(roc.false_positive_rate, roc.true_positive_rate)
+    assert not np.shares_memory(roc.false_positive_rate, roc.thresholds)
+
+    pr = precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    for arr in (pr.precision, pr.recall, pr.thresholds):
+        assert arr.dtype == np.float64
+        assert not arr.flags.writeable
+
+    assert isinstance(
+        roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight), float
+    )
+    assert isinstance(
+        average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight),
+        float,
+    )
+
+
+def test_sample_weight_no_numpy_warnings_under_simplefilter_error() -> None:
+    y_true = [1, 0, 1, 0, 1]
+    y_score = [0.9, 0.8, 0.7, 0.5, 0.1]
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 5.0]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+
+
+def test_sample_weight_no_floating_point_error_under_seterr_raise() -> None:
+    y_true = [1, 0, 1, 0, 1]
+    y_score = [0.9, 0.8, 0.7, 0.5, 0.1]
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 5.0]
+    old_state = np.seterr(all="raise")
+    try:
+        roc_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        precision_recall_curve(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        roc_auc_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+        average_precision_score(y_true, y_score, positive_label=1, sample_weight=sample_weight)
+    finally:
+        np.seterr(**old_state)

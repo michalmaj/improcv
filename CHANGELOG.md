@@ -252,6 +252,57 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `[0, 1]`-bounded postconditions, and input contract are unchanged. No new public result type, no
   `precision_recall_auc_score` or other score-level alias, no SciPy, and no new dependency in this
   slice.
+- `improcv.evaluation`, Phase 5 slice: an optional, keyword-only `sample_weight` for `roc_curve`,
+  `precision_recall_curve`, `roc_auc_score`, and `average_precision_score` -- `None` (the default)
+  preserves each function's existing unweighted result, dtype, and error contract bit for bit;
+  given explicitly, `sample_weight` must be the same length as `y_true`/`y_score`, hold the same
+  accepted numeric types as `y_score`, and be non-negative with at least one positive value
+  (negative weights are rejected, unlike `sklearn`'s ranking curves, which accept them -- verified
+  directly that a negative weight can make `sklearn`'s own `true_positive_rate` non-monotonic in
+  the threshold, the exact invariant this project's own postconditions already enforce). A sample
+  with `sample_weight == 0.0` is removed from the effective set before thresholds are built (a
+  score existing only at zero weight never produces a threshold, matching `scikit-learn`'s own
+  documented "filters out zero-weighted samples" behavior, verified directly against its source);
+  a class present only among zero-weight samples raises the same kind of `ValueError` as an
+  unweighted `y_true` missing that class entirely, with a weighted-specific message.
+  `TP(t)`/`FP(t)` become the sum of effective weights at or above each threshold, computed via a
+  new private `_WeightedRankingCore` that groups each distinct score's positive/negative weights
+  and sums each group exactly once with `math.fsum` over a canonically sorted sequence -- not a
+  plain per-sample `np.cumsum`, which would make the existing "permuting samples within a tie never
+  changes the result" contract depend on summation order (verified directly:
+  `np.cumsum([1e16, 1.0, 1.0])[-1] != np.cumsum([1.0, 1.0, 1e16])[-1]`, but
+  `math.fsum(sorted(...))` gives the same result regardless of order). The resulting per-group
+  totals are then turned into cumulative arrays with a single `np.cumsum(..., dtype=np.float64)`
+  under `np.errstate(over="raise", invalid="raise")`; an extreme `sample_weight` dynamic range that
+  would make a whole positive-weight group fail to strictly increase the cumulative sum (verified
+  directly: `np.cumsum([1e16, 1.0])` gives `[1e16, 1e16]`, silently absorbing the second group)
+  raises `ValueError` rather than silently returning a curve that drops that group's contribution.
+  Precision (`tp / (tp + fp)`) uses a new private helper that matches plain `float64` division bit
+  for bit whenever it would not overflow, and only routes the individual overflowing entries
+  through a scale-based stable formula instead (verified directly that a single global fallback the
+  moment any entry overflowed would change every entry's bit pattern, not only the overflowing
+  one's, silently breaking the `sample_weight=[1.0, ...]` all-ones bit-identity guarantee below) --
+  so `precision`/`average_precision_score` stay correct (`0.5`, not a silently-underflowed `0.0`)
+  even when both the effective positive and negative weight at a threshold are individually near
+  `float64`'s max. `roc_auc_score`/`average_precision_score` do not call the public
+  `roc_curve`/`precision_recall_curve` internally for the weighted path either (matching the
+  existing unweighted design): both build their arrays from the same private weighted core, so
+  `roc_auc_score(..., sample_weight=w)` always equals
+  `auc(*that call's equivalent roc_curve(..., sample_weight=w) rate arrays*)` bit for bit.
+  `sample_weight=None`, all-ones, and small-integer-weight-vs-physical-replication are all verified
+  bit-identical to their unweighted counterparts across thresholds, rates, precision/recall, ROC
+  AUC, and average precision; whole-input and within-tie permutation invariance stay bit-exact;
+  scaling every weight by a positive constant stays only approximately invariant (verified directly
+  that `false_positive_rate` is bit-identical under scaling but `true_positive_rate` is not, since
+  the two are computed from independently-rounded cumulative sums). `average_precision_score`'s
+  existing all-positive shortcut (returning exactly `1.0` directly, not via summing curve
+  increments) still applies for zero effective negative weight -- verified directly that, for
+  weighted input, naively summing `precision_recall_curve`'s own recall increments can round to
+  `0.9999999999999999` even when the true result is exactly `1.0`. No `sample_weight` for
+  `confusion_matrix`/`classification_metrics`/`classification_metrics_from_confusion_matrix` (their
+  `int64` matrix/support contract would need to widen to `float64`, a separate, unresolved design
+  question) or for `auc(x, y)` (it operates on curve points, not per-observation weights); no new
+  public result type, no multiclass score matrix, and no new dependency in this slice.
 
 ### Fixed
 - `improcv.evaluation`: `auc`'s fast `float64` path could silently lose a representable residual
@@ -291,8 +342,9 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   underflow a genuine subnormal residual to `0.0` (halving a value already at the edge of the
   subnormal range loses it entirely). The fallback now recomputes the exact trapezoidal sum as a
   rational number (`fractions.Fraction`, standard library) over the already-normalized `float64`
-  values on this rare, overflow-triggered path only, converting just the final total back to `float`
-  -- `ValueError` is now raised only when that exact total's `float()` conversion itself overflows
+  values, converting just the final total back to `float` -- since amended below in this same
+  `[Unreleased]` series to also cover underflow and mixed-sign cancellation, not overflow alone.
+  `ValueError` is now raised only when that exact total's `float()` conversion itself overflows
   (i.e. the true area genuinely is not representable as a finite `float64`), never merely because
   the fast, unscaled `float64` attempt happened to overflow. The ordinary, non-overflowing fast path
   (and therefore `roc_auc_score`'s own bit-identical result on its own `[0, 1]`-bounded domain,
