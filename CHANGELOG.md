@@ -221,21 +221,27 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `0.0`); a non-increasing `x` gives the same positive geometric area a non-decreasing order of the
   same points would, not a signed integral. `y` may be negative and so may the result -- unlike
   `roc_auc_score`/`average_precision_score`, whose domain is always `[0, 1]` by construction, `auc`
-  has no such bound. Ordinary calls use a fast, canonical `float64` summation; if an intermediate
-  segment width, height sum, or product would overflow `float64`, or if a segment's own
-  contribution would underflow in a way that could lose it before it has a chance to be summed
-  with its neighbors, `auc` falls back to computing the exact trapezoidal sum as a rational number
-  (`fractions.Fraction`, standard library, used only on this rare path) over the already-normalized
-  `float64` values, converting only the final total back to `float` -- verified directly for a
-  height-sum overflow with a finite result, a width overflow with a finite result, constant `x`
-  with an extreme finite `y`, a width overflow combined with a tiny `y` giving a finite nonzero
-  result, cancellation between huge intermediate contributions (summing exactly to `0.0` and to
-  `1.0` in two constructed examples), a subnormal residual accumulated from several underflowing
-  segments (summing exactly to `5e-324`, the smallest positive subnormal `float64`), and a segment
-  whose exact contribution genuinely rounds to `0.0` (legal, not an error), all without emitting a
-  NumPy warning regardless of the caller's own `np.seterr`/`np.errstate` configuration; only an
-  input whose true, exact area is not representable as a finite `float64` raises `ValueError`,
-  never silently `inf`/`-inf`/`NaN`. `auc` computes the trapezoidal area under
+  has no such bound. Ordinary calls -- `y` entirely non-negative or entirely non-positive, with no
+  intermediate overflow/underflow -- use a fast, canonical `float64` summation (the path
+  `roc_auc_score`'s always-non-negative TPR and `auc(curve.recall, curve.precision)`'s
+  always-non-negative precision both take); `auc` falls back to computing the exact trapezoidal sum
+  as a rational number (`fractions.Fraction`, standard library, used only on these rare paths) over
+  the already-normalized `float64` values, converting only the final total back to `float`, when an
+  intermediate segment width/height-sum/product would overflow `float64`, when a segment's own
+  contribution would underflow in a way that could lose it before it has a chance to be summed with
+  its neighbors, or when `y` contains both a positive and a negative value (opposite-signed
+  contributions can cancel in the final sum in a way no NumPy overflow/underflow/invalid signal
+  would ever catch) -- verified directly for a height-sum overflow with a finite result, a width
+  overflow with a finite result, constant `x` with an extreme finite `y`, a width overflow combined
+  with a tiny `y` giving a finite nonzero result, cancellation between huge intermediate
+  contributions (summing exactly to `0.0` and to `1.0` in two constructed examples), a subnormal
+  residual accumulated from several underflowing segments (summing exactly to `5e-324`, the
+  smallest positive subnormal `float64`), a mixed-sign cancellation residual (summing exactly to
+  `1e-20` where the fast path would silently give `0.0`), and a segment whose exact contribution
+  genuinely rounds to `0.0` (legal, not an error), all without emitting a NumPy warning regardless
+  of the caller's own `np.seterr`/`np.errstate` configuration; only an input whose true, exact area
+  is not representable as a finite `float64` raises `ValueError`, never silently `inf`/`-inf`/`NaN`.
+  `auc` computes the trapezoidal area under
   the precision-recall curve when called as
   `auc(curve.recall, curve.precision)` -- a distinct quantity from `average_precision_score` (see
   above), and the complete, supported way to obtain it: there is no separate score-level function
@@ -248,6 +254,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   slice.
 
 ### Fixed
+- `improcv.evaluation`: `auc`'s fast `float64` path could silently lose a representable residual
+  through catastrophic cancellation when `y` contained both a positive and a negative value --
+  `x=[0.0, 1.0, 2.0], y=[1.0, 1e-20, -1.0]` has exact trapezoidal area `1e-20`, but plain `float64`
+  rounds `1.0 + 1e-20` to `1.0` and `1e-20 - 1.0` to `-1.0`, so the two segments' contributions of
+  `0.5` and `-0.5` cancelled to exactly `0.0` -- with no overflow, underflow, or invalid operation
+  for `np.errstate` to catch, since every individual operation stayed finite and normal throughout.
+  `auc` now checks whether `y` contains both a positive and a negative value (a global check across
+  all of `y`, not just between adjacent points, since even non-adjacent contributions can cancel in
+  the final sum) and, if so, routes directly to the existing exact `fractions.Fraction` fallback
+  without attempting the fast path at all. Curves with entirely non-negative or entirely
+  non-positive `y` -- including `roc_auc_score`'s TPR and `auc(curve.recall, curve.precision)`'s
+  precision -- are unaffected and keep using the fast path, since same-signed contributions can
+  never cancel against each other.
 - `improcv.evaluation`: `auc`'s fast `float64` path (`_trapezoidal_area_float64`) previously only
   guarded against overflow and invalid (NaN-producing) operations, not underflow -- so an
   individual segment's own contribution could round to `0.0` under plain `float64` arithmetic

@@ -1987,6 +1987,174 @@ def test_roc_auc_score_never_enters_exact_fallback(monkeypatch) -> None:
     roc_auc_score(y_true, y_score, positive_label=1)
 
 
+# --- generic auc(x, y): exact fallback for mixed-sign y (catastrophic cancellation regression --
+# the fast path could silently round two opposite-signed segment contributions to values that
+# cancel exactly to 0.0, even though no overflow/underflow/invalid operation ever occurred) ---
+
+
+def test_auc_exact_fallback_preserves_mixed_sign_residual() -> None:
+    x = [0.0, 1.0, 2.0]
+    y = [1.0, 1e-20, -1.0]
+
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == 1e-20
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc(x, y)
+
+    assert result == 1e-20
+    assert result != 0.0
+
+
+def test_auc_exact_fallback_preserves_mixed_sign_residual_mirror() -> None:
+    x = [0.0, 1.0, 2.0]
+    y = [-1.0, -1e-20, 1.0]
+
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == -1e-20
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc(x, y)
+
+    assert result == -1e-20
+    assert result != 0.0
+
+
+def test_auc_exact_fallback_preserves_mixed_sign_residual_reversed_points() -> None:
+    x = [2.0, 1.0, 0.0]
+    y = [-1.0, 1e-20, 1.0]
+
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == 1e-20
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc(x, y)
+
+    assert result == 1e-20
+
+
+def test_auc_mixed_sign_ordinary_regression_still_correct() -> None:
+    # The pre-existing ordinary mixed-sign result (from before this fix existed) must be
+    # unchanged now that mixed-sign y always routes through the exact fallback.
+    assert auc([0.0, 1.0, 2.0], [1.0, -1.0, -3.0]) == -2.0
+
+
+@pytest.mark.parametrize(
+    ("x", "y"),
+    [
+        ([0.0, 1.0, 2.0, 3.0], [2.0, -1.0, 0.5, -0.25]),
+        ([0.0, 1.0, 2.0], [1e10, -1e-10, 1e10]),
+        ([0.0, 1.0, 2.0, 3.0], [1.0, 0.0, -1.0, 0.0]),
+        ([0.0, 1.0, 2.0], [1.0, 0.0, -1.0]),
+        ([0.0, 2.0, 3.0], [5.0, -1.0, -1.0]),
+    ],
+)
+def test_auc_mixed_sign_matches_independent_fraction_oracle(x, y) -> None:
+    expected = float(_fraction_trapezoid_oracle(x, y))
+
+    previous = np.seterr(all="raise")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = auc(x, y)
+    finally:
+        np.seterr(**previous)
+
+    assert result == expected
+
+
+def test_auc_mixed_sign_result_can_be_exactly_zero() -> None:
+    x = [0.0, 1.0, 2.0]
+    y = [1.0, 0.0, -1.0]
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == 0.0
+
+    result = auc(x, y)
+
+    assert result == 0.0
+
+
+def test_auc_mixed_sign_still_raises_when_truly_not_representable() -> None:
+    M = np.finfo(np.float64).max
+    x = [0.0, 1.0, M]
+    y = [-1.0, 1.0, M]
+    assert any(v > 0 for v in y)
+    assert any(v < 0 for v in y)
+    with pytest.raises(ValueError, match="finite float64"):
+        auc(x, y)
+
+
+def test_auc_mixed_sign_enters_exact_fallback(monkeypatch) -> None:
+    from improcv import evaluation
+
+    calls = []
+    original = evaluation._trapezoidal_area_exact_fallback
+
+    def _spy(x, y):
+        calls.append((x, y))
+        return original(x, y)
+
+    monkeypatch.setattr(evaluation, "_trapezoidal_area_exact_fallback", _spy)
+
+    result = auc([0.0, 1.0, 2.0], [1.0, 1e-20, -1.0])
+
+    assert result == 1e-20
+    assert len(calls) == 1
+
+
+def test_auc_nonnegative_y_does_not_enter_exact_fallback_for_ordinary_data(monkeypatch) -> None:
+    from improcv import evaluation
+
+    def _fail_if_called(x, y):
+        raise AssertionError("must not reach the exact fallback for ordinary non-negative y")
+
+    monkeypatch.setattr(evaluation, "_trapezoidal_area_exact_fallback", _fail_if_called)
+
+    assert auc([0.0, 1.0, 2.0], [0.0, 2.0, 0.0]) == 2.0
+
+
+def test_auc_nonpositive_y_does_not_enter_exact_fallback_for_ordinary_data(monkeypatch) -> None:
+    from improcv import evaluation
+
+    def _fail_if_called(x, y):
+        raise AssertionError("must not reach the exact fallback for ordinary non-positive y")
+
+    monkeypatch.setattr(evaluation, "_trapezoidal_area_exact_fallback", _fail_if_called)
+
+    assert auc([0.0, 1.0, 2.0], [0.0, -2.0, 0.0]) == -2.0
+
+
+def test_auc_all_zero_y_stays_on_fast_path_and_gives_zero(monkeypatch) -> None:
+    from improcv import evaluation
+
+    def _fail_if_called(x, y):
+        raise AssertionError("must not reach the exact fallback for all-zero y")
+
+    monkeypatch.setattr(evaluation, "_trapezoidal_area_exact_fallback", _fail_if_called)
+
+    assert auc([0.0, 1.0, 2.0], [0.0, 0.0, 0.0]) == 0.0
+
+
+def test_precision_recall_curve_auc_never_enters_exact_fallback(monkeypatch) -> None:
+    # Precision is always non-negative, so the trapezoidal PR-curve area composition should stay
+    # on the fast path for ordinary data, same as roc_auc_score.
+    from improcv import evaluation
+
+    def _fail_if_called(x, y):
+        raise AssertionError("PR AUC composition must not reach the exact fallback")
+
+    monkeypatch.setattr(evaluation, "_trapezoidal_area_exact_fallback", _fail_if_called)
+
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+    curve = precision_recall_curve(y_true, y_score, positive_label=1)
+    result = auc(curve.recall, curve.precision)
+    assert result == pytest.approx(0.7916666666666666)
+
+
 # --- generic auc(x, y): trapezoidal PR AUC composition (distinct from average_precision_score) ---
 
 
