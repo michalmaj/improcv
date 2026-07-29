@@ -1769,6 +1769,162 @@ def test_auc_matches_independent_manual_oracle_for_ordinary_data() -> None:
         assert auc(x, y) == pytest.approx(expected)
 
 
+# --- generic auc(x, y): exact fallback (regression -- the naive 0.5/2.0-scaled fallback
+# previously raised a false ValueError for cancelling huge contributions, and separately
+# underflowed a genuine subnormal residual to 0.0) ---
+
+
+def _fraction_trapezoid_oracle(x, y) -> Fraction:
+    """Independent oracle used only in tests: exact rational trapezoidal sum via
+    `fractions.Fraction`, mirroring the production exact fallback's algorithm but written
+    completely independently (no shared helper call) so it cannot share a bug with it."""
+    total = Fraction()
+    for i in range(len(x) - 1):
+        x0 = Fraction.from_float(float(x[i]))
+        x1 = Fraction.from_float(float(x[i + 1]))
+        y0 = Fraction.from_float(float(y[i]))
+        y1 = Fraction.from_float(float(y[i + 1]))
+        total += abs(x1 - x0) * (y0 + y1) / 2
+    return total
+
+
+def test_auc_exact_fallback_handles_huge_cancellation_to_zero() -> None:
+    M = np.finfo(np.float64).max
+    x = [-M, -M / 3, M / 3, M]
+    y = [M, M, -M, -M]
+    assert _fraction_trapezoid_oracle(x, y) == 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc(x, y)
+    assert result == 0.0
+
+
+def test_auc_exact_fallback_handles_huge_cancellation_to_one() -> None:
+    M = np.finfo(np.float64).max
+    x = [-M, -M / 2, -1.0, 0.0, 1.0, M / 2, M]
+    y = [M, M, 0.0, 1.0, 0.0, -M, -M]
+    assert _fraction_trapezoid_oracle(x, y) == 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc(x, y)
+    assert result == 1.0
+
+
+def test_auc_exact_fallback_preserves_subnormal_residual() -> None:
+    M = np.finfo(np.float64).max
+    tiny = np.nextafter(0.0, 1.0)
+    x = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    y = [0.0, M, M, 0.0, -M, -M, 0.0, tiny, tiny]
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == 1e-323
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc(x, y)
+    assert result == 1e-323
+    assert result != 0.0
+
+
+def test_auc_exact_fallback_cancellation_reversed_order_gives_same_area() -> None:
+    M = np.finfo(np.float64).max
+    x = [-M, -M / 3, M / 3, M]
+    y = [M, M, -M, -M]
+    forward = auc(x, y)
+    reversed_result = auc(list(reversed(x)), list(reversed(y)))
+    assert forward == 0.0
+    assert reversed_result == pytest.approx(forward)
+
+
+def test_auc_exact_fallback_huge_positive_and_negative_gives_finite_negative_result() -> None:
+    M = np.finfo(np.float64).max
+    # The "cancel to one" example with every y negated -- exact rational total is -1.0.
+    x = [-M, -M / 2, -1.0, 0.0, 1.0, M / 2, M]
+    y = [-M, -M, 0.0, -1.0, 0.0, M, M]
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == -1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = auc(x, y)
+    assert result == expected
+    assert result < 0.0
+    assert math.isfinite(result)
+
+
+def test_auc_exact_fallback_still_raises_when_truly_not_representable() -> None:
+    M = np.finfo(np.float64).max
+    with pytest.raises(ValueError, match="finite float64"):
+        auc([-M, M], [M, M])
+    # A different construction (single huge segment, not a tie/cancellation case) whose exact
+    # area -- width M times height-sum 2M, halved -- genuinely exceeds float64's range.
+    with pytest.raises(ValueError, match="finite float64"):
+        auc([0.0, M], [M, M])
+
+
+@pytest.mark.parametrize(
+    ("x", "y"),
+    [
+        # Single overflowing segment, finite representable result (exactly M).
+        ([np.finfo(np.float64).max, 0.0], [1.0, 1.0]),
+        # Cancelling contributions with a different split than the named regression above.
+        (
+            [
+                -np.finfo(np.float64).max,
+                -np.finfo(np.float64).max / 4,
+                np.finfo(np.float64).max / 4,
+                np.finfo(np.float64).max,
+            ],
+            [
+                np.finfo(np.float64).max,
+                np.finfo(np.float64).max,
+                -np.finfo(np.float64).max,
+                -np.finfo(np.float64).max,
+            ],
+        ),
+        # Overflowing product from the other operand's side (large y, small integer width).
+        ([0.0, 2.0], [np.finfo(np.float64).max / 2, np.finfo(np.float64).max / 2]),
+    ],
+)
+def test_auc_exact_fallback_matches_independent_fraction_oracle(x, y) -> None:
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    result = auc(x, y)
+    assert result == expected
+
+
+def test_auc_exact_fallback_does_not_mutate_or_alias_inputs() -> None:
+    M = np.finfo(np.float64).max
+    x = np.array([-M, -M / 3, M / 3, M], dtype=np.float64)
+    y = np.array([M, M, -M, -M], dtype=np.float64)
+    x_copy = x.copy()
+    y_copy = y.copy()
+    auc(x, y)
+    assert_array_equal(x, x_copy)
+    assert_array_equal(y, y_copy)
+
+
+def test_auc_exact_fallback_result_is_plain_float() -> None:
+    M = np.finfo(np.float64).max
+    result = auc([-M, -M / 3, M / 3, M], [M, M, -M, -M])
+    assert type(result) is float
+
+
+def test_roc_auc_score_never_enters_exact_fallback(monkeypatch) -> None:
+    from improcv import evaluation
+
+    def _fail_if_called(x, y):
+        raise AssertionError("roc_auc_score must never reach the exact fallback")
+
+    monkeypatch.setattr(evaluation, "_trapezoidal_area_exact_fallback", _fail_if_called)
+
+    assert roc_auc_score([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8], positive_label=1) == 0.75
+    y_true = [0, 1, 0, 1]
+    y_score = [
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+        np.finfo(np.float64).max,
+        -np.finfo(np.float64).max,
+    ]
+    roc_auc_score(y_true, y_score, positive_label=1)
+
+
 # --- generic auc(x, y): trapezoidal PR AUC composition (distinct from average_precision_score) ---
 
 

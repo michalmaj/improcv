@@ -221,14 +221,18 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `0.0`); a non-increasing `x` gives the same positive geometric area a non-decreasing order of the
   same points would, not a signed integral. `y` may be negative and so may the result -- unlike
   `roc_auc_score`/`average_precision_score`, whose domain is always `[0, 1]` by construction, `auc`
-  has no such bound. An intermediate segment width, height sum, or product that would overflow
-  `float64` is recovered through an exact, power-of-two-scaled fallback (scaling by `0.5`/`2.0` is
-  lossless under IEEE 754) wherever the true geometric area is still finite and representable --
-  verified directly for a height-sum overflow with a finite result, a width overflow with a finite
-  result, constant `x` with an extreme finite `y`, and a width overflow combined with a tiny `y`
-  giving a finite nonzero result, all without emitting a NumPy warning; only an input whose true
-  area is not representable as a finite `float64` raises `ValueError`, never silently `inf`/`-inf`/
-  `NaN`. `auc` computes the trapezoidal area under the precision-recall curve when called as
+  has no such bound. Ordinary calls use a fast, canonical `float64` summation; if an intermediate
+  segment width, height sum, or product would overflow `float64`, `auc` falls back to computing the
+  exact trapezoidal sum as a rational number (`fractions.Fraction`, standard library, used only on
+  this rare path) over the already-normalized `float64` values, converting only the final total back
+  to `float` -- verified directly for a height-sum overflow with a finite result, a width overflow
+  with a finite result, constant `x` with an extreme finite `y`, a width overflow combined with a
+  tiny `y` giving a finite nonzero result, cancellation between huge intermediate contributions
+  (summing exactly to `0.0` and to `1.0` in two constructed examples), and a subnormal residual
+  (summing exactly to `5e-324`, the smallest positive subnormal `float64`), all without emitting a
+  NumPy warning; only an input whose true, exact area is not representable as a finite `float64`
+  raises `ValueError`, never silently `inf`/`-inf`/`NaN`. `auc` computes the trapezoidal area under
+  the precision-recall curve when called as
   `auc(curve.recall, curve.precision)` -- a distinct quantity from `average_precision_score` (see
   above), and the complete, supported way to obtain it: there is no separate score-level function
   for it, to avoid a symbol that could be confused with `average_precision_score`. `roc_auc_score`
@@ -240,6 +244,21 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   slice.
 
 ### Fixed
+- `improcv.evaluation`: `auc`'s overflow fallback (introduced alongside `auc` itself, in this same
+  `[Unreleased]` series) previously rescaled every value by a single `0.5`/`2.0` factor before
+  recombining, which is not actually exact at the extremes: (1) it wrongly raised `ValueError` for
+  inputs whose true trapezoidal area is a finite, representable `float64` reached only through
+  cancellation between huge intermediate contributions (e.g. segments individually far larger than
+  `float64`'s own range but summing to exactly `0.0` or to exactly `1.0`), and (2) it could silently
+  underflow a genuine subnormal residual to `0.0` (halving a value already at the edge of the
+  subnormal range loses it entirely). The fallback now recomputes the exact trapezoidal sum as a
+  rational number (`fractions.Fraction`, standard library) over the already-normalized `float64`
+  values on this rare, overflow-triggered path only, converting just the final total back to `float`
+  -- `ValueError` is now raised only when that exact total's `float()` conversion itself overflows
+  (i.e. the true area genuinely is not representable as a finite `float64`), never merely because
+  the fast, unscaled `float64` attempt happened to overflow. The ordinary, non-overflowing fast path
+  (and therefore `roc_auc_score`'s own bit-identical result on its own `[0, 1]`-bounded domain,
+  which never reaches this fallback) is unchanged.
 - `improcv.discovery`: `discover_images` now classifies descendants using a fresh path-based
   non-following stat instead of cached `DirEntry` metadata, preserving its fail-fast contract when
   an entry disappears before inspection. `os.DirEntry.stat()` can return metadata captured during
