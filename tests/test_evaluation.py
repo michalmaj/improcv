@@ -1824,6 +1824,68 @@ def test_auc_exact_fallback_preserves_subnormal_residual() -> None:
     assert result != 0.0
 
 
+def test_auc_exact_fallback_preserves_accumulated_subnormal_segments() -> None:
+    tiny = np.nextafter(0.0, 1.0)
+    x = [0.0, tiny, 2 * tiny, 3 * tiny, 4 * tiny]
+    y = [0.25, 0.25, 0.25, 0.25, 0.25]
+
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == tiny
+
+    result = auc(x, y)
+
+    assert result == tiny
+    assert result != 0.0
+
+
+def test_auc_emits_no_warning_when_underflow_warnings_are_enabled() -> None:
+    tiny = np.nextafter(0.0, 1.0)
+    x = [0.0, tiny, 2 * tiny, 3 * tiny, 4 * tiny]
+    y = [0.25, 0.25, 0.25, 0.25, 0.25]
+
+    previous = np.geterr()
+    try:
+        np.seterr(under="warn")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = auc(x, y)
+        assert result == tiny
+    finally:
+        np.seterr(**previous)
+
+
+def test_auc_internal_underflow_not_leaked_as_floating_point_error_under_seterr_raise() -> None:
+    tiny = np.nextafter(0.0, 1.0)
+    x = [0.0, tiny, 2 * tiny, 3 * tiny, 4 * tiny]
+    y = [0.25, 0.25, 0.25, 0.25, 0.25]
+
+    previous = np.geterr()
+    try:
+        np.seterr(under="raise")
+        # The internal np.errstate(under="raise") used by _trapezoidal_area_float64 is scoped to
+        # that function's own `with` block, so it takes precedence there regardless of the
+        # caller's own np.seterr -- the underflow is still caught internally and handled by
+        # falling back to the exact computation, never escaping as a FloatingPointError here.
+        result = auc(x, y)
+        assert result == tiny
+    finally:
+        np.seterr(**previous)
+
+
+def test_auc_underflow_that_genuinely_rounds_to_zero_is_legal() -> None:
+    # A single segment whose exact contribution (1e-20 * 2e-310 * 0.5 = 1e-330) is far below the
+    # smallest positive subnormal float64 (5e-324) -- this legitimately rounds to 0.0, and must
+    # not raise ValueError merely because computing it underflows along the way.
+    x = [0.0, 1e-20]
+    y = [1e-310, 1e-310]
+    expected = float(_fraction_trapezoid_oracle(x, y))
+    assert expected == 0.0
+
+    result = auc(x, y)
+
+    assert result == 0.0
+
+
 def test_auc_exact_fallback_cancellation_reversed_order_gives_same_area() -> None:
     M = np.finfo(np.float64).max
     x = [-M, -M / 3, M / 3, M]
