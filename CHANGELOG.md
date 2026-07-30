@@ -298,11 +298,66 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   existing all-positive shortcut (returning exactly `1.0` directly, not via summing curve
   increments) still applies for zero effective negative weight -- verified directly that, for
   weighted input, naively summing `precision_recall_curve`'s own recall increments can round to
-  `0.9999999999999999` even when the true result is exactly `1.0`. No `sample_weight` for
-  `confusion_matrix`/`classification_metrics`/`classification_metrics_from_confusion_matrix` (their
-  `int64` matrix/support contract would need to widen to `float64`, a separate, unresolved design
-  question) or for `auc(x, y)` (it operates on curve points, not per-observation weights); no new
-  public result type, no multiclass score matrix, and no new dependency in this slice.
+  `0.9999999999999999` even when the true result is exactly `1.0`. `sample_weight` for
+  `confusion_matrix`/`classification_metrics`/`classification_metrics_from_confusion_matrix` is
+  added separately, below in this same `[Unreleased]` series; `auc(x, y)` has no `sample_weight`
+  (it operates on curve points, not per-observation weights). No new public result type, no
+  multiclass score matrix, and no new dependency in this slice.
+- `improcv.evaluation`, Phase 5 slice: an optional, keyword-only `sample_weight` for
+  `confusion_matrix` and `classification_metrics`; `classification_metrics_from_confusion_matrix`
+  gains no new parameter but now also accepts a `float64` confusion matrix.
+  `ConfusionMatrixResult.matrix`/`ClassificationMetrics.support` are exactly `int64` when
+  `sample_weight` was not given, exactly `float64` whenever it was -- regardless of the weights'
+  own dtype or values (even `sample_weight=[1, 1, ...]` or an all-integer-valued weight sequence
+  gives a `float64` matrix, never `int64`), mirroring the same dtype rule already established for
+  ranking `sample_weight`. Equality (`==`) on both result types compares arrays purely by value,
+  ignoring dtype -- an `int64` matrix/support and a `float64` one holding the same numbers compare
+  equal, since dtype reflects how a result was computed, not part of its semantic value. A negative
+  weight is rejected (unlike `sklearn.metrics.confusion_matrix`, which accepts one and produces a
+  matrix with a negative cell -- verified directly). A sample with `sample_weight == 0.0`
+  contributes to no cell and is removed from the effective set before class inference: with
+  `labels=None`, a class present only among zero-weight samples never appears as a row/column (an
+  explicit `labels` including that class still gives it a well-defined, all-zero row/column, since
+  explicit `labels` validation always runs against every raw `y_true`/`y_pred` value regardless of
+  weight -- an invalid label is never forgiven merely because its weight is zero). An all-zero
+  `sample_weight` is legal for `confusion_matrix` only together with an explicit `labels`
+  (mirroring its existing "empty input plus explicit labels" contract, now also covering
+  `sample_weight=[]`); `classification_metrics` always requires at least one positive weight, since
+  it has no equivalent well-defined empty/all-zero result. Matrix cells are built by grouping every
+  same-cell sample and summing that group's weights exactly once via `math.fsum` over the weights
+  sorted first -- not `np.bincount(..., weights=...)` or a plain running sum, both verified
+  directly to be order-dependent for extreme weight ratios (three samples landing in the same cell
+  with weights `[1e16, 1.0, 1.0]` vs `[1.0, 1.0, 1e16]` give a different final cell value either
+  way, but the same, correctly-rounded `1.0000000000000002e16` through canonical grouped summation
+  regardless of order) -- and scikit-learn's own `confusion_matrix` was verified directly to have
+  this same order-dependence, unprotected. An `OverflowError` from a single cell's weights summing
+  past `float64`'s range is mapped to `ValueError`; no total/row/column sum is required to be
+  representable at the `confusion_matrix` level itself (a matrix with several individually-finite,
+  huge cells is still a useful result on its own) -- only `classification_metrics`/
+  `classification_metrics_from_confusion_matrix` reject a non-representable row/column/total sum,
+  since only they need to reduce the matrix further, computed via the same canonical `math.fsum`-
+  based summation (row/column/diagonal/total), never a bare `matrix.sum(axis=...)`.
+  `classification_metrics_from_confusion_matrix` accepts exactly `int64` or exactly `float64`
+  (never `float16`/`float32`/`bool`/any other integer dtype, never silently cast); a `float64`
+  matrix is always treated as weighted, even with only whole-number values -- dtype, not content,
+  decides. Precision/recall for a `float64` matrix divide directly by the already-safe column/row
+  sum (`TP_i <= column_sum_i`/`row_sum_i` always, so this never overflows); F1
+  (`2 * TP_i / (row_sum_i + column_sum_i)`) uses a new stable helper that matches plain division bit
+  for bit except at the individual entries that would actually overflow (verified directly:
+  `TP_i = row_sum_i = column_sum_i = np.finfo(np.float64).max` gives exactly `1.0`, not a silently
+  overflowed `0.0`); `average="weighted"`'s own denominator is a further, independent canonical sum
+  of the returned `support` array specifically (not the flat matrix total), since `support` is the
+  documented, public set of per-class weights for that average and can legitimately differ from the
+  flat total by a rounding residual. Legal underflow anywhere in this arithmetic (precision, recall,
+  F1, accuracy, `"micro"`/`"macro"`/`"weighted"` reductions) never raises or warns regardless of the
+  caller's own `np.seterr`/`np.errstate` configuration, mirroring the same fix already applied to
+  the ranking core. `sample_weight=None`, all-ones, and small-integer-weight-vs-physical-
+  replication are all verified bit-identical to their unweighted counterparts; whole-input and
+  within-cell permutation invariance stay bit-exact; `classification_metrics(..., sample_weight=w)`
+  is bit-exact with `classification_metrics_from_confusion_matrix(confusion_matrix(...,
+  sample_weight=w))`; scaling every weight by a positive constant stays only approximately
+  invariant. No `sample_weight` for `auc(x, y)`, no multiclass/multilabel support, no new public
+  types or functions, no new batch-aggregation helper, and no new dependency in this slice.
 
 ### Fixed
 - `improcv.evaluation`: the weighted ROC/precision-recall/ROC-AUC/average-precision path

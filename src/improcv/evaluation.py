@@ -7,13 +7,14 @@ true class and one predicted class per sample, integer labels only. `roc_curve`/
 `precision_recall_curve`/`roc_auc_score`/`average_precision_score` are binary, one-vs-rest: an
 explicit `positive_label` picks the positive class, every other observed label is negative,
 regardless of how many distinct negative labels occur -- there is no automatic inference of
-which label is positive. These four functions also accept an optional, keyword-only
-`sample_weight` (see each function's own docstring for the full contract); `confusion_matrix`/
-`classification_metrics`/`classification_metrics_from_confusion_matrix`/`auc` do not, and
-weighting them is a separate, unresolved concern, not part of this core (weighting the
-confusion-matrix-based functions would require widening their `int64` matrix/support contract
-to `float64`, which is a bigger, separate design question -- see their docstrings; `auc`'s
-`x`/`y` are curve points, not observations, so a per-observation weight has no meaning there).
+which label is positive. All six of these functions accept an optional, keyword-only
+`sample_weight` (see each function's own docstring for the full contract); `classification_metrics_
+from_confusion_matrix` has no `sample_weight` parameter of its own but accepts a `float64`
+confusion matrix (built with weights, or by hand) as readily as the `int64` one `confusion_matrix`
+returns without `sample_weight` -- `ConfusionMatrixResult.matrix`/`ClassificationMetrics.support`
+are `int64` exactly when no weights were involved, `float64` whenever they were, regardless of the
+weights' own dtype or values. `auc`'s `x`/`y` are curve points, not observations, so a
+per-observation weight has no meaning there, and it has no `sample_weight` parameter.
 `average_precision_score` is classification ranking average precision, not object-detection AP
 or mAP. `auc` is a general-purpose trapezoidal area-under-curve helper with no ranking
 semantics of its own -- it also computes the trapezoidal area under the precision-recall curve
@@ -41,7 +42,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -71,21 +72,28 @@ _INT64_MAX = int(np.iinfo(np.int64).max)
 class ConfusionMatrixResult:
     """The result of `confusion_matrix`: the matrix plus the label each row/column stands for.
 
-    `matrix[i, j]` is the number of samples whose true class is `labels[i]`
-    and predicted class is `labels[j]` -- rows are true labels, columns are
-    predicted labels. `matrix` is always a new, independent, read-only
-    `int64` array; it is never a view of `y_true`/`y_pred`.
+    `matrix[i, j]` is the number of samples (or, with `sample_weight`, the total effective
+    weight of samples) whose true class is `labels[i]` and predicted class is `labels[j]` --
+    rows are true labels, columns are predicted labels. `matrix` is always a new, independent,
+    read-only array; it is never a view of `y_true`/`y_pred`. Its dtype depends only on whether
+    `sample_weight` was given, never on the content of the weights: exactly `int64` when
+    `confusion_matrix` was called with `sample_weight=None` (the default), exactly `float64`
+    when it was called with an explicit `sample_weight` -- even one holding only `1.0`s or
+    exact-integer values. A `ConfusionMatrixResult` can also be constructed by hand with a
+    `float64` matrix (e.g. after aggregating weighted batches); see `classification_metrics_from_
+    confusion_matrix` for that matrix's full contract.
 
-    Equality (`==`) compares `labels` structurally and `matrix` by value
-    (via `np.array_equal`), never by identity -- unlike the default
-    dataclass-generated equality, which would compare `matrix` with `==`
-    directly and hit NumPy's "truth value of an array is ambiguous" error
-    for any non-trivial matrix. Instances are unhashable (`hash()` raises
-    `TypeError`), since a mutable-looking `ndarray` field makes a stable
-    hash impossible to promise honestly.
+    Equality (`==`) compares `labels` structurally and `matrix` by value (via `np.array_equal`),
+    never by identity and never by dtype -- an `int64` matrix and a `float64` matrix holding the
+    same values at the same shape compare equal, since dtype reflects how a result was computed
+    (unweighted vs. weighted), not part of its semantic value. Unlike the default
+    dataclass-generated equality, which would compare `matrix` with `==` directly and hit NumPy's
+    "truth value of an array is ambiguous" error for any non-trivial matrix. Instances are
+    unhashable (`hash()` raises `TypeError`), since a mutable-looking `ndarray` field makes a
+    stable hash impossible to promise honestly.
     """
 
-    matrix: npt.NDArray[np.int64]
+    matrix: npt.NDArray[np.int64] | npt.NDArray[np.float64]
     labels: tuple[int, ...]
 
     def __eq__(self, other: object) -> bool:
@@ -100,30 +108,33 @@ class ConfusionMatrixResult:
 class ClassificationMetrics:
     """The result of `classification_metrics`/`classification_metrics_from_confusion_matrix`.
 
-    `support` is always a per-class, read-only `int64` array of shape
-    `(len(labels),)`, regardless of `average`. `accuracy` is always a plain
-    Python `float`. `precision`/`recall`/`f1` depend on `average`:
-    `average=None` gives a per-class, read-only `float64` array of shape
-    `(len(labels),)`; any other `average` gives a plain Python `float`
-    (never both forms in the same result -- call this function again with
-    a different `average` for the other form; `..._from_confusion_matrix`
-    does not recompute the underlying matrix, only the requested reduction).
+    `support` is always a per-class, read-only array of shape `(len(labels),)`, regardless of
+    `average` -- exactly `int64` when computed without `sample_weight`, exactly `float64` when
+    computed with an explicit `sample_weight` (or from a hand-built `float64` confusion matrix),
+    mirroring `ConfusionMatrixResult.matrix`'s own dtype rule. `accuracy` is always a plain Python
+    `float`. `precision`/`recall`/`f1` depend on `average`: `average=None` gives a per-class,
+    read-only `float64` array of shape `(len(labels),)` regardless of `sample_weight` (these were
+    already `float64` ratios, never counts); any other `average` gives a plain Python `float`
+    (never both forms in the same result -- call this function again with a different `average`
+    for the other form; `..._from_confusion_matrix` does not recompute the underlying matrix,
+    only the requested reduction).
 
-    Equality (`==`) compares `labels`/`average` structurally, `support` (and
-    `precision`/`recall`/`f1` when they are arrays) by value via
-    `np.array_equal(..., equal_nan=True)`, and scalar float fields (including
-    `accuracy` and `precision`/`recall`/`f1` when `average` is not `None`)
-    by value with two `NaN`s treated as equal -- never by identity. Unlike
-    the default dataclass-generated equality, which would hit the same
-    "truth value of an array is ambiguous" error `ConfusionMatrixResult`
-    documents. Instances are unhashable (`hash()` raises `TypeError`).
+    Equality (`==`) compares `labels`/`average` structurally, `support` (and `precision`/
+    `recall`/`f1` when they are arrays) by value via `np.array_equal(..., equal_nan=True)`, and
+    scalar float fields (including `accuracy` and `precision`/`recall`/`f1` when `average` is not
+    `None`) by value with two `NaN`s treated as equal -- never by identity and never by
+    `support`'s dtype: an `int64` `support` and a `float64` `support` holding the same values
+    compare equal, for the same reason `ConfusionMatrixResult`'s `matrix` equality does. Unlike
+    the default dataclass-generated equality, which would hit the same "truth value of an array
+    is ambiguous" error `ConfusionMatrixResult` documents. Instances are unhashable (`hash()`
+    raises `TypeError`).
     """
 
     labels: tuple[int, ...]
     precision: npt.NDArray[np.float64] | float
     recall: npt.NDArray[np.float64] | float
     f1: npt.NDArray[np.float64] | float
-    support: npt.NDArray[np.int64]
+    support: npt.NDArray[np.int64] | npt.NDArray[np.float64]
     accuracy: float
     average: Literal["micro", "macro", "weighted"] | None
 
@@ -164,6 +175,10 @@ def confusion_matrix(
     y_pred: Sequence[int] | npt.NDArray[np.integer],
     *,
     labels: Sequence[int] | npt.NDArray[np.integer] | None = None,
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
 ) -> ConfusionMatrixResult:
     """Count how often each true class was predicted as each class.
 
@@ -171,23 +186,74 @@ def confusion_matrix(
     sample (a plain `Sequence` of Python/NumPy integers, or a 1-D integer
     `ndarray` -- not a 2-D array, and not a generator/iterator, which is
     rejected rather than consumed). `labels=None` infers the class universe
-    as the sorted union of every value observed in `y_true` and `y_pred`.
-    An explicit `labels` fixes the exact row/column order instead (not
-    sorted) and must contain no duplicates; every observed value in
-    `y_true`/`y_pred` must then be present in `labels` -- unlike
-    `sklearn.metrics.confusion_matrix`, which silently drops a sample whose
-    predicted (or true) label isn't in `labels`, this raises `ValueError`
-    instead, since silently discarding part of the input is exactly the
-    kind of surprise a caller is unlikely to notice on their own.
+    as the sorted union of every value observed in `y_true` and `y_pred`
+    (or, with `sample_weight`, every value observed among only the *effective*
+    positive-weight samples -- see below). An explicit `labels` fixes the
+    exact row/column order instead (not sorted) and must contain no
+    duplicates; every observed value in `y_true`/`y_pred` must then be
+    present in `labels` -- unlike `sklearn.metrics.confusion_matrix`, which
+    silently drops a sample whose predicted (or true) label isn't in
+    `labels`, this raises `ValueError` instead, since silently discarding
+    part of the input is exactly the kind of surprise a caller is unlikely
+    to notice on their own. This label validation always runs against every
+    raw `y_true`/`y_pred` value, regardless of `sample_weight`: a sample
+    with an invalid label is never forgiven merely because its weight is
+    zero.
 
     `y_true`/`y_pred` may both be empty only when `labels` is given
     explicitly, in which case the result is a well-defined all-zero
-    `len(labels) x len(labels)` matrix -- `labels=None` with empty input
-    raises `ValueError` instead, since there is nothing to infer the class
-    universe from.
+    `len(labels) x len(labels)` matrix (`int64` without `sample_weight`,
+    `float64` with it, including with `sample_weight=[]`) -- `labels=None`
+    with empty input raises `ValueError` instead, since there is nothing to
+    infer the class universe from.
 
-    The returned matrix is always `int64`, shape `(len(labels), len(labels))`,
-    a new array with no aliasing to `y_true`/`y_pred`, and read-only. Classes
+    `sample_weight=None` (the default) uses the unweighted computation above
+    unchanged, bit for bit: the returned matrix is always `int64` in that
+    case. Given explicitly, `sample_weight` must be a `Sequence`/1-D
+    `ndarray` the same length as `y_true`/`y_pred`, holding the same accepted
+    numeric types as `y_true`'s companion `y_score` does in the ranking
+    functions (Python/NumPy int/float, or `float16`/`float32`/`float64`), but
+    non-negative -- a negative weight would make a matrix cell negative,
+    breaking this function's own non-negativity guarantee (verified directly
+    against a reference implementation that permits negative weights and
+    does exactly that). Unlike the ranking functions' `sample_weight`, an
+    all-zero `sample_weight` is legal here (see above) and unlike them there
+    is no "at least one positive value" requirement at this function's own
+    level -- the returned matrix is always `float64` whenever `sample_weight`
+    is given at all, regardless of the weights' own dtype or values (even
+    `sample_weight=[1, 1, ...]` or `sample_weight=[1.0, 1.0, ...]` gives a
+    `float64` matrix, never `int64`) and regardless of whether any individual
+    cell's value happens to be a whole number.
+
+    A sample with `sample_weight == 0.0` contributes nothing to any cell and
+    is removed from the *effective* set before class inference (`labels=
+    None`) and before the matrix is built -- a class present only among
+    zero-weight samples never appears as a row/column when `labels=None`
+    (an explicit `labels` including that class still gives it a well-defined,
+    all-zero row/column, since explicit `labels` never depends on weights at
+    all). If every sample has zero weight and `labels=None`, there is no
+    effective class to infer from, so this raises `ValueError` -- pass an
+    explicit `labels` instead (which then legitimately gives an all-zero
+    matrix, per the empty-input case above).
+
+    Matrix cells are computed by grouping every effective sample landing in
+    the same cell and summing that group's weights exactly once via
+    `math.fsum` over the weights sorted first -- not a plain, order-dependent
+    running sum (verified directly that both `np.bincount(..., weights=...)`
+    and a hand-rolled sequential sum can give a different final cell value
+    depending on the order same-cell samples happen to appear in, for an
+    extreme weight ratio), so permuting the input (or the order of samples
+    within one cell) never changes the result. A cell whose weights sum to
+    more than `float64` can represent raises `ValueError` -- this does not,
+    by itself, require every row/column/total sum to also be representable;
+    a matrix with several individually-finite, huge cells is still a
+    well-defined result here (`classification_metrics`/
+    `classification_metrics_from_confusion_matrix` are where a
+    non-representable row/column/total sum is actually rejected, since only
+    they need to reduce the matrix further).
+
+    The returned matrix is always shape `(len(labels), len(labels))`, a new
+    array with no aliasing to `y_true`/`y_pred`, and read-only. Classes
     are mapped to dense matrix indices through an explicit label-to-index
     mapping, never by allocating `max(label) + 1` rows/columns -- so sparse
     labels (e.g. `0` and `1_000_000_000` together) cost exactly
@@ -201,17 +267,25 @@ def confusion_matrix(
     Raises
     ------
     TypeError
-        If `y_true`/`y_pred`/`labels` is not a `Sequence` or an `ndarray`
-        (including `str`/`bytes`/`bytearray`, or an `ndarray` with a
-        non-integer dtype), or contains a non-integral element (including
-        `bool`/`np.bool_`/`float`/`str`/`None`).
+        If `y_true`/`y_pred`/`labels`/`sample_weight` is not a `Sequence` or
+        an `ndarray` (including `str`/`bytes`/`bytearray`, or an `ndarray`
+        with a non-integer dtype), or contains a non-integral element
+        (including `bool`/`np.bool_`/`float`/`str`/`None`), or if
+        `sample_weight` has a `bool`/complex/object/wider-than-`float64`
+        floating dtype, or an element that is not a Python/NumPy int or
+        float.
     ValueError
         If `y_true` and `y_pred` have different lengths, if any of
-        `y_true`/`y_pred`/`labels` is an `ndarray` that is not 1-D, if
-        `labels` is empty or contains a duplicate, if a value observed in
-        `y_true`/`y_pred` is not in an explicit `labels`, if `labels=None`
-        and both inputs are empty, or if `len(labels) ** 2` is not
-        representable as a dense array on this platform.
+        `y_true`/`y_pred`/`labels`/`sample_weight` is an `ndarray` that is
+        not 1-D, if `labels` is empty or contains a duplicate, if a value
+        observed in `y_true`/`y_pred` is not in an explicit `labels`, if
+        `sample_weight`'s length differs from `y_true`/`y_pred`'s, if a
+        `sample_weight` element is negative, NaN, `Inf`, or an integer not
+        exactly representable as `float64`, if `labels=None` and either both
+        inputs are empty or every effective (positive-weight) sample has
+        been removed, if `len(labels) ** 2` is not representable as a dense
+        array on this platform, or if a single cell's summed weight is not
+        representable as a finite `float64`.
     RuntimeError
         If the computed matrix fails this function's own postconditions
         (shape, dtype, or total count).
@@ -223,13 +297,41 @@ def confusion_matrix(
             f"y_true and y_pred must have the same length, got {len(true_list)} and "
             f"{len(pred_list)}"
         )
-    if labels is None and len(true_list) == 0:
-        raise ValueError(
-            "cannot infer labels from empty y_true/y_pred -- pass an explicit labels sequence"
-        )
 
-    resolved_labels = _resolve_labels(true_list, pred_list, labels)
-    matrix = _build_confusion_matrix(true_list, pred_list, resolved_labels)
+    if sample_weight is None:
+        if labels is None and len(true_list) == 0:
+            raise ValueError(
+                "cannot infer labels from empty y_true/y_pred -- pass an explicit labels sequence"
+            )
+        resolved_labels = _resolve_labels(true_list, pred_list, labels)
+        matrix = _build_confusion_matrix(true_list, pred_list, resolved_labels)
+        return ConfusionMatrixResult(matrix=matrix, labels=resolved_labels)
+
+    weights = _normalize_nonnegative_weight_sequence(
+        sample_weight, len(true_list), allow_empty=(len(true_list) == 0)
+    )
+
+    if labels is not None:
+        # Validates every raw y_true/y_pred value against the explicit labels, regardless of
+        # weight -- an invalid label is never forgiven merely because its weight is zero.
+        resolved_labels = _resolve_labels(true_list, pred_list, labels)
+    else:
+        effective_mask = weights > 0.0
+        if not np.any(effective_mask):
+            raise ValueError(
+                "cannot infer labels from sample_weight with no positive total weight -- pass "
+                "an explicit labels sequence"
+            )
+        keep = effective_mask.tolist()
+        effective_true = [
+            value for value, keep_value in zip(true_list, keep, strict=True) if keep_value
+        ]
+        effective_pred = [
+            value for value, keep_value in zip(pred_list, keep, strict=True) if keep_value
+        ]
+        resolved_labels = tuple(sorted(set(effective_true) | set(effective_pred)))
+
+    matrix = _build_weighted_confusion_matrix(true_list, pred_list, resolved_labels, weights)
     return ConfusionMatrixResult(matrix=matrix, labels=resolved_labels)
 
 
@@ -240,17 +342,32 @@ def classification_metrics(
     labels: Sequence[int] | npt.NDArray[np.integer] | None = None,
     average: Literal["micro", "macro", "weighted"] | None = None,
     zero_division: float | Literal["nan"] = 0.0,
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
 ) -> ClassificationMetrics:
     """Compute precision/recall/F1/support (and accuracy) directly from labels.
 
     Builds the confusion matrix internally (see `confusion_matrix` for the
-    exact `y_true`/`y_pred`/`labels` contract) and delegates to
-    `classification_metrics_from_confusion_matrix` -- see that function for
-    the full `average`/`zero_division` contract, which applies identically
-    here. Unlike `confusion_matrix`, this function never accepts empty
-    input, even with an explicit `labels`: `zero_division` resolves an
-    undefined value for one class among others, not the complete absence of
-    any observation to evaluate at all.
+    exact `y_true`/`y_pred`/`labels`/`sample_weight` contract, which applies
+    identically here) and delegates to `classification_metrics_from_confusion_matrix`
+    -- see that function for the full `average`/`zero_division` contract, which
+    also applies identically here. Unlike `confusion_matrix`, this function
+    never accepts empty input, even with an explicit `labels`: `zero_division`
+    resolves an undefined value for one class among others, not the complete
+    absence of any observation to evaluate at all -- so, unlike
+    `confusion_matrix`, an all-zero `sample_weight` is never legal here either
+    (there is no equivalent of `confusion_matrix`'s well-defined all-zero
+    result): it always raises the same clear `ValueError` about
+    `sample_weight`, after this function's own label validation (an invalid
+    label is still never forgiven merely because every sample's weight is
+    zero).
+
+    `sample_weight=None` (the default) uses the unweighted computation above
+    unchanged, bit for bit, giving `int64` `support`; given explicitly, both
+    `ConfusionMatrixResult.matrix` (built internally) and the returned
+    `support` are `float64`, per `confusion_matrix`'s dtype rule.
 
     Raises
     ------
@@ -258,9 +375,10 @@ def classification_metrics(
         Same as `confusion_matrix`, plus a non-`bool`-rejecting type error
         for `zero_division`.
     ValueError
-        Same as `confusion_matrix`, plus an empty `y_true`/`y_pred` (with
-        or without explicit `labels`), an invalid `average`, or an invalid
-        `zero_division`.
+        Same as `confusion_matrix`, plus an empty `y_true`/`y_pred` (with or
+        without explicit `labels`), an all-zero `sample_weight` (unlike
+        `confusion_matrix`, always an error here, regardless of `labels`),
+        an invalid `average`, or an invalid `zero_division`.
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
@@ -277,8 +395,40 @@ def classification_metrics(
     if len(true_list) == 0:
         raise ValueError("classification_metrics requires at least one observation")
 
-    resolved_labels = _resolve_labels(true_list, pred_list, labels)
-    matrix = _build_confusion_matrix(true_list, pred_list, resolved_labels)
+    if sample_weight is None:
+        resolved_labels = _resolve_labels(true_list, pred_list, labels)
+        matrix = _build_confusion_matrix(true_list, pred_list, resolved_labels)
+        confusion = ConfusionMatrixResult(matrix=matrix, labels=resolved_labels)
+        return _compute_classification_metrics(confusion, average, zero_division_value)
+
+    weights = _normalize_nonnegative_weight_sequence(
+        sample_weight, len(true_list), allow_empty=False
+    )
+
+    if labels is not None:
+        # Validates every raw y_true/y_pred value against the explicit labels, regardless of
+        # weight -- an invalid label is never forgiven merely because its weight is zero.
+        explicit_resolved_labels = _resolve_labels(true_list, pred_list, labels)
+    else:
+        explicit_resolved_labels = None
+
+    if not np.any(weights > 0.0):
+        raise ValueError("sample_weight must contain at least one positive value")
+
+    if explicit_resolved_labels is not None:
+        resolved_labels = explicit_resolved_labels
+    else:
+        effective_mask = weights > 0.0
+        keep = effective_mask.tolist()
+        effective_true = [
+            value for value, keep_value in zip(true_list, keep, strict=True) if keep_value
+        ]
+        effective_pred = [
+            value for value, keep_value in zip(pred_list, keep, strict=True) if keep_value
+        ]
+        resolved_labels = tuple(sorted(set(effective_true) | set(effective_pred)))
+
+    matrix = _build_weighted_confusion_matrix(true_list, pred_list, resolved_labels, weights)
     confusion = ConfusionMatrixResult(matrix=matrix, labels=resolved_labels)
     return _compute_classification_metrics(confusion, average, zero_division_value)
 
@@ -298,33 +448,64 @@ def classification_metrics_from_confusion_matrix(
     order would otherwise be ambiguous. `confusion` is re-validated in
     full regardless of its declared type, since a `ConfusionMatrixResult`
     can be constructed by hand with an inconsistent `matrix`/`labels` pair:
-    `matrix` must be a square, non-empty, non-negative, exactly-`int64`
-    `ndarray` whose side length equals `len(labels)`, and `labels` must be
-    plain (non-`bool`) Python `int`s with no duplicates. A float matrix
-    (even with whole-number values), a `bool` matrix, or a matrix of any
-    integer dtype other than `int64` are all rejected -- cast explicitly
-    with `matrix.astype(np.int64)` first if needed.
+    `matrix` must be a square, non-empty `ndarray` whose side length equals
+    `len(labels)`, and `labels` must be plain (non-`bool`) Python `int`s with
+    no duplicates. `matrix` must be *exactly* `int64` or *exactly* `float64`
+    -- `float16`/`float32`/`np.longdouble`, a `bool` matrix, or any integer
+    dtype other than `int64` are all rejected, never silently cast; cast
+    explicitly with `matrix.astype(...)` first if needed. An `int64` matrix
+    must be non-negative; a `float64` matrix must be finite (no NaN/Inf) and
+    non-negative. A `float64` matrix is always treated as weighted, giving a
+    `float64` `support` -- even one holding only whole-number values (e.g.
+    hand-built as `np.array([[2.0, 1.0], [3.0, 4.0]])`): dtype, not content,
+    decides, mirroring `confusion_matrix`'s own rule for whether
+    `sample_weight` was given.
 
     For each class `i`: `TP_i` is the diagonal entry, `FP_i` is that
     column's sum minus `TP_i`, `FN_i` is that row's sum minus `TP_i`, and
-    `support_i` is that row's sum (`TP_i + FN_i`). Every count involved
-    (total, per-row, per-column) is verified to fit in `int64` before any
-    of the following is computed -- a `ConfusionMatrixResult` built by hand
-    from huge counts that would silently wrap around in raw `int64`
-    arithmetic raises `ValueError` instead (see `_exact_nonnegative_int64_sum`).
+    `support_i` is that row's sum (`TP_i + FN_i`). For an `int64` matrix,
+    every count involved (total, per-row, per-column) is verified to fit in
+    `int64` before any of the following is computed -- a `ConfusionMatrixResult`
+    built by hand from huge counts that would silently wrap around in raw
+    `int64` arithmetic raises `ValueError` instead (see
+    `_exact_nonnegative_int64_sum`). For a `float64` matrix, every row/column
+    sum (and the flat total) is instead computed via `math.fsum` over that
+    row/column/the whole matrix sorted first -- not a bare
+    `matrix.sum(axis=...)`, which neither guards against overflow nor
+    promises an order-independent result -- mapping any resulting
+    `OverflowError` to `ValueError` (a matrix with individually-finite cells
+    can still have a row/column/total sum that is not representable as a
+    finite `float64`; `confusion_matrix` itself does not reject that, but
+    this function does, since it must reduce the matrix further). `support`
+    is that same canonical row-sum array; `average="weighted"`'s own
+    denominator is a further, independent canonical sum of `support` itself
+    (not the flat total), since `support` is the documented, public set of
+    per-class weights for that average and can legitimately differ from the
+    flat total by a rounding residual.
 
     `precision_i`, `recall_i`, and `f1_i` each have their *own* zero-check,
     computed directly from `TP_i`/`FP_i`/`FN_i` -- not from each other, and
     never by adding two already-`zero_division`-filled values together:
 
     - `precision_i = TP_i / (TP_i + FP_i)`, using `zero_division` only when
-      `TP_i + FP_i == 0` (class `i` was never predicted at all).
+      `TP_i + FP_i == 0` (class `i` was never predicted at all). For a
+      `float64` matrix this is `TP_i / column_sum_i` directly (`TP_i <=
+      column_sum_i` always, so this never overflows).
     - `recall_i = TP_i / (TP_i + FN_i)`, using `zero_division` only when
       `TP_i + FN_i == 0` (class `i` never occurs in the true labels at all).
+      For a `float64` matrix this is `TP_i / row_sum_i` directly, for the
+      same reason.
     - `f1_i = 2 TP_i / (2 TP_i + FP_i + FN_i)`, using `zero_division` only
       when `2 TP_i + FP_i + FN_i == 0` (class `i` has no true positives, no
       false positives, and no false negatives -- i.e. it is completely
-      absent from both `y_true` and `y_pred`).
+      absent from both `y_true` and `y_pred`). For a `float64` matrix, both
+      `2 * TP_i` and `row_sum_i + column_sum_i` can independently overflow
+      even when `precision_i`/`recall_i` do not (two independently-bounded
+      sums added together) -- computed through a private helper that matches
+      plain division bit for bit except at the entries that would actually
+      overflow (verified directly: `TP_i = row_sum_i = column_sum_i =
+      np.finfo(np.float64).max` gives exactly `1.0`, not a silently
+      overflowed `0.0`).
 
     This matters because a class can have `TP_i = 0` with real, nonzero
     `FP_i`/`FN_i` (e.g. a class that was always confused for another) --
@@ -338,7 +519,12 @@ def classification_metrics_from_confusion_matrix(
     well-defined `f1_i = 0`. Each division is computed without ever letting
     NumPy actually perform a `0/0`-style division (so no `RuntimeWarning`
     is ever raised here, regardless of `zero_division`). `accuracy` is
-    always `trace(matrix) / total`, independent of `average`.
+    always `trace(matrix) / total` (the diagonal and total each computed
+    via the same canonical summation as above for a `float64` matrix),
+    independent of `average`. A `float64` matrix's legal, correctly-rounded
+    underflow anywhere in this arithmetic (e.g. a tiny `TP_i` divided by a
+    huge `row_sum_i`) never raises or warns, regardless of the caller's own
+    `np.seterr`/`np.errstate` configuration.
 
     `average=None` returns per-class `precision`/`recall`/`f1` as read-only
     `float64` arrays aligned with `confusion.labels`, always including
@@ -348,12 +534,15 @@ def classification_metrics_from_confusion_matrix(
     numerically equal to `accuracy` -- documented, not special-cased: this
     function does not shortcut to returning `accuracy` directly for
     `average="micro"`, it always goes through the same sum-then-divide
-    computation). `average="macro"` is the unweighted mean over every class
-    in `confusion.labels`, including zero-support classes (each
-    contributing its own `zero_division` value to the mean).
-    `average="weighted"` is the mean weighted by `support`; for this same
-    single-label multiclass case, weighted recall is always numerically
-    equal to `accuracy` (also not special-cased).
+    computation; for a `float64` matrix this equality holds only up to
+    `float64` rounding, not bit for bit, since the two are computed through
+    genuinely different summation paths). `average="macro"` is the
+    unweighted mean over every class in `confusion.labels`, including
+    zero-support classes (each contributing its own `zero_division` value to
+    the mean). `average="weighted"` is the mean weighted by `support`; for
+    this same single-label multiclass case, weighted recall is always
+    numerically equal to `accuracy` (also not special-cased, and also only
+    up to rounding for a `float64` matrix).
 
     `zero_division="nan"` makes every undefined per-class value `NaN`;
     `"macro"`/`"weighted"` then use plain averaging (`np.mean`/a weighted
@@ -369,13 +558,16 @@ def classification_metrics_from_confusion_matrix(
     ------
     TypeError
         If `confusion` is not a `ConfusionMatrixResult`, if its `matrix` is
-        not an `ndarray` or not exactly `int64`, or if any of its `labels`
-        is not a plain (non-`bool`) `int`, or `zero_division` is a `bool`.
+        not an `ndarray` or not exactly `int64`/`float64`, if any of its
+        `labels` is not a plain (non-`bool`) `int`, or `zero_division` is a
+        `bool`.
     ValueError
         If `confusion`'s `matrix`/`labels` are inconsistent or invalid
-        (wrong ndim, not square, empty, negative counts, mismatched
-        lengths, duplicate labels, a total count of zero, or a total count
-        that exceeds what fits in `int64`), or `average`/`zero_division`
+        (wrong ndim, not square, empty, negative values, non-finite values
+        for a `float64` matrix, mismatched lengths, duplicate labels, a
+        total weight of zero, an `int64` total that exceeds what fits in
+        `int64`, or a `float64` row/column/total sum that is not
+        representable as a finite `float64`), or `average`/`zero_division`
         is not one of the accepted values.
     RuntimeError
         If the computed result fails this function's own postconditions.
@@ -411,6 +603,9 @@ def _compute_classification_metrics(
     average: Literal["micro", "macro", "weighted"] | None,
     zero_division: float,
 ) -> ClassificationMetrics:
+    if confusion.matrix.dtype != np.int64:
+        return _compute_weighted_classification_metrics(confusion, average, zero_division)
+
     matrix = confusion.matrix
     labels = confusion.labels
     n_classes = matrix.shape[0]
@@ -507,6 +702,176 @@ def _compute_classification_metrics(
     return result
 
 
+def _canonical_axis_sum(matrix: npt.NDArray[np.float64], axis: int) -> npt.NDArray[np.float64]:
+    """Sum each row (`axis=1`) or column (`axis=0`) of a weighted (`float64`) confusion matrix
+    via `math.fsum` over that row/column's values sorted first.
+
+    Not `matrix.sum(axis=axis, dtype=np.float64)`: that neither guards against overflow (would
+    silently return `inf` or warn, depending on the caller's own `np.seterr`) nor promises a
+    summation order independent of the matrix's own memory layout. `math.fsum` over a sorted copy
+    gives the same, correctly-rounded total regardless of layout, mirroring the same strategy
+    already used to build the matrix itself (`_build_weighted_confusion_matrix`). An
+    `OverflowError` (a row/column summing past `float64`'s range) is mapped to `ValueError`.
+    """
+    source = matrix if axis == 1 else matrix.T
+    result = np.empty(source.shape[0], dtype=np.float64)
+    try:
+        for index in range(source.shape[0]):
+            result[index] = math.fsum(sorted(source[index].tolist()))
+    except OverflowError as exc:
+        kind = "row" if axis == 1 else "column"
+        raise ValueError(
+            f"confusion matrix {kind} sum is not representable as a finite float64"
+        ) from exc
+    return result
+
+
+def _canonical_flat_sum(values: npt.NDArray[np.float64], description: str) -> float:
+    """`math.fsum` over `values`'s elements sorted first -- the same canonical, order-independent
+    summation strategy as `_canonical_axis_sum`, applied to any 1-D or flattened `float64` array
+    (the whole matrix, its diagonal, or `support`). An `OverflowError` is mapped to `ValueError`
+    with `description` naming what could not be represented.
+    """
+    try:
+        return math.fsum(sorted(values.reshape(-1).tolist()))
+    except OverflowError as exc:
+        raise ValueError(f"{description} is not representable as a finite float64") from exc
+
+
+def _compute_weighted_classification_metrics(
+    confusion: ConfusionMatrixResult,
+    average: Literal["micro", "macro", "weighted"] | None,
+    zero_division: float,
+) -> ClassificationMetrics:
+    """The weighted (`float64` matrix) counterpart of `_compute_classification_metrics`'s
+    `int64` branch -- a fully separate code path, not a dtype branch threaded through the
+    existing one, so the `int64` branch stays exactly as it was before `sample_weight` existed.
+
+    `row_sum`/`col_sum`/the flat total/the diagonal total are each computed once via
+    `_canonical_axis_sum`/`_canonical_flat_sum` (canonical `math.fsum`-based summation, mapping
+    any `OverflowError` to `ValueError`) -- never a bare `matrix.sum(axis=...)`. The "at least one
+    observation" gate uses the flat total (mirroring the `int64` branch's `total_samples == 0`
+    check); `average="weighted"`'s own denominator is instead the canonical sum of the *returned*
+    `support` array specifically (which is `row_sum`) -- support is the documented, public set of
+    per-class weights for that average, and summing it again independently (rather than reusing
+    the flat total) can legitimately differ from the flat total by a rounding residual, since the
+    two are different sums over different-sized inputs; using the flat total there instead could
+    silently disagree with the very weights the caller can see in `result.support`.
+
+    `precision_i = TP_i / col_sum_i` and `recall_i = TP_i / row_sum_i` are computed directly
+    (`TP_i <= col_sum_i`/`row_sum_i` always, by construction, so this never overflows -- only
+    legitimately underflows, isolated via `np.errstate(under="ignore")`, mirroring the ranking
+    core's identical fix). `f1_i = 2 * TP_i / (row_sum_i + col_sum_i)` can overflow even though
+    `precision_i`/`recall_i` cannot (two independently-bounded sums added together) -- computed
+    via `_f1_ratio`, which matches direct division bit for bit except at the entries that would
+    actually overflow.
+    """
+    # Only ever called (via _compute_classification_metrics's dtype dispatch) when
+    # confusion.matrix.dtype is already known, at runtime, to be float64 -- cast narrows the
+    # static type accordingly, since ConfusionMatrixResult.matrix itself is a union.
+    matrix = cast("npt.NDArray[np.float64]", confusion.matrix)
+    labels = confusion.labels
+    n_classes = matrix.shape[0]
+
+    total_weight = _canonical_flat_sum(matrix, "confusion matrix total weight")
+    if total_weight <= 0.0:
+        raise ValueError(
+            "classification_metrics_from_confusion_matrix requires positive total weight "
+            "(confusion.matrix sums to zero)"
+        )
+
+    row_sum = _canonical_axis_sum(matrix, axis=1)
+    col_sum = _canonical_axis_sum(matrix, axis=0)
+    tp = np.diagonal(matrix).astype(np.float64, copy=True)
+    fp = col_sum - tp
+    fn = row_sum - tp
+    if np.any(tp < 0) or np.any(fp < 0) or np.any(fn < 0):
+        raise RuntimeError("internal error: TP/FP/FN must not be negative")
+    support = row_sum.copy()
+    support.flags.writeable = False
+
+    diagonal_weight = _canonical_flat_sum(tp, "confusion matrix diagonal weight")
+    with np.errstate(under="ignore"):
+        accuracy = float(diagonal_weight / total_weight)
+
+    with np.errstate(under="ignore"):
+        precision_per_class = _safe_divide_array(tp, col_sum, zero_division)
+        recall_per_class = _safe_divide_array(tp, row_sum, zero_division)
+    f1_per_class = _f1_ratio_with_zero_division(tp, row_sum, col_sum, zero_division)
+
+    if average is None:
+        precision_per_class.flags.writeable = False
+        recall_per_class.flags.writeable = False
+        f1_per_class.flags.writeable = False
+        result = ClassificationMetrics(
+            labels=labels,
+            precision=precision_per_class,
+            recall=recall_per_class,
+            f1=f1_per_class,
+            support=support,
+            accuracy=accuracy,
+            average=None,
+        )
+    elif average == "micro":
+        tp_sum = _canonical_flat_sum(tp, "confusion matrix diagonal weight")
+        fp_sum = _canonical_flat_sum(fp, "confusion matrix false-positive weight")
+        fn_sum = _canonical_flat_sum(fn, "confusion matrix false-negative weight")
+        with np.errstate(over="ignore"):
+            pred_sum_total = tp_sum + fp_sum
+            true_sum_total = tp_sum + fn_sum
+        if not (math.isfinite(pred_sum_total) and math.isfinite(true_sum_total)):
+            raise ValueError(
+                "average='micro' cannot be computed: TP+FP or TP+FN is not representable as a "
+                "finite float64"
+            )
+        with np.errstate(under="ignore"):
+            precision = _safe_divide_scalar(tp_sum, pred_sum_total, zero_division)
+            recall = _safe_divide_scalar(tp_sum, true_sum_total, zero_division)
+        f1 = float(
+            _f1_ratio_with_zero_division(
+                np.array([tp_sum]),
+                np.array([true_sum_total]),
+                np.array([pred_sum_total]),
+                zero_division,
+            )[0]
+        )
+        result = ClassificationMetrics(
+            labels=labels,
+            precision=precision,
+            recall=recall,
+            f1=f1,
+            support=support,
+            accuracy=accuracy,
+            average="micro",
+        )
+    elif average == "macro":
+        with np.errstate(under="ignore"):
+            result = ClassificationMetrics(
+                labels=labels,
+                precision=float(np.mean(precision_per_class)),
+                recall=float(np.mean(recall_per_class)),
+                f1=float(np.mean(f1_per_class)),
+                support=support,
+                accuracy=accuracy,
+                average="macro",
+            )
+    else:
+        weighted_total = _canonical_flat_sum(support, "confusion matrix support total")
+        with np.errstate(under="ignore"):
+            result = ClassificationMetrics(
+                labels=labels,
+                precision=_weighted_average(precision_per_class, support, weighted_total),
+                recall=_weighted_average(recall_per_class, support, weighted_total),
+                f1=_weighted_average(f1_per_class, support, weighted_total),
+                support=support,
+                accuracy=accuracy,
+                average="weighted",
+            )
+
+    _check_weighted_metrics_postconditions(result, n_classes, total_weight)
+    return result
+
+
 def _weighted_average(values: np.ndarray, weights: np.ndarray, total_weight: float) -> float:
     return float(np.sum(values * weights) / total_weight)
 
@@ -524,6 +889,85 @@ def _safe_divide_scalar(numerator: float, denominator: float, zero_division: flo
     if denominator == 0:
         return zero_division
     return numerator / denominator
+
+
+def _stable_f1_ratio(
+    tp: npt.NDArray[np.float64], row_sum: npt.NDArray[np.float64], col_sum: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Compute `2 * tp / (row_sum + col_sum)` elementwise without an intermediate
+    `row_sum + col_sum` overflow (or `2 * tp` overflow).
+
+    Only ever called (by `_f1_ratio`, on the subset of entries that actually overflow) where
+    `row_sum + col_sum > 0` always holds by construction. Plain `2 * tp / (row_sum + col_sum)`
+    silently returns `0.0` instead of the correct `1.0` when `tp == row_sum == col_sum ==
+    np.finfo(np.float64).max` (both `2 * tp` and `row_sum + col_sum` overflow to `+inf`) --
+    verified directly. Scaling every operand by `max(row_sum, col_sum)` first keeps every
+    intermediate value within `float64`'s range whenever the true ratio is well-defined, which it
+    always is here (mirrors `_stable_precision_ratio`'s identical strategy, extended to F1's
+    three-term formula). Division here can legitimately underflow to `0.0` -- isolated via
+    `np.errstate(under="ignore")`, for the same reason `_stable_precision_ratio` is.
+    """
+    scale = np.maximum(row_sum, col_sum)
+    with np.errstate(under="ignore"):
+        scaled_tp = tp / scale
+        scaled_row_sum = row_sum / scale
+        scaled_col_sum = col_sum / scale
+        return (2.0 * scaled_tp) / (scaled_row_sum + scaled_col_sum)
+
+
+def _f1_ratio(
+    tp: npt.NDArray[np.float64], row_sum: npt.NDArray[np.float64], col_sum: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Compute `2 * tp / (row_sum + col_sum)` elementwise, matching plain `float64` arithmetic bit
+    for bit whenever neither `2 * tp` nor `row_sum + col_sum` overflows -- only the (rare)
+    overflowing entries are routed through `_stable_f1_ratio`'s scale-based formula instead, for
+    the same reason `_precision_ratio` only reroutes its own overflowing entries (a single global
+    fallback would change every entry's bit pattern, not just the overflowing one's).
+
+    Both `2 * tp` and `row_sum + col_sum` are computed under `np.errstate(over="ignore")`: the
+    overflow this deliberately allows (only to detect via `np.isinf` immediately after) would
+    otherwise raise or warn. The ordinary division can legitimately underflow -- isolated via
+    `np.errstate(under="ignore")`, mirroring `_precision_ratio`. `invalid` is deliberately left at
+    the caller's own sensitivity: a NaN anywhere in `tp`/`row_sum`/`col_sum` would mean an
+    internal error upstream, not a case this function should paper over.
+    """
+    with np.errstate(over="ignore"):
+        doubled_tp = 2.0 * tp
+        combined = row_sum + col_sum
+    overflowed = np.isinf(doubled_tp) | np.isinf(combined)
+    with np.errstate(under="ignore"):
+        if not np.any(overflowed):
+            return doubled_tp / combined
+
+        result = np.empty_like(tp)
+        ordinary = ~overflowed
+        result[ordinary] = doubled_tp[ordinary] / combined[ordinary]
+    result[overflowed] = _stable_f1_ratio(tp[overflowed], row_sum[overflowed], col_sum[overflowed])
+    return result
+
+
+def _f1_ratio_with_zero_division(
+    tp: npt.NDArray[np.float64],
+    row_sum: npt.NDArray[np.float64],
+    col_sum: npt.NDArray[np.float64],
+    zero_division: float,
+) -> npt.NDArray[np.float64]:
+    """`_f1_ratio`, but returning `zero_division` for any entry where `row_sum == col_sum == 0`
+    (class `i` is completely absent from both `y_true` and `y_pred`) instead of computing a
+    `0/0`-shaped ratio.
+
+    The zero-check mask (`row_sum > 0` or `col_sum > 0`) never adds `row_sum` and `col_sum`
+    together, unlike `_f1_ratio`'s own combined-overflow detection -- so building this mask can
+    never itself overflow or warn, even before `_f1_ratio` is invoked on the (always nonzero)
+    entries that need it.
+    """
+    result = np.full(tp.shape, zero_division, dtype=np.float64)
+    nonzero_mask = (row_sum > 0.0) | (col_sum > 0.0)
+    if np.any(nonzero_mask):
+        result[nonzero_mask] = _f1_ratio(
+            tp[nonzero_mask], row_sum[nonzero_mask], col_sum[nonzero_mask]
+        )
+    return result
 
 
 def _normalize_zero_division(value: object) -> float:
@@ -666,6 +1110,121 @@ def _check_matrix_postconditions(matrix: np.ndarray, expected_samples: int) -> N
         raise RuntimeError("internal error: confusion matrix contains a negative count")
 
 
+def _build_weighted_confusion_matrix(
+    true_list: list[int],
+    pred_list: list[int],
+    labels: tuple[int, ...],
+    weights: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """The weighted counterpart of `_build_confusion_matrix`, used only when `sample_weight` is
+    not `None`.
+
+    Every value in `true_list`/`pred_list` is already guaranteed present in `index_of` by the
+    time this is called: for explicit `labels`, every raw (unfiltered) value was already
+    validated against them; for inferred `labels`, `labels` was built from exactly the effective
+    (positive-weight) subset this function also filters to. A zero-weight sample contributes
+    nothing and is filtered out before any indexing happens -- never mapped through `index_of` at
+    all, so a class present only among zero-weight samples never needs an entry there.
+
+    Builds the flat cell index only for the effective subset, then groups same-cell entries and
+    sums each group's weights exactly once via `math.fsum` over that group's weights sorted
+    ascending first -- not `np.bincount(flat, weights=weights)` or `np.add.at`, both verified
+    directly to be order-dependent for extreme weight ratios (`np.bincount(flat, weights=
+    [1e16, 1.0, 1.0])` gives a different final cell value than `np.bincount(flat, weights=
+    [1.0, 1.0, 1e16])` for three samples landing in the same cell) -- which would make this
+    module's existing "permuting the input never changes the result" expectation depend on
+    summation order. `math.fsum(sorted(...))` gives the same, correctly-rounded total regardless
+    of input order, mirroring `_compute_weighted_ranking_core`'s identical strategy.
+
+    An `OverflowError` from `math.fsum` (a single cell's weights summing past `float64`'s range)
+    is mapped to `ValueError`. No total/row/column sum is checked here -- see
+    `_check_weighted_matrix_postconditions` and this function's callers for why that is
+    deliberately deferred to `classification_metrics`/`classification_metrics_from_confusion_
+    matrix` instead.
+    """
+    n_classes = len(labels)
+    _check_allocation_representable(n_classes)
+    index_of = {label: index for index, label in enumerate(labels)}
+
+    matrix = np.zeros((n_classes, n_classes), dtype=np.float64)
+    effective_mask = weights > 0.0
+
+    if np.any(effective_mask):
+        effective_true = [
+            t for t, keep in zip(true_list, effective_mask.tolist(), strict=True) if keep
+        ]
+        effective_pred = [
+            p for p, keep in zip(pred_list, effective_mask.tolist(), strict=True) if keep
+        ]
+        effective_weight = weights[effective_mask]
+
+        true_idx = np.fromiter(
+            (index_of[value] for value in effective_true), dtype=np.intp, count=len(effective_true)
+        )
+        pred_idx = np.fromiter(
+            (index_of[value] for value in effective_pred), dtype=np.intp, count=len(effective_pred)
+        )
+        flat = true_idx * n_classes + pred_idx
+
+        order = np.argsort(flat, kind="stable")
+        sorted_flat = flat[order]
+        sorted_weight = effective_weight[order]
+
+        group_end_mask = np.concatenate((sorted_flat[1:] != sorted_flat[:-1], np.array([True])))
+        group_end_indices = np.flatnonzero(group_end_mask)
+        group_start_indices = np.empty_like(group_end_indices)
+        group_start_indices[0] = 0
+        group_start_indices[1:] = group_end_indices[:-1] + 1
+
+        flat_matrix = matrix.reshape(-1)
+        try:
+            for group_index in range(group_end_indices.shape[0]):
+                start = int(group_start_indices[group_index])
+                end = int(group_end_indices[group_index]) + 1
+                cell = int(sorted_flat[start])
+                flat_matrix[cell] = math.fsum(sorted(sorted_weight[start:end].tolist()))
+        except OverflowError as exc:
+            raise ValueError(
+                "sample_weight sum in a single confusion-matrix cell is not representable as a "
+                "finite float64"
+            ) from exc
+
+    matrix.flags.writeable = False
+    _check_weighted_matrix_postconditions(matrix, n_classes)
+    return matrix
+
+
+def _check_weighted_matrix_postconditions(matrix: np.ndarray, n_classes: int) -> None:
+    """Postconditions for a weighted (`float64`) confusion matrix -- deliberately separate from
+    `_check_matrix_postconditions` (`int64`-only) rather than adding dtype branches to it.
+
+    Unlike the `int64` postconditions, this never checks that the matrix's total sums to the
+    expected sample count: a `float64` matrix with several individually-finite, huge cells is
+    still a well-defined, useful result on its own (e.g. for inspection or serialization) even
+    when its total is not representable as a finite `float64` -- rejecting *that* is
+    `classification_metrics`/`classification_metrics_from_confusion_matrix`'s job (see
+    `_compute_weighted_classification_metrics`), not `confusion_matrix`'s.
+    """
+    if matrix.dtype != np.float64:
+        raise RuntimeError(
+            f"internal error: confusion matrix has dtype {matrix.dtype}, expected float64"
+        )
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise RuntimeError(
+            f"internal error: confusion matrix has shape {matrix.shape}, expected square"
+        )
+    if matrix.shape[0] != n_classes:
+        raise RuntimeError(
+            f"internal error: confusion matrix has {matrix.shape[0]} rows, expected {n_classes}"
+        )
+    if not np.all(np.isfinite(matrix)):
+        raise RuntimeError("internal error: confusion matrix contains a non-finite value")
+    if np.any(matrix < 0):
+        raise RuntimeError("internal error: confusion matrix contains a negative value")
+    if matrix.flags.writeable:
+        raise RuntimeError("internal error: confusion matrix is writeable")
+
+
 def _require_confusion_matrix_result(confusion: object) -> None:
     if not isinstance(confusion, ConfusionMatrixResult):
         raise TypeError(
@@ -682,10 +1241,22 @@ def _require_confusion_matrix_result(confusion: object) -> None:
         raise ValueError(f"confusion.matrix must be square, got shape {matrix.shape}")
     if matrix.shape[0] == 0:
         raise ValueError("confusion.matrix must not be empty (0x0)")
-    if matrix.dtype != np.int64:
-        raise TypeError(f"confusion.matrix must have dtype int64, got {matrix.dtype}")
-    if np.any(matrix < 0):
-        raise ValueError("confusion.matrix must not contain negative counts")
+
+    if matrix.dtype == np.int64:
+        if np.any(matrix < 0):
+            raise ValueError("confusion.matrix must not contain negative counts")
+    elif matrix.dtype == np.float64:
+        # A float64 matrix is always treated as weighted, regardless of whether its values
+        # happen to be whole numbers -- dtype, not content, decides (mirrors confusion_matrix's
+        # own sample_weight-is-given-or-not dtype rule). Never silently cast any other dtype
+        # (float16/float32/longdouble, or any integer dtype other than int64) -- exactly int64 or
+        # exactly float64 are the only two accepted matrix dtypes.
+        if not np.all(np.isfinite(matrix)):
+            raise ValueError("confusion.matrix must contain only finite values (no NaN or Inf)")
+        if np.any(matrix < 0):
+            raise ValueError("confusion.matrix must not contain negative values")
+    else:
+        raise TypeError(f"confusion.matrix must have dtype int64 or float64, got {matrix.dtype}")
 
     if not isinstance(labels, tuple):
         raise TypeError(f"confusion.labels must be a tuple, got {type(labels).__name__}")
@@ -723,6 +1294,64 @@ def _check_metrics_postconditions(
         raise RuntimeError(
             f"internal error: support sums to {support_total}, expected {expected_total}"
         )
+
+    if result.average is None:
+        for name, array in (
+            ("precision", result.precision),
+            ("recall", result.recall),
+            ("f1", result.f1),
+        ):
+            if not isinstance(array, np.ndarray):
+                raise RuntimeError(f"internal error: {name} is not an ndarray for average=None")
+            if array.shape != (n_classes,) or array.dtype != np.float64:
+                raise RuntimeError(f"internal error: {name} has unexpected shape/dtype")
+            if array.flags.writeable:
+                raise RuntimeError(f"internal error: {name} is writeable")
+            if not np.all(np.isnan(array) | ((array >= 0.0) & (array <= 1.0))):
+                raise RuntimeError(f"internal error: {name} has a value outside [0, 1] or NaN")
+    else:
+        for name, value in (
+            ("precision", result.precision),
+            ("recall", result.recall),
+            ("f1", result.f1),
+        ):
+            if not isinstance(value, float):
+                raise RuntimeError(
+                    f"internal error: {name} is not a float for average={result.average!r}"
+                )
+            if not (math.isnan(value) or 0.0 <= value <= 1.0):
+                raise RuntimeError(
+                    f"internal error: aggregate {name} {value!r} is not in [0, 1] or NaN"
+                )
+
+
+def _check_weighted_metrics_postconditions(
+    result: ClassificationMetrics, n_classes: int, total_weight: float
+) -> None:
+    """The weighted (`float64` `support`) counterpart of `_check_metrics_postconditions`.
+
+    Unlike that function, does not check `support`'s sum against an expected total: `support`
+    (the canonical per-row sum) and `total_weight` (the canonical flat sum over the whole matrix)
+    are computed via two independently-rounded `math.fsum` calls over different-shaped inputs, so
+    -- unlike the `int64` case, where both are exact integers and must match precisely -- they
+    can legitimately differ by a rounding residual here. `total_weight` is accepted as a parameter
+    only to keep this function's signature symmetric with `_check_metrics_postconditions`; it is
+    intentionally unused for any exact-match assertion.
+    """
+    del total_weight
+    if not (isinstance(result.accuracy, float) and math.isfinite(result.accuracy)):
+        raise RuntimeError(f"internal error: accuracy {result.accuracy!r} is not a finite float")
+    if not (0.0 <= result.accuracy <= 1.0):
+        raise RuntimeError(f"internal error: accuracy {result.accuracy!r} is not in [0, 1]")
+
+    if result.support.shape != (n_classes,) or result.support.dtype != np.float64:
+        raise RuntimeError("internal error: support has unexpected shape/dtype")
+    if result.support.flags.writeable:
+        raise RuntimeError("internal error: support is writeable")
+    if np.any(result.support < 0):
+        raise RuntimeError("internal error: support contains a negative value")
+    if not np.all(np.isfinite(result.support)):
+        raise RuntimeError("internal error: support contains a non-finite value")
 
     if result.average is None:
         for name, array in (
@@ -1982,33 +2611,102 @@ def _exact_integer_ndarray_to_float64(value: np.ndarray, name: str) -> npt.NDArr
     return converted
 
 
-def _normalize_sample_weight(value: object, expected_length: int) -> npt.NDArray[np.float64]:
-    """Raise TypeError/ValueError unless `value` is a valid `sample_weight`; return `float64`
-    ndarray.
+def _normalize_nonnegative_weight_sequence(
+    value: object, expected_length: int, *, allow_empty: bool
+) -> npt.NDArray[np.float64]:
+    """Raise TypeError/ValueError unless `value` is a valid `sample_weight` container; return a
+    new, independent, non-negative `float64` ndarray.
 
-    A deliberate, thin wrapper around `_normalize_score_sequence` -- not a claim that weights and
-    scores share identical semantics. It reuses that function's container/dtype/finiteness/
-    signed-zero policy verbatim (same accepted containers and numeric types as `y_score`, same
-    rejection of `bool`/complex/object/wider-than-`float64`/NaN/Inf/an integer not exactly
-    representable as `float64`), then adds the two checks specific to weights: `sample_weight`
-    must have exactly `expected_length` elements, and every element must be non-negative (a
-    negative weight would make `true_positive_rate` a non-monotonic function of the threshold --
-    verified directly against a reference implementation that permits negative weights) with at
-    least one strictly positive value (an all-zero `sample_weight` assigns no effective weight to
-    any sample at all). Zero itself is legal here and is not rejected by this function -- it
-    carries its own "remove this sample before building thresholds" semantics, handled by the
-    ranking core that calls this, not here.
+    Shares its numeric-value policy with `_normalize_score_sequence` (same accepted containers --
+    a `Sequence` explicitly excluding `str`/`bytes`/`bytearray`, or a 1-D `ndarray` -- and the same
+    per-element rules: Python/NumPy int or `float16`/`float32`/`float64`, rejecting `bool`/
+    complex/object/wider-than-`float64`/NaN/Inf/an integer not exactly representable as `float64`,
+    canonicalizing signed zero) by calling the same low-level element/array normalizers
+    (`_normalize_score_scalar`, `_exact_integer_ndarray_to_float64`, `_canonicalize_signed_zero`),
+    not by calling `_normalize_score_sequence` itself -- that function always rejects an empty
+    container, which `sample_weight` must NOT always do: `confusion_matrix` needs an empty
+    `sample_weight=[]` to be legal exactly when `y_true`/`y_pred` are also empty (mirroring its
+    existing "empty input plus explicit labels" contract), something no caller of
+    `_normalize_score_sequence` has ever needed. `allow_empty` controls exactly that one
+    difference; every other rule is identical.
+
+    Additionally (unlike `_normalize_score_sequence`, which has no such concept) rejects negative
+    values unconditionally: a negative weight would make `true_positive_rate` non-monotonic in
+    the ranking core, or a confusion-matrix cell negative, breaking an invariant this module
+    otherwise guarantees for both -- verified directly against a reference implementation that
+    permits negative weights for both. Does NOT check for a positive total -- zero is a fully
+    legal value here (it carries its own, caller-specific "remove this sample" semantics), and
+    whether at least one positive weight is required depends entirely on the caller (ranking
+    metrics always require it, `confusion_matrix` never requires it directly,
+    `classification_metrics` requires it only after its own label validation) -- each decides for
+    itself, on the array this function returns.
     """
-    weights = _normalize_score_sequence(value, "sample_weight")
+    name = "sample_weight"
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError(
+            f"{name} must be a Sequence of real numbers or a 1-D float/integer ndarray, "
+            f"not {type(value).__name__}"
+        )
+    if isinstance(value, np.ndarray):
+        if value.ndim != 1:
+            raise ValueError(f"{name} must be 1-D, got shape {value.shape}")
+        if value.size == 0:
+            if not allow_empty:
+                raise ValueError(f"{name} must not be empty")
+            weights = np.empty(0, dtype=np.float64)
+        else:
+            dtype = value.dtype
+            if np.issubdtype(dtype, np.floating):
+                if dtype not in _ALLOWED_SCORE_FLOAT_DTYPES:
+                    raise TypeError(
+                        f"{name} must have dtype float16, float32, or float64, got {dtype} -- a "
+                        "wider floating dtype could narrow values in a platform-dependent way"
+                    )
+                weights = value.astype(np.float64, copy=True)
+            elif np.issubdtype(dtype, np.integer):
+                weights = _exact_integer_ndarray_to_float64(value, name)
+            else:
+                raise TypeError(f"{name} must have a floating or integer dtype, got {dtype}")
+            if not np.all(np.isfinite(weights)):
+                raise ValueError(f"{name} must contain only finite values (no NaN or Inf)")
+            _canonicalize_signed_zero(weights)
+    elif not isinstance(value, Sequence):
+        raise TypeError(
+            f"{name} must be a Sequence of real numbers (e.g. a list or tuple) or a 1-D "
+            f"float/integer ndarray, not {type(value).__name__}"
+        )
+    elif len(value) == 0:
+        if not allow_empty:
+            raise ValueError(f"{name} must not be empty")
+        weights = np.empty(0, dtype=np.float64)
+    else:
+        weights = np.empty(len(value), dtype=np.float64)
+        for index, element in enumerate(value):
+            weights[index] = _normalize_score_scalar(element, f"{name}[{index}]")
+        _canonicalize_signed_zero(weights)
 
     if weights.shape[0] != expected_length:
         raise ValueError(
-            "sample_weight must have the same length as y_true/y_score, expected "
-            f"{expected_length}, got {weights.shape[0]}"
+            f"{name} must have the same length as y_true/y_pred, expected {expected_length}, "
+            f"got {weights.shape[0]}"
         )
-
     if np.any(weights < 0.0):
-        raise ValueError("sample_weight must contain only non-negative values")
+        raise ValueError(f"{name} must contain only non-negative values")
+    return weights
+
+
+def _normalize_sample_weight(value: object, expected_length: int) -> npt.NDArray[np.float64]:
+    """Raise TypeError/ValueError unless `value` is a valid ranking `sample_weight`; return
+    `float64` ndarray.
+
+    A strict wrapper around `_normalize_nonnegative_weight_sequence` (`allow_empty=False`, since
+    ranking metrics -- unlike `confusion_matrix` -- never accept empty input at all) that adds
+    the one rule specific to ranking metrics: at least one strictly positive value is required
+    (an all-zero `sample_weight` assigns no effective weight to any sample at all, and a ranking
+    curve/score has no analogue of `confusion_matrix`'s "empty input plus explicit labels gives a
+    well-defined all-zero result").
+    """
+    weights = _normalize_nonnegative_weight_sequence(value, expected_length, allow_empty=False)
 
     if not np.any(weights > 0.0):
         raise ValueError("sample_weight must contain at least one positive value")
