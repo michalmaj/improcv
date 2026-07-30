@@ -360,6 +360,29 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   types or functions, no new batch-aggregation helper, and no new dependency in this slice.
 
 ### Fixed
+- `improcv.evaluation`: `classification_metrics`/`classification_metrics_from_confusion_matrix`'s
+  `average="macro"` and `average="weighted"` aggregates could differ by one or a few ULP after
+  changing only the presentation order of an explicit `labels` sequence (with the confusion
+  matrix's rows/columns permuted identically) -- the *set* of per-class values was unchanged, only
+  their order, so all scalar aggregates must be bit-identical regardless of it. The cause:
+  `average="macro"` used `np.mean(per_class_values)`, and `average="weighted"` used
+  `np.sum(values * weights) / total_weight` -- both computed a `float64` sum whose final bit
+  pattern depends on the order of its inputs, and that order was directly `labels`' own order.
+  Both now go through a canonical, order-independent reduction instead: a new private
+  `_canonical_mean` (used identically by the `int64` and `float64` branches) and a rewritten
+  `_weighted_average`, each converting to plain Python `float`s, establishing a canonical order via
+  `sorted()`, and summing via `math.fsum` before dividing -- `_weighted_average` sorts the actual
+  `value * weight` products (the real terms being summed), not `values`/`weights` separately, which
+  would not establish a canonical order for the products themselves. Per-class `precision`/
+  `recall`/`f1`/`support`/`accuracy`, `average="micro"`, the confusion matrix itself, and every
+  `sample_weight`/dtype/empty/zero-weight contract from prior slices are unchanged; only
+  `average="macro"`/`"weighted"`'s own scalar results are affected, and only by up to a few ULP for
+  ordinary data. `zero_division="nan"` still makes the whole aggregate `NaN` when any class is
+  undefined, including a `weighted` aggregate where that class's own support is `0.0` (`NaN` is
+  now checked explicitly before building any product, rather than relying on `NaN * 0.0` already
+  being `NaN` under IEEE 754, which remains true but is no longer the mechanism this function's
+  contract depends on). Legal underflow in either reducer still never depends on the caller's own
+  `np.seterr`/`np.errstate` configuration.
 - `improcv.evaluation`: the weighted ROC/precision-recall/ROC-AUC/average-precision path
   (`sample_weight`, added earlier in this same `[Unreleased]` series) could leak a raw
   `FloatingPointError` or `RuntimeWarning` for legal, extreme-but-finite weights whenever the

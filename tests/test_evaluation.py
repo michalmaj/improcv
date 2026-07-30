@@ -1,4 +1,5 @@
 import dataclasses
+import itertools
 import math
 import warnings
 from collections.abc import Sequence
@@ -3948,3 +3949,254 @@ def test_confusion_matrix_zero_weight_insertion_invariance() -> None:
         [*y_true, 5], [*y_pred, 5], sample_weight=[*sample_weight, 0.0]
     )
     assert baseline_inferred == with_zero_new_class
+
+
+# --- label-order invariance for macro/weighted classification averages ---
+
+_LABEL_ORDER_PERMUTATIONS = [(0, 1, 2), (1, 2, 0), (2, 0, 1)]
+
+
+def _require_float(value: object) -> float:
+    assert isinstance(value, float)
+    return value
+
+
+def _oracle_macro_mean(values: list[float]) -> float:
+    """Independent (non-production) canonical mean, for comparison against `_canonical_mean`."""
+    return math.fsum(sorted(values)) / len(values)
+
+
+def _oracle_weighted_average(values: list[float], weights: list[float]) -> float:
+    """Independent (non-production) canonical weighted average, for comparison against
+    `_weighted_average`."""
+    products = [value * weight for value, weight in zip(values, weights, strict=True)]
+    return math.fsum(sorted(products)) / math.fsum(sorted(weights))
+
+
+def _permute_confusion_matrix(
+    matrix: np.ndarray, labels: tuple[int, ...], perm: tuple[int, ...]
+) -> ConfusionMatrixResult:
+    permuted_matrix = matrix[np.ix_(list(perm), list(perm))]
+    permuted_labels = tuple(labels[index] for index in perm)
+    return ConfusionMatrixResult(matrix=permuted_matrix, labels=permuted_labels)
+
+
+def test_classification_metrics_macro_label_order_invariant_int64() -> None:
+    N = 2**53
+    matrix = np.array([[1, N - 1, N - 1], [0, 1, 0], [0, 0, 1]], dtype=np.int64)
+    labels = (0, 1, 2)
+
+    per_class_precision = [1.0, 2**-53, 2**-53]
+    expected_precision = _oracle_macro_mean(per_class_precision)
+    assert expected_precision == 0.3333333333333334
+
+    results = [
+        classification_metrics_from_confusion_matrix(
+            _permute_confusion_matrix(matrix, labels, perm), average="macro"
+        )
+        for perm in _LABEL_ORDER_PERMUTATIONS
+    ]
+    for result in results:
+        assert result.precision == expected_precision
+    assert len({_require_float(result.precision) for result in results}) == 1
+    assert len({_require_float(result.recall) for result in results}) == 1
+    assert len({_require_float(result.f1) for result in results}) == 1
+
+
+def test_classification_metrics_weighted_label_order_invariant_int64() -> None:
+    N = 2**53
+    matrix = np.array([[1, N - 1, N - 1], [0, 1, 0], [0, 0, 1]], dtype=np.int64)
+    labels = (0, 1, 2)
+
+    baseline = classification_metrics_from_confusion_matrix(
+        ConfusionMatrixResult(matrix=matrix, labels=labels), average=None
+    )
+    weights = baseline.support.astype(float).tolist()
+    assert isinstance(baseline.precision, np.ndarray)
+    assert isinstance(baseline.recall, np.ndarray)
+    assert isinstance(baseline.f1, np.ndarray)
+    expected_precision = _oracle_weighted_average(baseline.precision.tolist(), weights)
+    expected_recall = _oracle_weighted_average(baseline.recall.tolist(), weights)
+    expected_f1 = _oracle_weighted_average(baseline.f1.tolist(), weights)
+
+    results = [
+        classification_metrics_from_confusion_matrix(
+            _permute_confusion_matrix(matrix, labels, perm), average="weighted"
+        )
+        for perm in _LABEL_ORDER_PERMUTATIONS
+    ]
+    for result in results:
+        assert result.precision == expected_precision
+        assert result.recall == expected_recall
+        assert result.f1 == expected_f1
+    assert len({_require_float(result.f1) for result in results}) == 1
+
+
+def test_classification_metrics_from_confusion_matrix_float64_label_order_invariant() -> None:
+    N = 2**53
+    matrix = np.array([[1, N - 1, N - 1], [0, 1, 0], [0, 0, 1]], dtype=np.float64)
+    labels = (0, 1, 2)
+
+    macro_results = [
+        classification_metrics_from_confusion_matrix(
+            _permute_confusion_matrix(matrix, labels, perm), average="macro"
+        )
+        for perm in _LABEL_ORDER_PERMUTATIONS
+    ]
+    weighted_results = [
+        classification_metrics_from_confusion_matrix(
+            _permute_confusion_matrix(matrix, labels, perm), average="weighted"
+        )
+        for perm in _LABEL_ORDER_PERMUTATIONS
+    ]
+    assert len({_require_float(result.precision) for result in macro_results}) == 1
+    assert len({_require_float(result.recall) for result in macro_results}) == 1
+    assert len({_require_float(result.f1) for result in macro_results}) == 1
+    assert len({_require_float(result.precision) for result in weighted_results}) == 1
+    assert len({_require_float(result.recall) for result in weighted_results}) == 1
+    assert len({_require_float(result.f1) for result in weighted_results}) == 1
+
+
+def test_classification_metrics_direct_weighted_label_order_invariant() -> None:
+    N = 2**53
+    y_true = [0, 0, 0, 1, 2]
+    y_pred = [0, 1, 2, 1, 2]
+    sample_weight = [1.0, float(N - 1), float(N - 1), 1.0, 1.0]
+
+    label_orders = ([0, 1, 2], [1, 2, 0], [2, 0, 1])
+    macro_results = [
+        classification_metrics(
+            y_true, y_pred, labels=labels, sample_weight=sample_weight, average="macro"
+        )
+        for labels in label_orders
+    ]
+    weighted_results = [
+        classification_metrics(
+            y_true, y_pred, labels=labels, sample_weight=sample_weight, average="weighted"
+        )
+        for labels in label_orders
+    ]
+    assert len({_require_float(result.precision) for result in macro_results}) == 1
+    assert len({_require_float(result.recall) for result in macro_results}) == 1
+    assert len({_require_float(result.f1) for result in macro_results}) == 1
+    assert len({_require_float(result.precision) for result in weighted_results}) == 1
+    assert len({_require_float(result.recall) for result in weighted_results}) == 1
+    assert len({_require_float(result.f1) for result in weighted_results}) == 1
+
+
+# Hand-built small confusion matrices covering ordinary values, very different magnitudes, and
+# a zero-support class -- deliberately small, not randomly generated at scale.
+_LABEL_ORDER_TEST_MATRICES = [
+    np.array([[5, 1, 0], [2, 3, 1], [0, 1, 4]], dtype=np.int64),
+    np.array([[2**53 - 1, 1, 0], [1, 5, 0], [0, 0, 3]], dtype=np.int64),
+    np.array([[3, 0, 0], [0, 0, 0], [0, 0, 2]], dtype=np.int64),  # class 1 has zero support
+]
+
+
+@pytest.mark.parametrize("matrix", _LABEL_ORDER_TEST_MATRICES)
+@pytest.mark.parametrize("zero_division", [0.0, 1.0, "nan"])
+@pytest.mark.parametrize("average", ["macro", "weighted"])
+def test_classification_metrics_label_order_invariant_hand_built_matrices(
+    matrix, zero_division, average
+) -> None:
+    labels = (0, 1, 2)
+    results = [
+        classification_metrics_from_confusion_matrix(
+            _permute_confusion_matrix(matrix, labels, perm),
+            average=average,
+            zero_division=zero_division,
+        )
+        for perm in _LABEL_ORDER_PERMUTATIONS
+    ]
+    baseline = results[0]
+    for result in results[1:]:
+        for field in ("precision", "recall", "f1"):
+            baseline_value = getattr(baseline, field)
+            other_value = getattr(result, field)
+            if isinstance(baseline_value, float) and math.isnan(baseline_value):
+                assert math.isnan(other_value)
+            else:
+                assert other_value == baseline_value
+
+
+def test_classification_metrics_label_order_invariant_all_permutations_of_four_classes() -> None:
+    # A slightly larger, still hand-built matrix -- exercises all 24 label permutations of a
+    # 4-class matrix, not just cyclic rotations.
+    matrix = np.array(
+        [
+            [7, 1, 0, 2],
+            [0, 5, 1, 0],
+            [3, 0, 6, 1],
+            [0, 0, 0, 4],
+        ],
+        dtype=np.int64,
+    )
+    labels = (0, 1, 2, 3)
+    for average in ("macro", "weighted"):
+        results = [
+            classification_metrics_from_confusion_matrix(
+                _permute_confusion_matrix(matrix, labels, perm), average=average
+            )
+            for perm in itertools.permutations(range(4))
+        ]
+        baseline = results[0]
+        for result in results[1:]:
+            assert result.precision == baseline.precision
+            assert result.recall == baseline.recall
+            assert result.f1 == baseline.f1
+
+
+# --- zero_division="nan" with zero support still propagates NaN ---
+
+
+def test_classification_metrics_weighted_nan_propagates_with_zero_support() -> None:
+    matrix = np.array([[3, 0, 0], [0, 0, 0], [0, 0, 2]], dtype=np.int64)
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0, 1, 2))
+    result = classification_metrics_from_confusion_matrix(
+        confusion, average="weighted", zero_division="nan"
+    )
+    assert math.isnan(result.precision)
+    assert math.isnan(result.recall)
+    assert math.isnan(result.f1)
+
+
+def test_classification_metrics_macro_nan_propagates() -> None:
+    matrix = np.array([[3, 0, 0], [0, 0, 0], [0, 0, 2]], dtype=np.int64)
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0, 1, 2))
+    result = classification_metrics_from_confusion_matrix(
+        confusion, average="macro", zero_division="nan"
+    )
+    assert math.isnan(result.precision)
+    assert math.isnan(result.recall)
+    assert math.isnan(result.f1)
+
+
+# --- np.seterr isolation for the new canonical reducers ---
+
+
+@pytest.mark.parametrize("average", ["macro", "weighted"])
+def test_classification_metrics_label_order_reducers_no_error_under_seterr_raise(average) -> None:
+    N = 2**53
+    matrix = np.array([[1, N - 1, N - 1], [0, 1, 0], [0, 0, 1]], dtype=np.int64)
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0, 1, 2))
+    previous = np.seterr(all="raise")
+    try:
+        classification_metrics_from_confusion_matrix(confusion, average=average)
+        assert np.geterr() == _RAISE_STATE_CM
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+
+@pytest.mark.parametrize("average", ["macro", "weighted"])
+def test_classification_metrics_label_order_reducers_no_warning_under_seterr_warn(average) -> None:
+    N = 2**53
+    matrix = np.array([[1, N - 1, N - 1], [0, 1, 0], [0, 0, 1]], dtype=np.int64)
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0, 1, 2))
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            classification_metrics_from_confusion_matrix(confusion, average=average)
+    finally:
+        np.seterr(**previous)

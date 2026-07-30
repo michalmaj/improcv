@@ -707,8 +707,9 @@ last, not merged or rejected), and an observed `y_true`/`y_pred` value outside a
 `classification_metrics`'s result type depends on `average`: `average=None` (the default) gives
 `precision`/`recall`/`f1` as per-class, read-only `float64` arrays; `average="micro"`/`"macro"`/
 `"weighted"` gives them as plain Python `float`s instead -- never both forms from the same call.
-`support` is always a per-class, read-only `int64` array regardless of `average`, and `accuracy`
-is always a plain `float`. `zero_division` (`0.0`, `1.0`, or `"nan"`) controls what a class reports
+`support` is always a per-class, read-only array regardless of `average` (`int64`/`float64` per
+the `sample_weight` rule below), and `accuracy` is always a plain `float`. `zero_division`
+(`0.0`, `1.0`, or `"nan"`) controls what a class reports
 when its own division is genuinely undefined -- **precision**, **recall**, and **F1** each have
 their *own* zero-division condition, checked independently from true positive/false positive/false
 negative counts (`TP`/`FP`/`FN`), never from each other: precision uses `zero_division` only when
@@ -756,6 +757,10 @@ changes the result here. `classification_metrics_from_confusion_matrix` accepts 
 finite/non-negative requirements; a `float64` matrix's row/column/total sums are computed the same
 canonical, order-independent way, and legal underflow anywhere in the resulting precision/recall/F1/
 accuracy arithmetic never depends on the caller's own `np.seterr`/`np.errstate` configuration.
+Re-ordering an explicit `labels` (with the confusion matrix's rows/columns permuted to match)
+changes the order of `average=None`'s per-class arrays, but never the bits of the `average="macro"`/
+`"weighted"` scalar aggregates -- both reduce through the same canonical, order-independent
+summation as the matrix/support sums above.
 
 This is a numeric core only: no plotting, no multilabel classification, and no `scikit-learn`
 dependency.
