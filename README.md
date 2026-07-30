@@ -909,11 +909,67 @@ fallback instead -- a deliberate, publicly-supported correctness trade-off, not 
 -- built on standard-library arbitrary-precision rational arithmetic, whose cost also depends on how
 large the underlying integer numerator/denominator representations grow, so it is not promised to
 run in strict `O(N)` time independent of the input values themselves; this slice covers binary
-ROC/PR/ROC-AUC/average-precision (with optional `sample_weight`) plus a generic trapezoidal `auc`
-helper: no multiclass score matrix, no averaging, no plotting, and no `sample_weight` for `auc`
-itself (it operates on curve points, not observations) or for `confusion_matrix`/
-`classification_metrics` (a separate, unresolved design question -- see those functions' own
-docstrings).
+ROC/PR/ROC-AUC/average-precision (with `sample_weight`) plus a generic trapezoidal `auc` helper: no
+`sample_weight` for `auc` itself (it operates on curve points, not observations) or for
+`confusion_matrix`/`classification_metrics` `average="micro"` on the ranking side (see below for
+multiclass score-level aggregation, which those binary functions do not perform themselves).
+
+Multiclass, one-vs-rest score aggregation -- `multiclass_roc_auc_score`/
+`multiclass_average_precision_score`:
+
+```python
+import numpy as np
+import improcv as im
+
+y_true = [0, 1, 2, 0, 1, 2, 0]
+labels = [0, 1, 2]
+y_score = np.array([  # (n_samples, n_classes) -- column i is class labels[i]'s OvR score
+    [0.90, 0.50, 0.30],
+    [0.20, 0.50, 0.55],
+    [0.10, 0.55, 0.20],
+    [0.85, 0.30, 0.60],
+    [0.30, 0.60, 0.45],
+    [0.05, 0.20, 0.10],
+    [0.75, 0.10, 0.65],
+])
+
+macro_auc = im.multiclass_roc_auc_score(y_true, y_score, labels=labels)  # average="macro" default
+per_class_auc = im.multiclass_roc_auc_score(y_true, y_score, labels=labels, average=None)
+weighted_ap = im.multiclass_average_precision_score(
+    y_true, y_score, labels=labels, average="weighted"
+)
+```
+
+These two functions build each class's score by composing the existing binary `roc_auc_score`/
+`average_precision_score` one column at a time -- `result[i]` (with `average=None`) is always
+bit-for-bit identical to calling the binary function directly on `y_score[:, i]` with
+`positive_label=labels[i]`, so every existing tie/overflow/underflow/`np.seterr`-isolation guarantee
+carries over unchanged; no separate ranking core or curve type was introduced for this. One-vs-rest
+only -- there is no one-vs-one mode and no `multi_class` parameter. `labels` is always required (no
+automatic inference from `y_true`, unlike `sklearn.metrics.roc_auc_score`'s multiclass mode) and
+fixes the exact column order: `y_score[:, i]` corresponds to `labels[i]`, in exactly the order
+given -- `labels` does not need to be sorted (`sklearn.metrics.roc_auc_score` additionally requires
+an explicit `labels` to already be in sorted order; this module's `labels` genuinely is a free
+column-order mapping instead). `y_score` must be a 2-D `ndarray` of shape `(n_samples,
+len(labels))` -- a nested Python sequence (list-of-lists, tuple-of-tuples) is rejected, not silently
+converted; call `np.asarray(...)` yourself first if needed. Scores are arbitrary finite ranking
+values, exactly like the binary functions' `y_score` -- there is no probability-simplex requirement
+(unlike `sklearn.metrics.roc_auc_score`'s multiclass mode, which requires each row to sum to `1.0`):
+each column's one-vs-rest score is computed entirely independently of the others, so no such
+requirement has a mathematical basis here. `average=None` returns a new, independent, read-only
+`float64` array aligned with `labels`; `average="macro"` (the default) is the unweighted,
+label-order-independent mean of the per-class array; `average="weighted"` weights each class by its
+effective support (`sample_weight`-summed if given, otherwise a plain count) -- `average="micro"` is
+not supported (it would compare score values across different columns on one shared scale, unlike
+`None`/`macro`/`weighted`, which are each invariant to a separate monotonic transform per column).
+`sample_weight` follows the exact same contract as the binary ranking functions (keyword-only,
+non-negative, at least one positive value, applied identically to every one-vs-rest column). Every
+label named in `labels` must have positive effective support -- a label with none raises `ValueError`
+naming every such label at once, never a silent skip, a `NaN`, or a warning (`sklearn.metrics.
+roc_auc_score` was verified directly to instead silently return `NaN` with only an easily-missed
+warning for a class absent from `y_true`). No public multiclass curve types are introduced --
+`roc_curve`/`precision_recall_curve` already give a single class's own curve when called with the
+matching score column and `positive_label`. No multilabel support.
 
 Augmentation sampling and replay -- flip:
 

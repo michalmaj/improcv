@@ -358,6 +358,58 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   sample_weight=w))`; scaling every weight by a positive constant stays only approximately
   invariant. No `sample_weight` for `auc(x, y)`, no multiclass/multilabel support, no new public
   types or functions, no new batch-aggregation helper, and no new dependency in this slice.
+- `improcv.evaluation`, Phase 5 slice: two new score-level multiclass, one-vs-rest ranking
+  aggregators -- `multiclass_roc_auc_score` and `multiclass_average_precision_score`. Both compose
+  the existing binary `roc_auc_score`/`average_precision_score` once per class column on
+  already-validated inputs, rather than reimplementing or duplicating their arithmetic, so
+  `result[i]` (with `average=None`) is always bit-for-bit identical to calling the matching binary
+  function directly on `y_score[:, i]` with `positive_label=labels[i]` -- every existing tie/
+  overflow/underflow/`np.seterr`-isolation guarantee of the binary ranking core applies here
+  unchanged, and the binary ranking core itself was not refactored or touched. `average` defaults to
+  `"macro"` (unlike the binary functions' implicit-`None`-equivalent design, these two always return
+  a plain Python `float` by default, matching the binary score functions' own "always a scalar"
+  contract); `average=None` must be requested explicitly and returns a new, independent, read-only
+  `float64` array aligned with `labels`. `labels` is required (no automatic inference from `y_true`,
+  unlike `sklearn.metrics.roc_auc_score`'s multiclass mode) and fixes the exact column order
+  (`y_score[:, i]` corresponds to `labels[i]`, in exactly the order given) -- `labels` does not need
+  to be sorted, a deliberate departure from `sklearn.metrics.roc_auc_score`, which additionally
+  requires an explicit `labels` to already be in sorted order (verified directly against its
+  source). `y_score` must be a 2-D `ndarray` of shape `(n_samples, len(labels))` -- a nested Python
+  sequence (list-of-lists, tuple-of-tuples) is rejected, not silently converted; a new
+  `_normalize_score_matrix` helper (with its own 2-D-aware exact-integer-representability check,
+  naming the offending `[row, column]`) explicitly forces the returned array to be C-contiguous via
+  `np.array(value, dtype=np.float64, order="C", copy=True)` rather than `value.astype(np.float64,
+  copy=True)`, since the latter was verified directly to preserve a non-C-contiguous input's own
+  memory layout instead of normalizing it. Scores are arbitrary finite ranking values with no
+  probability-simplex requirement -- unlike `sklearn.metrics.roc_auc_score`'s multiclass mode, which
+  was verified directly (via its source and empirically) to reject any score matrix whose rows do
+  not sum to `1.0`; each one-vs-rest column here is scored entirely independently of the others, so
+  that requirement has no mathematical basis in this design. One-vs-rest only: no one-vs-one mode
+  and no `multi_class` parameter (`sklearn`'s one-vs-one mode was verified directly to not support
+  `sample_weight`, `average=None`, or `"micro"` at all, confirming it is fundamentally more
+  restrictive, not just a style choice this project declined). `average="micro"` is not supported in
+  this slice -- unlike `None`/`"macro"`/`"weighted"`, which are each invariant to a separate,
+  strictly increasing transform of every column, `"micro"` compares raw score values across columns
+  on one shared scale (`sklearn`'s own `multi_class="ovr"`-only micro implementation was verified
+  directly to ravel the one-hot labels/scores and repeat `sample_weight` once per class). Every
+  label named in `labels` must have positive effective support (present in `y_true` with at least
+  one sample whose `sample_weight`, if given, is positive), checked once up front, before any
+  per-class computation -- a label with none raises `ValueError` naming every such label at once,
+  never a silent skip, a `NaN`, or a warning: `sklearn.metrics.roc_auc_score` was verified directly
+  to instead silently return `NaN` (with only an easily-missed `UndefinedMetricWarning`) for a class
+  absent from `y_true`, and to do so inconsistently between `average="macro"` (where that single
+  `NaN` poisons the whole aggregate) and `average="weighted"` (where it is instead silently masked
+  to contribute `0`) -- this design avoids that whole inconsistency by construction. Effective class
+  support (used for `average="weighted"`'s denominator) is computed via a canonical, sample-
+  permutation-invariant `math.fsum` over sorted weights, mirroring the same strategy already used
+  elsewhere in this module; an unrepresentable single-class total raises `ValueError` for
+  `average="weighted"` specifically, without invalidating `average=None`/`"macro"` if every
+  per-class score itself is still legal. `sample_weight` follows the exact same syntactic contract
+  as the binary ranking functions', applied identically (not repeated or rescaled) to every one-vs-
+  rest column. No public multiclass curve types were added (`roc_curve`/`precision_recall_curve`
+  already give a single class's own curve given the matching score column and `positive_label`); no
+  multilabel support; no new dependency in this slice; the binary ranking core
+  (`_compute_ranking_core`/`_compute_weighted_ranking_core`) was deliberately left untouched.
 
 ### Fixed
 - `improcv.evaluation`: `classification_metrics`/`classification_metrics_from_confusion_matrix`'s

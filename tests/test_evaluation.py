@@ -22,6 +22,8 @@ from improcv.evaluation import (
     classification_metrics,
     classification_metrics_from_confusion_matrix,
     confusion_matrix,
+    multiclass_average_precision_score,
+    multiclass_roc_auc_score,
     precision_recall_curve,
     roc_auc_score,
     roc_curve,
@@ -4200,3 +4202,674 @@ def test_classification_metrics_label_order_reducers_no_warning_under_seterr_war
             classification_metrics_from_confusion_matrix(confusion, average=average)
     finally:
         np.seterr(**previous)
+
+
+# --- multiclass one-vs-rest ROC AUC / average precision ---
+
+_MULTICLASS_FUNCTIONS = (multiclass_roc_auc_score, multiclass_average_precision_score)
+
+_MULTICLASS_Y_TRUE = [0, 1, 2, 0, 1, 2, 0]
+_MULTICLASS_LABELS = (0, 1, 2)
+_MULTICLASS_Y_SCORE = np.array(
+    [
+        [0.90, 0.50, 0.30],
+        [0.20, 0.50, 0.55],
+        [0.10, 0.55, 0.20],
+        [0.85, 0.30, 0.60],
+        [0.30, 0.60, 0.45],
+        [0.05, 0.20, 0.10],
+        [0.75, 0.10, 0.65],
+    ],
+    dtype=np.float64,
+)
+_MULTICLASS_SUPPORT = (3, 2, 2)
+
+
+def _independent_macro_mean(values: list[float]) -> float:
+    return math.fsum(sorted(values)) / len(values)
+
+
+def _independent_weighted_mean(values: list[float], weights: list[float]) -> float:
+    products = [value * weight for value, weight in zip(values, weights, strict=True)]
+    return math.fsum(sorted(products)) / math.fsum(sorted(weights))
+
+
+def test_multiclass_manual_example_roc_auc() -> None:
+    per_class = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    assert isinstance(per_class, np.ndarray)
+    np.testing.assert_allclose(per_class, [1.0, 0.85, 0.0])
+
+    macro_default = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    macro_explicit = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="macro"
+    )
+    weighted = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="weighted"
+    )
+
+    assert type(macro_default) is float
+    assert macro_default == macro_explicit
+    assert macro_default == pytest.approx(0.6166666666666667)
+    assert macro_default == _independent_macro_mean(list(per_class))
+    assert weighted == pytest.approx(0.6714285714285715)
+    assert weighted == _independent_weighted_mean(
+        list(per_class), [float(s) for s in _MULTICLASS_SUPPORT]
+    )
+
+
+def test_multiclass_manual_example_average_precision() -> None:
+    per_class = multiclass_average_precision_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    assert isinstance(per_class, np.ndarray)
+    np.testing.assert_allclose(per_class, [1.0, 0.75, 0.22619047619047616])
+
+    macro_default = multiclass_average_precision_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    macro_explicit = multiclass_average_precision_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="macro"
+    )
+    weighted = multiclass_average_precision_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="weighted"
+    )
+
+    assert type(macro_default) is float
+    assert macro_default == macro_explicit
+    assert macro_default == pytest.approx(0.6587301587301587)
+    assert macro_default == _independent_macro_mean(list(per_class))
+    assert weighted == pytest.approx(0.7074829931972789)
+    assert weighted == _independent_weighted_mean(
+        list(per_class), [float(s) for s in _MULTICLASS_SUPPORT]
+    )
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_default_average_is_macro(func) -> None:
+    default_result = func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    explicit_result = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="macro"
+    )
+    assert type(default_result) is float
+    assert default_result == explicit_result
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_average_none_is_explicit_only(func) -> None:
+    result = func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None)
+    assert isinstance(result, np.ndarray)
+    assert result.dtype == np.float64
+    assert result.shape == (3,)
+
+
+@pytest.mark.parametrize(
+    ("func", "binary_func"),
+    [
+        (multiclass_roc_auc_score, roc_auc_score),
+        (multiclass_average_precision_score, average_precision_score),
+    ],
+)
+def test_multiclass_per_class_bit_identical_to_binary(func, binary_func) -> None:
+    result = func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None)
+    for index, label in enumerate(_MULTICLASS_LABELS):
+        expected = binary_func(
+            _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE[:, index].tolist(), positive_label=label
+        )
+        assert result[index] == expected
+
+
+@pytest.mark.parametrize(
+    ("func", "binary_func"),
+    [
+        (multiclass_roc_auc_score, roc_auc_score),
+        (multiclass_average_precision_score, average_precision_score),
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.int32])
+def test_multiclass_per_class_bit_identical_to_binary_other_dtypes(
+    func, binary_func, dtype
+) -> None:
+    if np.issubdtype(dtype, np.integer):
+        y_true = [0, 1, 0, 1]
+        y_score = np.array([[9, 1], [2, 8], [7, 3], [1, 9]], dtype=dtype)
+    else:
+        y_true = [0, 1, 0, 1]
+        y_score = np.array([[0.9, 0.1], [0.2, 0.8], [0.7, 0.3], [0.1, 0.9]], dtype=dtype)
+    labels = (0, 1)
+
+    result = func(y_true, y_score, labels=labels, average=None)
+    for index, label in enumerate(labels):
+        column = np.array(y_score[:, index], dtype=dtype)
+        expected = binary_func(y_true, column, positive_label=label)
+        assert result[index] == expected
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_sample_weight_per_class_bit_identical_to_binary(func) -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    result = func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        average=None,
+        sample_weight=sample_weight,
+    )
+    binary_func = roc_auc_score if func is multiclass_roc_auc_score else average_precision_score
+    for index, label in enumerate(_MULTICLASS_LABELS):
+        expected = binary_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE[:, index].tolist(),
+            positive_label=label,
+            sample_weight=sample_weight,
+        )
+        assert result[index] == expected
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_column_label_permutation(func) -> None:
+    baseline_none = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    baseline_macro = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="macro"
+    )
+    baseline_weighted = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="weighted"
+    )
+
+    perm = [1, 2, 0]
+    permuted_labels = [_MULTICLASS_LABELS[i] for i in perm]
+    permuted_score = _MULTICLASS_Y_SCORE[:, perm]
+
+    permuted_none = func(_MULTICLASS_Y_TRUE, permuted_score, labels=permuted_labels, average=None)
+    permuted_macro = func(
+        _MULTICLASS_Y_TRUE, permuted_score, labels=permuted_labels, average="macro"
+    )
+    permuted_weighted = func(
+        _MULTICLASS_Y_TRUE, permuted_score, labels=permuted_labels, average="weighted"
+    )
+
+    for i, orig_index in enumerate(perm):
+        assert permuted_none[i] == baseline_none[orig_index]
+    assert permuted_macro == baseline_macro
+    assert permuted_weighted == baseline_weighted
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_sample_permutation_invariance(func) -> None:
+    rng = np.random.default_rng(0)
+    indices = np.arange(len(_MULTICLASS_Y_TRUE))
+    baseline_none = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    baseline_macro = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="macro"
+    )
+    baseline_weighted = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="weighted"
+    )
+    for _ in range(5):
+        rng.shuffle(indices)
+        permuted_true = [_MULTICLASS_Y_TRUE[i] for i in indices]
+        permuted_score = _MULTICLASS_Y_SCORE[indices, :]
+        assert_array_equal(
+            func(permuted_true, permuted_score, labels=_MULTICLASS_LABELS, average=None),
+            baseline_none,
+        )
+        assert (
+            func(permuted_true, permuted_score, labels=_MULTICLASS_LABELS, average="macro")
+            == baseline_macro
+        )
+        assert (
+            func(permuted_true, permuted_score, labels=_MULTICLASS_LABELS, average="weighted")
+            == baseline_weighted
+        )
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_per_column_monotonic_transform_invariance(func) -> None:
+    transformed = np.empty_like(_MULTICLASS_Y_SCORE)
+    transformed[:, 0] = _MULTICLASS_Y_SCORE[:, 0] * 2.0 + 1.0
+    transformed[:, 1] = _MULTICLASS_Y_SCORE[:, 1] * 10.0
+    transformed[:, 2] = _MULTICLASS_Y_SCORE[:, 2] + 100.0
+
+    baseline_none = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    transformed_none = func(
+        _MULTICLASS_Y_TRUE, transformed, labels=_MULTICLASS_LABELS, average=None
+    )
+    assert_array_equal(baseline_none, transformed_none)
+
+    for average in ("macro", "weighted"):
+        baseline = func(
+            _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=average
+        )
+        transformed_result = func(
+            _MULTICLASS_Y_TRUE, transformed, labels=_MULTICLASS_LABELS, average=average
+        )
+        assert baseline == transformed_result
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_all_ones_bit_identical_to_none(func) -> None:
+    ones = [1.0] * len(_MULTICLASS_Y_TRUE)
+    baseline = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    weighted_ones = func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        average=None,
+        sample_weight=ones,
+    )
+    assert_array_equal(baseline, weighted_ones)
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_integer_replication_bit_identical(func) -> None:
+    y_true = [0, 1, 0]
+    y_score = np.array([[0.9, 0.1], [0.2, 0.8], [0.7, 0.3]])
+    labels = (0, 1)
+    sample_weight = [1, 2, 3]
+
+    weighted = func(y_true, y_score, labels=labels, average=None, sample_weight=sample_weight)
+
+    replicated_true = [0] + [1, 1] + [0, 0, 0]
+    replicated_score = np.array([[0.9, 0.1]] + [[0.2, 0.8]] * 2 + [[0.7, 0.3]] * 3)
+    replicated = func(replicated_true, replicated_score, labels=labels, average=None)
+    assert_array_equal(weighted, replicated)
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_scaling_sample_weight_is_approximately_invariant(func) -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    scaled_weight = [w * 3.7 for w in sample_weight]
+    baseline = func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        average="weighted",
+        sample_weight=sample_weight,
+    )
+    scaled = func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        average="weighted",
+        sample_weight=scaled_weight,
+    )
+    assert scaled == pytest.approx(baseline)
+
+
+# --- score matrix contract: ndarray-only, contiguity, dtype ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_nested_list_score_matrix(func) -> None:
+    nested = [[0.9, 0.1], [0.2, 0.8], [0.7, 0.3]]
+    with pytest.raises(TypeError, match="nested"):
+        func([0, 1, 0], nested, labels=(0, 1))
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_tuple_of_tuples_score_matrix(func) -> None:
+    nested = ((0.9, 0.1), (0.2, 0.8), (0.7, 0.3))
+    with pytest.raises(TypeError, match="nested"):
+        func([0, 1, 0], nested, labels=(0, 1))
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_accepts_f_contiguous_score_matrix(func) -> None:
+    f_score = np.asfortranarray(_MULTICLASS_Y_SCORE)
+    assert not f_score.flags.c_contiguous
+    result = func(_MULTICLASS_Y_TRUE, f_score, labels=_MULTICLASS_LABELS, average=None)
+    expected = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_accepts_transposed_view_score_matrix(func) -> None:
+    transposed_source = _MULTICLASS_Y_SCORE.T.copy()
+    view = transposed_source.T
+    assert not view.flags.c_contiguous
+    result = func(_MULTICLASS_Y_TRUE, view, labels=_MULTICLASS_LABELS, average=None)
+    expected = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_accepts_noncontiguous_sliced_view(func) -> None:
+    padded = np.repeat(_MULTICLASS_Y_SCORE, 2, axis=1)  # every column duplicated, then sliced back
+    view = padded[:, ::2]
+    assert not view.flags.c_contiguous
+    result = func(_MULTICLASS_Y_TRUE, view, labels=_MULTICLASS_LABELS, average=None)
+    expected = func(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    assert_array_equal(result, expected)
+
+
+def test_normalize_score_matrix_result_is_c_contiguous() -> None:
+    from improcv import evaluation
+
+    f_score = np.asfortranarray(_MULTICLASS_Y_SCORE)
+    normalized = evaluation._normalize_score_matrix(f_score, 7, 3)
+    assert normalized.flags.c_contiguous
+    assert normalized.flags.writeable
+    assert not np.shares_memory(normalized, f_score)
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_integer_matrix_precision_error_names_row_column(func) -> None:
+    huge = 2**53 + 1
+    y_true = [0, 1, 0]
+    y_score = np.array([[1, 2], [3, 4], [huge, 6]], dtype=np.int64)
+    with pytest.raises(ValueError, match=r"\[2, 0\]"):
+        func(y_true, y_score, labels=(0, 1))
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+@pytest.mark.parametrize(
+    ("make_bad", "expected_exception"),
+    [
+        (lambda: np.array([[True, False], [False, True]]), TypeError),
+        (lambda: np.array([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]]), TypeError),
+        (lambda: np.array([[0.1, 0.2], [0.3, 0.4]], dtype=object), TypeError),
+        (lambda: np.array([[0.1, float("nan")], [0.3, 0.4]]), ValueError),
+        (lambda: np.array([[0.1, float("inf")], [0.3, 0.4]]), ValueError),
+    ],
+)
+def test_multiclass_rejects_bad_score_matrix_dtype(func, make_bad, expected_exception) -> None:
+    y_true = [0, 1]
+    with pytest.raises(expected_exception):
+        func(y_true, make_bad(), labels=(0, 1))
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+@pytest.mark.parametrize(
+    "make_bad",
+    [
+        lambda: np.array([0.1, 0.2, 0.3]),
+        lambda: np.array([[[0.1, 0.2]]]),
+        lambda: np.array(0.1),
+        lambda: np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]),
+    ],
+)
+def test_multiclass_rejects_bad_score_matrix_shape(func, make_bad) -> None:
+    y_true = [0, 1, 0]
+    with pytest.raises(ValueError):
+        func(y_true, make_bad(), labels=(0, 1))
+
+
+def test_multiclass_signed_zero_score_canonicalized() -> None:
+    from improcv import evaluation
+
+    matrix = np.array([[0.0, -0.0], [1.0, 1.0]])
+    normalized = evaluation._normalize_score_matrix(matrix, 2, 2)
+    assert np.signbit(normalized[0, 1]) == np.signbit(0.0)
+
+
+# --- labels contract ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_fewer_than_two_labels(func) -> None:
+    with pytest.raises(ValueError, match="at least 2 labels"):
+        func([0, 0], np.zeros((2, 1)), labels=[0])
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_duplicate_labels(func) -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        func([0, 1, 0], np.zeros((3, 3)), labels=[0, 1, 1])
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_empty_labels(func) -> None:
+    with pytest.raises(ValueError):
+        func([0, 1, 0], np.zeros((3, 0)), labels=[])
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_bool_label(func) -> None:
+    with pytest.raises(TypeError):
+        func([0, 1, 0], np.zeros((3, 2)), labels=[True, False])
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_labels_accept_arbitrary_order(func) -> None:
+    result_sorted = func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=(0, 1, 2), average=None)
+    reordered_score = _MULTICLASS_Y_SCORE[:, [2, 0, 1]]
+    result_reordered = func(_MULTICLASS_Y_TRUE, reordered_score, labels=(2, 0, 1), average=None)
+    assert result_reordered[0] == result_sorted[2]
+    assert result_reordered[1] == result_sorted[0]
+    assert result_reordered[2] == result_sorted[1]
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_y_true_value_outside_labels(func) -> None:
+    with pytest.raises(ValueError, match="not present in labels"):
+        func([0, 1, 99], np.zeros((3, 2)), labels=(0, 1))
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_zero_weight_sample_outside_labels_still_raises(func) -> None:
+    y_true = [0, 1, 99]
+    y_score = np.array([[0.9, 0.1], [0.2, 0.8], [0.5, 0.5]])
+    with pytest.raises(ValueError, match="not present in labels"):
+        func(y_true, y_score, labels=(0, 1), sample_weight=[1.0, 1.0, 0.0])
+
+
+# --- effective support / missing classes ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_missing_classes_reported_together(func) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = np.random.default_rng(0).random((4, 4))
+    with pytest.raises(ValueError, match=r"missing labels: \(2, 3\)"):
+        func(y_true, y_score, labels=(0, 1, 2, 3))
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_class_present_only_at_zero_weight_is_missing(func) -> None:
+    y_true = [0, 1, 2, 0, 1]
+    y_score = np.random.default_rng(0).random((5, 3))
+    sample_weight = [1.0, 1.0, 0.0, 1.0, 1.0]
+    with pytest.raises(ValueError, match=r"missing labels: \(2,\)"):
+        func(y_true, y_score, labels=(0, 1, 2), sample_weight=sample_weight)
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_all_weights_zero_rejected_by_existing_contract(func) -> None:
+    with pytest.raises(ValueError, match="sample_weight"):
+        func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=[0.0] * len(_MULTICLASS_Y_TRUE),
+        )
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_nan_in_zero_weight_row_still_raises(func) -> None:
+    y_true = [0, 1, 2, 0, 1]
+    y_score = np.array(
+        [
+            [0.9, 0.1, 0.2],
+            [0.2, 0.8, 0.1],
+            [float("nan"), float("nan"), float("nan")],
+            [0.7, 0.2, 0.1],
+            [0.1, 0.9, 0.2],
+        ]
+    )
+    sample_weight = [1.0, 1.0, 0.0, 1.0, 1.0]
+    with pytest.raises(ValueError, match="finite"):
+        func(y_true, y_score, labels=(0, 1, 2), sample_weight=sample_weight)
+
+
+# --- weighted support: canonical order-invariant summation ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_weighted_support_tie_order_invariant(func) -> None:
+    y_true = [0, 0, 0, 1, 1]
+    labels = (0, 1)
+    y_score = np.array(
+        [
+            [0.5, 0.1],
+            [0.5, 0.1],
+            [0.5, 0.1],
+            [0.2, 0.8],
+            [0.1, 0.9],
+        ]
+    )
+    weights_a = [1e16, 1.0, 1.0, 1.0, 1.0]
+    weights_b = [1.0, 1.0, 1e16, 1.0, 1.0]
+    result_a = func(y_true, y_score, labels=labels, average="weighted", sample_weight=weights_a)
+    result_b = func(y_true, y_score, labels=labels, average="weighted", sample_weight=weights_b)
+    assert result_a == result_b
+
+
+# --- weighted denominator overflow ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_weighted_denominator_overflow_only_affects_weighted(func) -> None:
+    huge = np.finfo(np.float64).max
+    y_true = [0, 1]
+    y_score = np.array([[0.9, 0.1], [0.2, 0.8]])
+    labels = (0, 1)
+    sample_weight = [huge, huge]
+
+    none_result = func(y_true, y_score, labels=labels, average=None, sample_weight=sample_weight)
+    assert np.all(np.isfinite(none_result))
+    macro_result = func(
+        y_true, y_score, labels=labels, average="macro", sample_weight=sample_weight
+    )
+    assert math.isfinite(macro_result)
+    with pytest.raises(ValueError, match="not representable"):
+        func(y_true, y_score, labels=labels, average="weighted", sample_weight=sample_weight)
+
+
+# --- dynamic range error wrapped with label/column context ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_dynamic_range_error_wrapped_with_context(func) -> None:
+    y_true = [0, 0, 0, 1, 1, 1]
+    labels = (0, 1)
+    y_score = np.array(
+        [
+            [0.9, 0.1],
+            [0.1, 0.9],
+            [0.05, 0.05],
+            [0.2, 0.8],
+            [0.3, 0.7],
+            [0.4, 0.6],
+        ]
+    )
+    sample_weight = [1e16, 1.0, 1.0, 1.0, 1.0, 1.0]
+    with pytest.raises(ValueError, match=r"failed to compute class label=0 from y_score column 0"):
+        func(y_true, y_score, labels=labels, sample_weight=sample_weight)
+
+
+# --- average=None result: independence, read-only, dtype ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_average_none_result_is_independent_and_read_only(func) -> None:
+    y_score = _MULTICLASS_Y_SCORE.copy()
+    result = func(_MULTICLASS_Y_TRUE, y_score, labels=_MULTICLASS_LABELS, average=None)
+    assert result.dtype == np.float64
+    assert not result.flags.writeable
+    with pytest.raises(ValueError):
+        result[0] = 0.0
+    assert not np.shares_memory(result, y_score)
+
+
+# --- invalid average ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_rejects_invalid_average(func) -> None:
+    with pytest.raises(ValueError):
+        func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="micro")
+
+
+# --- global np.seterr isolation ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+@pytest.mark.parametrize("average", [None, "macro", "weighted"])
+def test_multiclass_no_floating_point_error_under_seterr_raise(func, average) -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    previous = np.seterr(all="raise")
+    try:
+        func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            average=average,
+            sample_weight=sample_weight,
+        )
+        assert np.geterr() == {
+            "divide": "raise",
+            "over": "raise",
+            "under": "raise",
+            "invalid": "raise",
+        }
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+@pytest.mark.parametrize("average", [None, "macro", "weighted"])
+def test_multiclass_no_warning_under_seterr_warn(func, average) -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            func(
+                _MULTICLASS_Y_TRUE,
+                _MULTICLASS_Y_SCORE,
+                labels=_MULTICLASS_LABELS,
+                average=average,
+                sample_weight=sample_weight,
+            )
+    finally:
+        np.seterr(**previous)
+
+
+# --- no mutation ---
+
+
+@pytest.mark.parametrize("func", _MULTICLASS_FUNCTIONS)
+def test_multiclass_does_not_mutate_inputs(func) -> None:
+    y_true = list(_MULTICLASS_Y_TRUE)
+    y_true_copy = list(y_true)
+    y_score = _MULTICLASS_Y_SCORE.copy()
+    y_score_copy = y_score.copy()
+    labels = list(_MULTICLASS_LABELS)
+    labels_copy = list(labels)
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    sample_weight_copy = list(sample_weight)
+
+    func(y_true, y_score, labels=labels, sample_weight=sample_weight)
+
+    assert y_true == y_true_copy
+    assert_array_equal(y_score, y_score_copy)
+    assert labels == labels_copy
+    assert sample_weight == sample_weight_copy
