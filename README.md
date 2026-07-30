@@ -682,6 +682,14 @@ metrics = im.classification_metrics(
     labels=[0, 1],
     average=None,
 )
+
+# both accept an optional, keyword-only sample_weight too
+weighted_cm = im.confusion_matrix(
+    y_true=[0, 0, 1, 1],
+    y_pred=[0, 1, 1, 1],
+    labels=[0, 1],
+    sample_weight=[2.0, 1.0, 3.0, 4.0],
+)
 ```
 
 `confusion_matrix`/`classification_metrics` cover single-label multiclass classification with
@@ -724,8 +732,33 @@ and `confusion_matrix` with `labels=None` all require at least one observation. 
 matrix costs `O(len(labels) ** 2)` memory, so a very large explicit `labels` can exhaust process
 memory even though improcv checks the allocation is at least representable first.
 
-This is a numeric core only: no plotting, no multilabel classification, no sample weights, and no
-`scikit-learn` dependency.
+`confusion_matrix`/`classification_metrics` both accept an optional, keyword-only `sample_weight`
+(`None` by default). `ConfusionMatrixResult.matrix`/`ClassificationMetrics.support` are exactly
+`int64` when `sample_weight` was not given, exactly `float64` whenever it was -- even
+`sample_weight=[1.0, ...]` or an all-integer weight sequence, regardless of the weights' own dtype
+or values; dtype alone carries this information, so equality (`==`) compares both types' arrays
+purely by value, ignoring dtype (an `int64` matrix and a `float64` matrix holding the same numbers
+compare equal). A sample with `sample_weight == 0.0` contributes nothing to any cell and is
+removed before class inference: with `labels=None`, a class present only among zero-weight samples
+never appears as a row/column (an explicit `labels` including that class still gives it a
+well-defined, all-zero row/column, since explicit `labels` never depends on weights). An all-zero
+`sample_weight` is legal for `confusion_matrix` only together with an explicit `labels` (giving an
+all-zero `float64` matrix, mirroring the existing empty-input contract) -- `classification_metrics`
+always requires at least one positive weight, since it (unlike `confusion_matrix`) never has a
+well-defined empty/all-zero result. Matrix cells are built by grouping every same-cell sample and
+summing that group's weights once via `math.fsum` over the weights sorted first, not a plain,
+order-dependent running sum -- verified directly that both `np.bincount(..., weights=...)` and
+scikit-learn's own `confusion_matrix` can give a different final cell value depending on the order
+same-cell samples happen to appear in, for an extreme weight ratio -- so permuting the input never
+changes the result here. `classification_metrics_from_confusion_matrix` accepts a hand-built
+`float64` matrix exactly as readily as the `int64` one `confusion_matrix` returns without weights
+(even one holding only whole-number values -- dtype, not content, decides), with the same
+finite/non-negative requirements; a `float64` matrix's row/column/total sums are computed the same
+canonical, order-independent way, and legal underflow anywhere in the resulting precision/recall/F1/
+accuracy arithmetic never depends on the caller's own `np.seterr`/`np.errstate` configuration.
+
+This is a numeric core only: no plotting, no multilabel classification, and no `scikit-learn`
+dependency.
 
 Binary one-vs-rest ranking curves -- ROC, precision-recall, ROC AUC, and average precision:
 

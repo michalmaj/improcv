@@ -633,7 +633,8 @@ def test_from_confusion_matrix_consistent_with_direct_call() -> None:
 @pytest.mark.parametrize(
     "make_bad_matrix",
     [
-        lambda: np.eye(2, dtype=np.float64),
+        lambda: np.eye(2, dtype=np.float16),
+        lambda: np.eye(2, dtype=np.float32),
         lambda: np.eye(2, dtype=bool),
         lambda: np.eye(2, dtype=np.int32),
         lambda: np.eye(2, dtype=np.uint64),
@@ -643,6 +644,15 @@ def test_from_confusion_matrix_rejects_wrong_matrix_dtype(make_bad_matrix) -> No
     bad = ConfusionMatrixResult(matrix=make_bad_matrix(), labels=(0, 1))
     with pytest.raises(TypeError):
         classification_metrics_from_confusion_matrix(bad)
+
+
+def test_from_confusion_matrix_accepts_float64_matrix() -> None:
+    # A float64 matrix is a legal, weighted confusion matrix -- even with whole-number
+    # values, dtype (not content) decides that it is treated as weighted.
+    result = classification_metrics_from_confusion_matrix(
+        ConfusionMatrixResult(matrix=np.eye(2, dtype=np.float64), labels=(0, 1))
+    )
+    assert result.support.dtype == np.float64
 
 
 def test_from_confusion_matrix_rejects_non_square_matrix() -> None:
@@ -3435,3 +3445,506 @@ def test_precision_ratio_still_raises_on_genuine_invalid_operation() -> None:
             evaluation._precision_ratio(true_positive, false_positive)
     finally:
         np.seterr(**previous)
+
+
+# --- sample_weight for the confusion-matrix classification core ---
+
+_RAISE_STATE_CM = {"divide": "raise", "over": "raise", "under": "raise", "invalid": "raise"}
+
+
+@pytest.mark.parametrize(
+    ("make_sample_weight", "expected_exception"),
+    [
+        (lambda: (w for w in [1.0, 1.0, 1.0, 1.0]), TypeError),
+        (lambda: iter([1.0, 1.0, 1.0, 1.0]), TypeError),
+        (lambda: "abcd", TypeError),
+        (lambda: b"abcd", TypeError),
+        (lambda: np.array([True, False, True, False]), TypeError),
+        (lambda: np.array([1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j]), TypeError),
+        (lambda: np.array([1.0, 1.0, 1.0, 1.0], dtype=object), TypeError),
+        (lambda: np.array(1.0), ValueError),
+        (lambda: np.array([[1.0], [1.0], [1.0], [1.0]]), ValueError),
+        (lambda: [1.0, 1.0, float("nan"), 1.0], ValueError),
+        (lambda: [1.0, 1.0, float("inf"), 1.0], ValueError),
+        (lambda: [1.0, 1.0, Decimal("1.0"), 1.0], TypeError),
+        (lambda: [1.0, 1.0, Fraction(1, 1), 1.0], TypeError),
+        (lambda: [1.0, 1.0, True, 1.0], TypeError),
+        (lambda: [1.0, 1.0, -1.0, 1.0], ValueError),
+        (lambda: [1.0, 1.0, 1.0], ValueError),
+    ],
+)
+def test_confusion_matrix_rejects_bad_sample_weight(make_sample_weight, expected_exception) -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    with pytest.raises(expected_exception):
+        confusion_matrix(y_true, y_pred, sample_weight=make_sample_weight())
+    with pytest.raises(expected_exception):
+        classification_metrics(y_true, y_pred, sample_weight=make_sample_weight())
+
+
+@pytest.mark.parametrize("container", [list, tuple, _CustomSequence])
+def test_confusion_matrix_sample_weight_accepts_various_containers(container) -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    sample_weight = container([1.0, 2.0, 1.0, 3.0])
+    result = confusion_matrix(y_true, y_pred, sample_weight=sample_weight)
+    assert result.matrix.dtype == np.float64
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_confusion_matrix_sample_weight_accepts_floating_ndarray_dtypes(dtype) -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    sample_weight = np.array([1.0, 2.0, 1.0, 3.0], dtype=dtype)
+    result = confusion_matrix(y_true, y_pred, sample_weight=sample_weight)
+    assert result.matrix.dtype == np.float64
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint32])
+def test_confusion_matrix_sample_weight_accepts_integer_ndarray_dtypes(dtype) -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    sample_weight = np.array([1, 2, 1, 3], dtype=dtype)
+    result = confusion_matrix(y_true, y_pred, sample_weight=sample_weight)
+    assert result.matrix.dtype == np.float64
+
+
+def test_confusion_matrix_rejects_mismatched_sample_weight_length() -> None:
+    with pytest.raises(ValueError):
+        confusion_matrix([0, 1], [0, 1], sample_weight=[1.0])
+    with pytest.raises(ValueError):
+        classification_metrics([0, 1], [0, 1], sample_weight=[1.0])
+
+
+# --- empty input / all-zero weights ---
+
+
+def test_confusion_matrix_empty_weights_legal_with_explicit_labels() -> None:
+    result = confusion_matrix([], [], labels=[0, 1], sample_weight=[])
+    assert result.matrix.dtype == np.float64
+    assert_array_equal(result.matrix, np.zeros((2, 2)))
+    assert not result.matrix.flags.writeable
+
+
+def test_confusion_matrix_all_zero_weights_legal_with_explicit_labels() -> None:
+    result = confusion_matrix([0, 1], [0, 1], labels=[0, 1], sample_weight=[0.0, 0.0])
+    assert_array_equal(result.matrix, np.zeros((2, 2)))
+
+
+def test_confusion_matrix_all_zero_weights_with_inferred_labels_raises() -> None:
+    with pytest.raises(ValueError, match="labels"):
+        confusion_matrix([0, 1], [0, 1], sample_weight=[0.0, 0.0])
+
+
+def test_confusion_matrix_empty_weights_with_inferred_labels_raises() -> None:
+    with pytest.raises(ValueError):
+        confusion_matrix([], [], sample_weight=[])
+
+
+def test_classification_metrics_all_zero_weights_always_raises() -> None:
+    with pytest.raises(ValueError, match="sample_weight"):
+        classification_metrics([0, 1], [0, 1], sample_weight=[0.0, 0.0])
+    with pytest.raises(ValueError, match="sample_weight"):
+        classification_metrics([0, 1], [0, 1], labels=[0, 1], sample_weight=[0.0, 0.0])
+
+
+def test_classification_metrics_from_confusion_matrix_zero_total_raises() -> None:
+    zero_matrix = ConfusionMatrixResult(matrix=np.zeros((2, 2), dtype=np.float64), labels=(0, 1))
+    with pytest.raises(ValueError, match="positive total weight"):
+        classification_metrics_from_confusion_matrix(zero_matrix)
+
+
+# --- zero-weight sample semantics: labels inference and explicit-label validation ---
+
+
+def test_confusion_matrix_class_only_at_zero_weight_disappears() -> None:
+    result = confusion_matrix([0, 99], [0, 99], sample_weight=[1.0, 0.0])
+    assert result.labels == (0,)
+    assert_array_equal(result.matrix, [[1.0]])
+
+
+def test_confusion_matrix_zero_weight_sample_outside_explicit_labels_still_raises() -> None:
+    with pytest.raises(ValueError):
+        confusion_matrix([0, 99], [0, 99], labels=[0], sample_weight=[1.0, 0.0])
+
+
+def test_classification_metrics_zero_weight_sample_outside_explicit_labels_still_raises() -> None:
+    with pytest.raises(ValueError):
+        classification_metrics([0, 99], [0, 99], labels=[0], sample_weight=[1.0, 0.0])
+
+
+def test_confusion_matrix_class_only_at_zero_weight_legal_with_explicit_labels() -> None:
+    result = confusion_matrix([0, 99], [0, 99], labels=[0, 99], sample_weight=[1.0, 0.0])
+    assert result.labels == (0, 99)
+    assert_array_equal(result.matrix, [[1.0, 0.0], [0.0, 0.0]])
+
+
+# --- equality ignores dtype ---
+
+
+def test_confusion_matrix_result_equality_ignores_dtype() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    unweighted = confusion_matrix(y_true, y_pred)
+    weighted_ones = confusion_matrix(y_true, y_pred, sample_weight=[1.0, 1.0, 1.0, 1.0])
+    assert unweighted.matrix.dtype != weighted_ones.matrix.dtype
+    assert unweighted == weighted_ones
+
+    hand_built_int = ConfusionMatrixResult(matrix=np.array([[1, 2]], dtype=np.int64), labels=(0, 1))
+    hand_built_float = ConfusionMatrixResult(
+        matrix=np.array([[1.0, 2.0]], dtype=np.float64), labels=(0, 1)
+    )
+    assert hand_built_int == hand_built_float
+
+
+def test_classification_metrics_result_equality_ignores_support_dtype() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    unweighted = classification_metrics(y_true, y_pred, average=None)
+    weighted_ones = classification_metrics(
+        y_true, y_pred, sample_weight=[1.0, 1.0, 1.0, 1.0], average=None
+    )
+    assert unweighted.support.dtype != weighted_ones.support.dtype
+    assert unweighted == weighted_ones
+
+
+# --- within-cell permutation invariance (tie-order cancellation) ---
+
+
+def test_confusion_matrix_within_cell_permutation_is_bit_identical() -> None:
+    y_true = [0, 0, 0]
+    y_pred = [0, 0, 0]
+    weights_a = [1e16, 1.0, 1.0]
+    weights_b = [1.0, 1.0, 1e16]
+    m_a = confusion_matrix(y_true, y_pred, labels=[0, 1], sample_weight=weights_a)
+    m_b = confusion_matrix(y_true, y_pred, labels=[0, 1], sample_weight=weights_b)
+    assert_array_equal(m_a.matrix, m_b.matrix)
+    assert m_a.matrix[0, 0] == 1.0000000000000002e16
+
+
+def test_confusion_matrix_sample_permutation_is_bit_identical() -> None:
+    y_true = [0, 0, 1, 1, 0, 1]
+    y_pred = [0, 1, 0, 1, 0, 1]
+    weights = [3.0, 1.0, 2.0, 4.0, 1.0, 6.0]
+    baseline = confusion_matrix(y_true, y_pred, sample_weight=weights)
+
+    rng = np.random.default_rng(0)
+    indices = np.arange(len(y_true))
+    for _ in range(10):
+        rng.shuffle(indices)
+        permuted_true = [y_true[i] for i in indices]
+        permuted_pred = [y_pred[i] for i in indices]
+        permuted_weight = [weights[i] for i in indices]
+        permuted = confusion_matrix(permuted_true, permuted_pred, sample_weight=permuted_weight)
+        assert permuted == baseline
+
+
+# --- hand-derived example ---
+
+
+def test_confusion_matrix_sample_weight_manual_example() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    sample_weight = [2.0, 1.0, 3.0, 4.0]
+    result = confusion_matrix(y_true, y_pred, labels=[0, 1], sample_weight=sample_weight)
+    assert_array_equal(result.matrix, [[2.0, 1.0], [3.0, 4.0]])
+
+
+def test_classification_metrics_sample_weight_manual_example() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    sample_weight = [2.0, 1.0, 3.0, 4.0]
+
+    per_class = classification_metrics(
+        y_true, y_pred, labels=[0, 1], sample_weight=sample_weight, average=None
+    )
+    assert_array_equal(per_class.support, [3.0, 7.0])
+    assert per_class.accuracy == pytest.approx(0.6)
+    assert_array_equal(per_class.precision, [0.4, 0.8])
+    np.testing.assert_allclose(per_class.recall, [2 / 3, 4 / 7])
+    assert isinstance(per_class.f1, np.ndarray)
+    assert per_class.f1[0] == pytest.approx(0.5)
+    np.testing.assert_allclose(per_class.f1, [0.5, 2 / 3])
+
+    micro = classification_metrics(
+        y_true, y_pred, labels=[0, 1], sample_weight=sample_weight, average="micro"
+    )
+    assert micro.precision == pytest.approx(0.6)
+    assert micro.recall == pytest.approx(0.6)
+    assert micro.f1 == pytest.approx(0.6)
+    assert micro.precision == pytest.approx(micro.accuracy)
+
+    macro = classification_metrics(
+        y_true, y_pred, labels=[0, 1], sample_weight=sample_weight, average="macro"
+    )
+    assert macro.precision == pytest.approx(0.6)
+    assert macro.recall == pytest.approx((2 / 3 + 4 / 7) / 2)
+    assert macro.f1 == pytest.approx((0.5 + 2 / 3) / 2)
+
+    weighted = classification_metrics(
+        y_true, y_pred, labels=[0, 1], sample_weight=sample_weight, average="weighted"
+    )
+    assert weighted.precision == pytest.approx(0.68)
+    assert weighted.recall == pytest.approx(0.6)
+    assert weighted.recall == pytest.approx(weighted.accuracy)
+
+
+# --- hand-built float64/int64/bad-dtype matrices ---
+
+
+def test_from_confusion_matrix_float64_whole_number_values_still_weighted() -> None:
+    matrix = np.array([[2.0, 1.0], [3.0, 4.0]], dtype=np.float64)
+    result = classification_metrics_from_confusion_matrix(
+        ConfusionMatrixResult(matrix=matrix, labels=(0, 1)), average=None
+    )
+    assert result.support.dtype == np.float64
+    assert_array_equal(result.support, [3.0, 7.0])
+
+
+def test_from_confusion_matrix_rejects_nan_float64_matrix() -> None:
+    matrix = np.array([[np.nan, 1.0], [1.0, 1.0]], dtype=np.float64)
+    with pytest.raises(ValueError, match="finite"):
+        classification_metrics_from_confusion_matrix(
+            ConfusionMatrixResult(matrix=matrix, labels=(0, 1))
+        )
+
+
+def test_from_confusion_matrix_rejects_inf_float64_matrix() -> None:
+    matrix = np.array([[np.inf, 1.0], [1.0, 1.0]], dtype=np.float64)
+    with pytest.raises(ValueError, match="finite"):
+        classification_metrics_from_confusion_matrix(
+            ConfusionMatrixResult(matrix=matrix, labels=(0, 1))
+        )
+
+
+def test_from_confusion_matrix_rejects_negative_float64_matrix() -> None:
+    matrix = np.array([[-1.0, 1.0], [1.0, 1.0]], dtype=np.float64)
+    with pytest.raises(ValueError, match="negative"):
+        classification_metrics_from_confusion_matrix(
+            ConfusionMatrixResult(matrix=matrix, labels=(0, 1))
+        )
+
+
+# --- overflow: single cell, and finite-cells-but-non-representable-total ---
+
+
+def test_confusion_matrix_single_cell_overflow_raises() -> None:
+    huge = np.finfo(np.float64).max
+    with pytest.raises(ValueError, match="not representable"):
+        confusion_matrix([0, 0, 0], [0, 0, 0], labels=[0], sample_weight=[huge, huge, huge])
+
+
+def test_confusion_matrix_finite_cells_non_representable_total_still_builds() -> None:
+    huge = np.finfo(np.float64).max
+    # Four distinct cells (one sample each) -- no single cell's own sum overflows, but the
+    # matrix's flat total (4 * huge) is not representable as a finite float64.
+    result = confusion_matrix(
+        [0, 0, 1, 1], [0, 1, 0, 1], labels=[0, 1], sample_weight=[huge, huge, huge, huge]
+    )
+    assert np.all(np.isfinite(result.matrix))
+
+
+def test_classification_metrics_non_representable_total_raises() -> None:
+    huge = np.finfo(np.float64).max
+    with pytest.raises(ValueError, match="not representable"):
+        classification_metrics(
+            [0, 0, 1, 1], [0, 1, 0, 1], labels=[0, 1], sample_weight=[huge, huge, huge, huge]
+        )
+
+
+def test_from_confusion_matrix_non_representable_total_raises() -> None:
+    huge = np.finfo(np.float64).max
+    matrix = np.array([[huge, huge], [huge, huge]], dtype=np.float64)
+    with pytest.raises(ValueError, match="not representable"):
+        classification_metrics_from_confusion_matrix(
+            ConfusionMatrixResult(matrix=matrix, labels=(0, 1))
+        )
+
+
+# --- stable F1 ---
+
+
+def test_from_confusion_matrix_stable_f1_at_max_gives_one() -> None:
+    huge = np.finfo(np.float64).max
+    matrix = np.array([[huge]], dtype=np.float64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = classification_metrics_from_confusion_matrix(
+            ConfusionMatrixResult(matrix=matrix, labels=(0,)), average=None
+        )
+    assert isinstance(result.f1, np.ndarray)
+    assert isinstance(result.precision, np.ndarray)
+    assert isinstance(result.recall, np.ndarray)
+    assert result.f1[0] == 1.0
+    assert result.precision[0] == 1.0
+    assert result.recall[0] == 1.0
+    assert result.accuracy == 1.0
+
+
+def test_from_confusion_matrix_stable_f1_asymmetric_extreme() -> None:
+    huge = np.finfo(np.float64).max
+    # Class 0's row_sum/col_sum are each huge (row_sum+col_sum would overflow naively); class 1
+    # is an ordinary, well-behaved class in the same matrix (row_sum/col_sum >= tp always, so a
+    # huge tp with a small row/col is not constructible -- this instead checks that one class's
+    # extreme dynamic range doesn't disturb another, ordinary class's F1 in the same matrix).
+    matrix = np.array([[huge, 0.0], [0.0, 1.0]], dtype=np.float64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = classification_metrics_from_confusion_matrix(
+            ConfusionMatrixResult(matrix=matrix, labels=(0, 1)), average=None
+        )
+    assert isinstance(result.f1, np.ndarray)
+    assert result.f1[0] == 1.0
+    assert result.f1[1] == 1.0
+    assert np.all(np.isfinite(result.f1))
+
+
+# --- global np.seterr isolation, for every average ---
+
+
+@pytest.mark.parametrize("average", [None, "micro", "macro", "weighted"])
+def test_classification_metrics_weighted_no_floating_point_error_under_seterr_raise(
+    average,
+) -> None:
+    y_true = [0, 0, 1, 1, 2]
+    y_pred = [0, 1, 0, 1, 2]
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 5.0]
+    previous = np.seterr(all="raise")
+    try:
+        classification_metrics(y_true, y_pred, sample_weight=sample_weight, average=average)
+        assert np.geterr() == _RAISE_STATE_CM
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+
+@pytest.mark.parametrize("average", [None, "micro", "macro", "weighted"])
+def test_classification_metrics_weighted_no_warning_under_seterr_warn(average) -> None:
+    y_true = [0, 0, 1, 1, 2]
+    y_pred = [0, 1, 0, 1, 2]
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 5.0]
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            classification_metrics(y_true, y_pred, sample_weight=sample_weight, average=average)
+    finally:
+        np.seterr(**previous)
+
+
+@pytest.mark.parametrize("average", [None, "micro", "macro", "weighted"])
+def test_from_confusion_matrix_extreme_no_floating_point_error_under_seterr_raise(average) -> None:
+    huge = np.finfo(np.float64).max
+    tiny = np.nextafter(0.0, 1.0)
+    matrix = np.array([[huge, tiny], [tiny, 1.0]], dtype=np.float64)
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0, 1))
+    previous = np.seterr(all="raise")
+    try:
+        classification_metrics_from_confusion_matrix(confusion, average=average)
+        assert np.geterr() == _RAISE_STATE_CM
+    finally:
+        np.seterr(**previous)
+    assert np.geterr() == previous
+
+
+@pytest.mark.parametrize("average", [None, "micro", "macro", "weighted"])
+def test_from_confusion_matrix_extreme_no_warning_under_seterr_warn(average) -> None:
+    huge = np.finfo(np.float64).max
+    tiny = np.nextafter(0.0, 1.0)
+    matrix = np.array([[huge, tiny], [tiny, 1.0]], dtype=np.float64)
+    confusion = ConfusionMatrixResult(matrix=matrix, labels=(0, 1))
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            classification_metrics_from_confusion_matrix(confusion, average=average)
+    finally:
+        np.seterr(**previous)
+
+
+# --- relations ---
+
+
+def test_confusion_matrix_sample_weight_none_is_same_as_omitting_it() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    assert confusion_matrix(y_true, y_pred) == confusion_matrix(y_true, y_pred, sample_weight=None)
+    assert classification_metrics(y_true, y_pred) == classification_metrics(
+        y_true, y_pred, sample_weight=None
+    )
+
+
+def test_confusion_matrix_all_ones_value_identical_to_unweighted() -> None:
+    y_true = [0, 0, 1, 1, 2]
+    y_pred = [0, 1, 0, 1, 2]
+    unweighted = confusion_matrix(y_true, y_pred)
+    ones = confusion_matrix(y_true, y_pred, sample_weight=[1.0] * len(y_true))
+    assert_array_equal(unweighted.matrix, ones.matrix)
+    assert unweighted == ones
+
+
+def test_confusion_matrix_small_integer_weights_identical_to_physical_replication() -> None:
+    y_true = [1, 0, 1]
+    y_pred = [1, 0, 0]
+    sample_weight = [1, 2, 3]
+    weighted = confusion_matrix(y_true, y_pred, sample_weight=sample_weight)
+
+    replicated_true = [1] + [0, 0] + [1, 1, 1]
+    replicated_pred = [1] + [0, 0] + [0, 0, 0]
+    replicated = confusion_matrix(replicated_true, replicated_pred)
+    assert_array_equal(weighted.matrix, replicated.matrix)
+
+
+def test_classification_metrics_direct_bit_exact_with_from_confusion_matrix() -> None:
+    y_true = [1, 0, 1, 2, 0]
+    y_pred = [1, 0, 0, 2, 1]
+    sample_weight = [2.0, 1.0, 3.0, 4.0, 1.0]
+    for average in (None, "micro", "macro", "weighted"):
+        direct = classification_metrics(
+            y_true, y_pred, sample_weight=sample_weight, average=average
+        )
+        cm = confusion_matrix(y_true, y_pred, sample_weight=sample_weight)
+        from_matrix = classification_metrics_from_confusion_matrix(cm, average=average)
+        assert direct == from_matrix
+
+
+def test_confusion_matrix_scaling_weights_is_approximately_invariant() -> None:
+    y_true = [0, 0, 1, 1, 0, 1]
+    y_pred = [0, 1, 0, 1, 0, 1]
+    sample_weight = [3.0, 1.0, 2.0, 4.0, 1.0, 6.0]
+    scaled_weight = [w * 3.7 for w in sample_weight]
+
+    baseline = classification_metrics(
+        y_true, y_pred, sample_weight=sample_weight, average="weighted"
+    )
+    scaled = classification_metrics(y_true, y_pred, sample_weight=scaled_weight, average="weighted")
+    assert scaled.precision == pytest.approx(baseline.precision)
+    assert scaled.recall == pytest.approx(baseline.recall)
+    assert scaled.f1 == pytest.approx(baseline.f1)
+    assert scaled.accuracy == pytest.approx(baseline.accuracy)
+
+
+def test_confusion_matrix_zero_weight_insertion_invariance() -> None:
+    # Inserting a zero-weight sample of an already-present class must not change the result --
+    # explicit labels still reject a zero-weight sample with a genuinely new, out-of-labels
+    # class (tested separately above), so this uses an existing label instead.
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 0, 1]
+    sample_weight = [2.0, 1.0, 3.0, 4.0]
+    baseline = confusion_matrix(y_true, y_pred, labels=[0, 1], sample_weight=sample_weight)
+
+    y_true_with_zero = [*y_true, 0]
+    y_pred_with_zero = [*y_pred, 1]
+    sample_weight_with_zero = [*sample_weight, 0.0]
+    with_zero_sample = confusion_matrix(
+        y_true_with_zero, y_pred_with_zero, labels=[0, 1], sample_weight=sample_weight_with_zero
+    )
+    assert baseline == with_zero_sample
+
+    # Also holds with labels=None, where a zero-weight sample of a brand-new class must not
+    # appear in the inferred label universe at all.
+    baseline_inferred = confusion_matrix(y_true, y_pred, sample_weight=sample_weight)
+    with_zero_new_class = confusion_matrix(
+        [*y_true, 5], [*y_pred, 5], sample_weight=[*sample_weight, 0.0]
+    )
+    assert baseline_inferred == with_zero_new_class

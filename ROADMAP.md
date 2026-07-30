@@ -54,9 +54,9 @@ version decided at the time each is actually published, rather than mechanically
   `auc(x, y)` helper implemented, also covering trapezoidal PR-curve area through the supported
   composition `auc(curve.recall, curve.precision)` -- no separate score-level function for it was
   added, deliberately, to avoid a symbol that could be confused with `average_precision_score`;
-  `sample_weight` for the four binary ranking functions implemented; multiclass ranking
-  curves/averaging and `sample_weight` for `confusion_matrix`/`classification_metrics` remain
-  planned, not started, see [CHANGELOG.md](CHANGELOG.md)), image augmentation
+  `sample_weight` for the four binary ranking functions and for `confusion_matrix`/
+  `classification_metrics` implemented; multiclass ranking curves/averaging remain planned, not
+  started, see [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-scale sampling/replay implemented; perspective, anisotropic
   scale, and canvas expansion remain planned, not started), and dataset discovery (deterministic,
