@@ -542,17 +542,22 @@ def classification_metrics_from_confusion_matrix(
     the mean). `average="weighted"` is the mean weighted by `support`; for
     this same single-label multiclass case, weighted recall is always
     numerically equal to `accuracy` (also not special-cased, and also only
-    up to rounding for a `float64` matrix).
+    up to rounding for a `float64` matrix). Both `"macro"` and `"weighted"`
+    reduce through a canonical, order-independent summation (`math.fsum`
+    over the values/products sorted first), so re-ordering an explicit
+    `labels` (with the confusion matrix's rows/columns permuted to match)
+    changes the order of `average=None`'s per-class arrays but never the
+    bits of these two scalar aggregates.
 
     `zero_division="nan"` makes every undefined per-class value `NaN`;
-    `"macro"`/`"weighted"` then use plain averaging (`np.mean`/a weighted
-    sum), never `np.nanmean` or another NaN-skipping reduction -- so a
-    single `NaN` per-class value makes the whole aggregate `NaN`, including
-    under `"weighted"` when that class's own support (and therefore weight)
-    is zero: `NaN * 0` is still `NaN` in IEEE 754 arithmetic, and this
-    function does not mask that away. If you want zero-support classes
-    excluded from an aggregate instead, filter `confusion.labels` yourself
-    before calling this function.
+    `"macro"`/`"weighted"` then use plain averaging, never `np.nanmean` or
+    another NaN-skipping reduction -- so a single `NaN` per-class value
+    makes the whole aggregate `NaN`, including under `"weighted"` when that
+    class's own support (and therefore weight) is zero: checked explicitly
+    before any per-class value is combined into the aggregate, not left to
+    incidentally fall out of `NaN * 0` being `NaN` in IEEE 754 arithmetic.
+    If you want zero-support classes excluded from an aggregate instead,
+    filter `confusion.labels` yourself before calling this function.
 
     Raises
     ------
@@ -678,16 +683,16 @@ def _compute_classification_metrics(
     elif average == "macro":
         result = ClassificationMetrics(
             labels=labels,
-            precision=float(np.mean(precision_per_class)),
-            recall=float(np.mean(recall_per_class)),
-            f1=float(np.mean(f1_per_class)),
+            precision=_canonical_mean(precision_per_class),
+            recall=_canonical_mean(recall_per_class),
+            f1=_canonical_mean(f1_per_class),
             support=support,
             accuracy=accuracy,
             average="macro",
         )
     else:
         weights = support.astype(np.float64)
-        total_weight = float(weights.sum())
+        total_weight = math.fsum(sorted(weights.tolist()))
         result = ClassificationMetrics(
             labels=labels,
             precision=_weighted_average(precision_per_class, weights, total_weight),
@@ -848,9 +853,9 @@ def _compute_weighted_classification_metrics(
         with np.errstate(under="ignore"):
             result = ClassificationMetrics(
                 labels=labels,
-                precision=float(np.mean(precision_per_class)),
-                recall=float(np.mean(recall_per_class)),
-                f1=float(np.mean(f1_per_class)),
+                precision=_canonical_mean(precision_per_class),
+                recall=_canonical_mean(recall_per_class),
+                f1=_canonical_mean(f1_per_class),
                 support=support,
                 accuracy=accuracy,
                 average="macro",
@@ -872,8 +877,56 @@ def _compute_weighted_classification_metrics(
     return result
 
 
-def _weighted_average(values: np.ndarray, weights: np.ndarray, total_weight: float) -> float:
-    return float(np.sum(values * weights) / total_weight)
+def _canonical_mean(values: npt.NDArray[np.float64]) -> float:
+    """Mean of `values`, independent of `values`' own order -- unlike `np.mean`, whose underlying
+    `float64` summation can give a different final bit pattern for the same multiset of values in
+    a different order (verified directly: permuting a confusion matrix's classes, and permuting
+    the corresponding per-class array the same way, previously changed `average="macro"`'s result
+    by up to a few ULP even though the *set* of per-class values was identical -- only their
+    presentation order, driven by `labels`' order, had changed).
+
+    NaN is checked explicitly first, before sorting: comparisons against NaN are always `False`,
+    so `sorted()` on a list containing one does not raise, but gives an unspecified, order-
+    dependent placement for it -- exactly the non-determinism this function exists to eliminate.
+    Returning plain `math.nan` directly instead keeps this module's existing "one undefined class
+    makes the whole macro aggregate NaN" contract explicit, rather than incidentally correct.
+
+    `values` is never empty -- a confusion matrix always has at least one class -- so this never
+    divides by zero.
+    """
+    if np.any(np.isnan(values)):
+        return math.nan
+    return math.fsum(sorted(values.tolist())) / values.shape[0]
+
+
+def _weighted_average(
+    values: npt.NDArray[np.float64], weights: npt.NDArray[np.float64], total_weight: float
+) -> float:
+    """`sum(value * weight for value, weight in zip(values, weights)) / total_weight`,
+    independent of `values`'/`weights`' own order -- unlike `np.sum(values * weights) /
+    total_weight`, whose underlying `float64` summation of the elementwise products can give a
+    different final bit pattern for the same multiset of `(value, weight)` pairs in a different
+    order (the same class of bug `_canonical_mean` fixes for `average="macro"`, here for
+    `average="weighted"`).
+
+    NaN is checked explicitly first, before building any product: an undefined per-class `value`
+    (from `zero_division="nan"`) must make the whole aggregate `NaN` even when its own `weight`
+    (support) is `0.0` -- `NaN * 0.0` is already `NaN` under IEEE 754, but relying on that instead
+    of checking explicitly would be relying on incidental behavior of the exact expression below,
+    rather than a contract this function states and keeps regardless of how the products are
+    computed. Each product is built as a plain Python `float` (not a NumPy scalar) so `sorted()`
+    orders them canonically before `math.fsum` -- sorting `values`/`weights` separately would not
+    establish a canonical order for the *products*, which are the actual terms being summed.
+
+    Callers are responsible for `values`/`weights` sharing one non-empty length, `weights` being
+    finite and non-negative, and `total_weight` being finite and positive -- this function does
+    not re-validate any of that itself.
+    """
+    if np.any(np.isnan(values)):
+        return math.nan
+
+    terms = [float(value) * float(weight) for value, weight in zip(values, weights, strict=True)]
+    return math.fsum(sorted(terms)) / total_weight
 
 
 def _safe_divide_array(
