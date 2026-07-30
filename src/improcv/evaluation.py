@@ -1923,12 +1923,41 @@ def _check_multiclass_score_postconditions(
         raise RuntimeError("internal error: per-class multiclass scores are writeable")
 
 
+def _flatten_multiclass_ovr(
+    true_list: list[int],
+    labels_tuple: tuple[int, ...],
+    score_matrix: npt.NDArray[np.float64],
+    weights: npt.NDArray[np.float64] | None,
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64], npt.NDArray[np.float64] | None]:
+    """Flatten a one-vs-rest multiclass ranking problem into one binary ranking problem, for
+    `average="micro"`.
+
+    Builds the C-order one-hot target aligned with `score_matrix.ravel(order="C")`: flat cell
+    `i * n_classes + j` is positive (`1`) exactly when `true_list[i] == labels_tuple[j]`, negative
+    (`0`) otherwise -- one positive cell per sample, every other cell in that sample's row
+    negative. `score_matrix` is already C-contiguous (`_normalize_score_matrix`'s own guarantee),
+    so `.ravel(order="C")` returns a view, not a copy. `weights`, when given, is repeated
+    (`np.repeat`, not `np.tile`) once per class, so a sample's weight applies identically to every
+    cell it contributes -- `np.repeat([w0, w1], 3)` gives `[w0, w0, w0, w1, w1, w1]`, matching this
+    C-order layout; `np.tile` would instead match an F-order (class-major) flatten, which this is
+    not.
+    """
+    n_classes = len(labels_tuple)
+    label_to_column = {label: column for column, label in enumerate(labels_tuple)}
+    flat_true = np.zeros(score_matrix.size, dtype=np.int64)
+    for row, true_label in enumerate(true_list):
+        flat_true[row * n_classes + label_to_column[true_label]] = 1
+    flat_score = score_matrix.ravel(order="C")
+    flat_weight = None if weights is None else np.repeat(weights, n_classes)
+    return flat_true, flat_score, flat_weight
+
+
 def multiclass_roc_auc_score(
     y_true: Sequence[int] | npt.NDArray[np.integer],
     y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
     *,
     labels: Sequence[int] | npt.NDArray[np.integer],
-    average: Literal["macro", "weighted"] | None = "macro",
+    average: Literal["macro", "weighted", "micro"] | None = "macro",
     sample_weight: Sequence[float]
     | npt.NDArray[np.floating]
     | npt.NDArray[np.integer]
@@ -1943,24 +1972,31 @@ def multiclass_roc_auc_score(
     `[0, 1]` or to sum to `1.0` across a row: unlike `sklearn.metrics.roc_auc_score`'s multiclass
     mode, which requires `y_score` to hold calibrated probabilities summing to `1.0` per row, this
     function computes each column's one-vs-rest AUC entirely independently of the other columns,
-    so no such requirement has any mathematical basis here). `labels` is required (no automatic
-    inference from `y_true`, unlike scikit-learn) and fixes the exact column order: `y_score[:,
-    i]` corresponds to `labels[i]`, in exactly the order given -- `labels` does not need to be
-    sorted (another deliberate departure from `sklearn.metrics.roc_auc_score`, which additionally
-    requires an explicit `labels` to already be in sorted order). This is one-vs-rest only: there
-    is no one-vs-one mode and no `multi_class` parameter.
+    so no such requirement has any mathematical basis for `None`/`"macro"`/`"weighted"`; see below
+    for the one requirement `"micro"` does add). `labels` is required (no automatic inference from
+    `y_true`, unlike scikit-learn) and fixes the exact column order: `y_score[:, i]` corresponds to
+    `labels[i]`, in exactly the order given -- `labels` does not need to be sorted (another
+    deliberate departure from `sklearn.metrics.roc_auc_score`, which additionally requires an
+    explicit `labels` to already be in sorted order). This is one-vs-rest only: there is no
+    one-vs-one mode and no `multi_class` parameter.
 
-    Every class named in `labels` must have positive effective support (present in `y_true` with
-    at least one sample whose `sample_weight`, if given, is positive) -- a class with no effective
-    support raises `ValueError` naming every such label at once, never a silent skip, a `NaN`, or
-    a warning (unlike `sklearn.metrics.roc_auc_score`, verified directly to silently return `NaN`
-    with only an easily-missed `UndefinedMetricWarning` for a class absent from `y_true`, and to do
-    so inconsistently between `average="macro"` -- where that single `NaN` poisons the whole
-    aggregate -- and `average="weighted"` -- where it is instead silently masked to contribute
-    `0`). Once every named label has positive effective support, and there are at least 2 of them,
-    every class also has positive effective *negative* support automatically (the other classes'
-    effective samples) -- `roc_curve`'s own per-class negative-support check remains in place as a
-    second line of defense, but is never expected to trigger here.
+    For `average=None`/`"macro"`/`"weighted"`, every class named in `labels` must have positive
+    effective support (present in `y_true` with at least one sample whose `sample_weight`, if
+    given, is positive) -- a class with no effective support raises `ValueError` naming every such
+    label at once, never a silent skip, a `NaN`, or a warning (unlike `sklearn.metrics.roc_auc_
+    score`, verified directly to silently return `NaN` with only an easily-missed
+    `UndefinedMetricWarning` for a class absent from `y_true`, and to do so inconsistently between
+    `average="macro"` -- where that single `NaN` poisons the whole aggregate -- and `average=
+    "weighted"` -- where it is instead silently masked to contribute `0`). Once every named label
+    has positive effective support, and there are at least 2 of them, every class also has positive
+    effective *negative* support automatically (the other classes' effective samples) --
+    `roc_curve`'s own per-class negative-support check remains in place as a second line of
+    defense, but is never expected to trigger here. `average="micro"` does *not* require per-class
+    effective support -- a class absent from `y_true` (or present only in zero-weight rows)
+    contributes purely negative cells to the flattened problem below, which is mathematically well
+    defined as long as `y_true` is non-empty, `labels` has at least 2 entries, and every `y_true`
+    value is one of `labels` (all already required unconditionally above); a single effectively
+    present class is likewise legal for `"micro"`.
 
     `average=None` returns a new, independent, read-only `float64` array aligned with `labels`;
     `result[i]` is bit-for-bit identical to calling `roc_auc_score(y_true, y_score[:, i],
@@ -1973,10 +2009,26 @@ def multiclass_roc_auc_score(
     "weighted"` weights each class by its effective support (canonically summed the same way);
     for `sample_weight=None` this is each class's plain sample count.
 
+    `average="micro"` is *not* an average of per-class scores: it flattens the one-hot target and
+    the score matrix into one shared binary ranking problem (row-major/C-order: sample `i`'s `j`th
+    class occupies flat position `i * len(labels) + j`, positive exactly when `y_true[i] ==
+    labels[j]`) and calls `roc_auc_score` once on the result -- bit-for-bit identical to calling
+    `roc_auc_score(flat_true, flat_score, positive_label=1, sample_weight=flat_weight)` directly
+    on that independently-built flatten. Because it compares raw score values across different
+    columns directly (rather than reducing each column's own ranking to a single number first),
+    `"micro"` assumes those columns share a common, comparable scale -- unlike `None`/`"macro"`/
+    `"weighted"`, which tolerate an independent strictly increasing transform per column, `"micro"`
+    is only invariant to a single strictly increasing transform applied to the whole matrix at
+    once. This does not require a probability simplex (no row is required to sum to `1.0`) -- only
+    a shared scale, which arbitrary decision scores or logits can have without summing to 1.
+
     `sample_weight` follows the same contract as the binary ranking functions' `sample_weight`
     (keyword-only, `Sequence`/1-D `ndarray`, length `n_samples`, non-negative, at least one
     positive value, `bool` rejected, exact-integer-to-`float64`) -- the same weight for a sample
-    is used identically across every one-vs-rest column, never repeated or rescaled per class.
+    is used identically across every one-vs-rest column for `None`/`"macro"`/`"weighted"`. For
+    `"micro"`, each sample's weight is instead repeated once per class (`np.repeat`, not
+    `np.tile`) before flattening, since a sample now contributes `len(labels)` cells to the
+    flattened problem instead of one.
 
     Raises
     ------
@@ -1989,12 +2041,14 @@ def multiclass_roc_auc_score(
         `y_true` value is not present in `labels`; if `y_score`'s shape does not match
         `(len(y_true), len(labels))`; if `y_score` contains NaN/Inf or an integer not exactly
         representable as `float64`; if `sample_weight`'s length does not match `y_true`, contains
-        a negative value, or sums to zero; if any label in `labels` has zero effective support; or
-        if `average` is not one of `None`, `"macro"`, `"weighted"`.
+        a negative value, or sums to zero; if `average` is `None`, `"macro"`, or `"weighted"` and
+        any label in `labels` has zero effective support; if `average` is not one of `None`,
+        `"macro"`, `"weighted"`, `"micro"`; or if the flattened binary computation itself fails for
+        `average="micro"` (wrapped with `"micro"`-specific context).
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
-    require_one_of(average, (None, "macro", "weighted"), "average")
+    require_one_of(average, (None, "macro", "weighted", "micro"), "average")
 
     labels_tuple = _normalize_explicit_labels(labels)
     if len(labels_tuple) < 2:
@@ -2014,6 +2068,15 @@ def multiclass_roc_auc_score(
     weights = (
         None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
     )
+
+    if average == "micro":
+        flat_true, flat_score, flat_weight = _flatten_multiclass_ovr(
+            true_list, labels_tuple, score_matrix, weights
+        )
+        try:
+            return roc_auc_score(flat_true, flat_score, positive_label=1, sample_weight=flat_weight)
+        except ValueError as exc:
+            raise ValueError(f"failed to compute micro-averaged multiclass ROC AUC: {exc}") from exc
 
     class_support = _compute_effective_class_support(
         true_list, labels_tuple, weights, "multiclass_roc_auc_score"
@@ -2049,7 +2112,7 @@ def multiclass_average_precision_score(
     y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
     *,
     labels: Sequence[int] | npt.NDArray[np.integer],
-    average: Literal["macro", "weighted"] | None = "macro",
+    average: Literal["macro", "weighted", "micro"] | None = "macro",
     sample_weight: Sequence[float]
     | npt.NDArray[np.floating]
     | npt.NDArray[np.integer]
@@ -2059,30 +2122,38 @@ def multiclass_average_precision_score(
     average precision, aggregated across classes.
 
     See `multiclass_roc_auc_score` for the shared `y_score`/`labels`/`sample_weight`/effective-
-    support/error contract, which applies identically here (including that `y_score` need not be
-    row-normalized probabilities, `labels` need not be sorted, and every named label must have
-    positive effective support). The one difference: a class does not need positive effective
-    *negative* support here, mirroring `average_precision_score`'s own existing relaxation (a
-    class that is effectively all-positive gives that class's own score exactly `1.0`) -- this
-    falls out of composing the existing binary `average_precision_score` per column unchanged,
-    not from a separate multiclass-specific rule.
+    support/`"micro"`-flatten/error contract, which applies identically here (including that
+    `y_score` need not be row-normalized probabilities, `labels` need not be sorted, `average=
+    "micro"` flattens the one-hot target and score matrix into one binary ranking problem instead
+    of averaging per-class scores, and assumes a common scale across columns). The one difference,
+    for `average=None`/`"macro"`/`"weighted"`: a class does not need positive effective *negative*
+    support here, mirroring `average_precision_score`'s own existing relaxation (a class that is
+    effectively all-positive gives that class's own score exactly `1.0`) -- this falls out of
+    composing the existing binary `average_precision_score` per column unchanged, not from a
+    separate multiclass-specific rule. As with `multiclass_roc_auc_score`, `average="micro"` does
+    not require per-class effective support at all -- an absent or zero-weight-only class, or a
+    single effectively present class, is legal.
 
     `average=None` returns a new, independent, read-only `float64` array aligned with `labels`;
     `result[i]` is bit-for-bit identical to calling `average_precision_score(y_true, y_score[:,
     i], positive_label=labels[i], sample_weight=sample_weight)` directly. `average="macro"` (the
     default) is `_canonical_mean` of the per-class array; `average="weighted"` weights each class
     by its effective support via `_weighted_average`, exactly as in `multiclass_roc_auc_score`.
+    `average="micro"` calls `average_precision_score` once on the flattened problem, bit-for-bit
+    identical to calling it directly on that independently-built flatten -- see
+    `multiclass_roc_auc_score` for the exact flatten definition and `sample_weight` repetition.
 
     Raises
     ------
     TypeError
         Same as `multiclass_roc_auc_score`.
     ValueError
-        Same as `multiclass_roc_auc_score`, except no class needs effective negative support.
+        Same as `multiclass_roc_auc_score`, except no class needs effective negative support for
+        `average=None`/`"macro"`/`"weighted"`.
     RuntimeError
         If the computed result fails this function's own postconditions.
     """
-    require_one_of(average, (None, "macro", "weighted"), "average")
+    require_one_of(average, (None, "macro", "weighted", "micro"), "average")
 
     labels_tuple = _normalize_explicit_labels(labels)
     if len(labels_tuple) < 2:
@@ -2102,6 +2173,19 @@ def multiclass_average_precision_score(
     weights = (
         None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
     )
+
+    if average == "micro":
+        flat_true, flat_score, flat_weight = _flatten_multiclass_ovr(
+            true_list, labels_tuple, score_matrix, weights
+        )
+        try:
+            return average_precision_score(
+                flat_true, flat_score, positive_label=1, sample_weight=flat_weight
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"failed to compute micro-averaged multiclass average precision: {exc}"
+            ) from exc
 
     class_support = _compute_effective_class_support(
         true_list, labels_tuple, weights, "multiclass_average_precision_score"
