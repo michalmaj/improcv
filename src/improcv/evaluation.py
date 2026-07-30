@@ -20,13 +20,15 @@ or mAP. `auc` is a general-purpose trapezoidal area-under-curve helper with no r
 semantics of its own -- it also computes the trapezoidal area under the precision-recall curve
 (`auc(curve.recall, curve.precision)`), a distinct quantity from `average_precision_score` that
 this module deliberately does not expose under a separate name (see `auc`'s docstring).
-`multiclass_roc_auc_score`/`multiclass_average_precision_score` aggregate one-vs-rest scores
-across classes (`average=None`/`"macro"`/`"weighted"`) by composing the binary functions above
-per class, one-vs-rest only -- no one-vs-one mode, no `"micro"` averaging, and no public
-multiclass curve types (a single class's own curve is already available from `roc_curve`/
-`precision_recall_curve` given the matching score column). Does not cover plotting, multilabel
-classification, or `average="binary"` -- those are separate, later concerns, not part of this
-core.
+`multiclass_roc_auc_score`/`multiclass_average_precision_score` aggregate one-vs-rest
+scores across classes. `average=None`/`"macro"`/`"weighted"` compose the binary functions
+above independently per class; `average="micro"` instead flattens the one-hot target and
+score matrix into one shared binary ranking problem, so its score columns must use a
+common, comparable scale. The API is one-vs-rest only -- there is no one-vs-one mode and
+no public multiclass curve types (a single class's own curve is already available from
+`roc_curve`/`precision_recall_curve` given the matching score column). Does not cover
+plotting, multilabel classification, or `average="binary"` -- those are separate, later
+concerns, not part of this core.
 
 Several deliberate departures from `scikit-learn.metrics`'s well-known behavior (documented at
 the call sites that enforce them): a duplicate value in an explicit `labels` sequence raises
