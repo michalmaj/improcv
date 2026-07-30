@@ -164,7 +164,7 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   splits, manifests, or loading/decoding in this slice, and no new dependency.
 - `improcv.discovery`, Phase 5 slice (deterministic image/mask pairing): a new `ImageMaskPair`
   `NamedTuple` (`image`/`mask`, both `Path`) and `discover_image_mask_pairs`, pairing up images and
-  masks discovered under two separate roots. Runs `discover_images` once per role (`image_root`/
+  masks discovered under image and mask roots. Runs `discover_images` once per role (`image_root`/
   `image_extensions`, `mask_root`/`mask_extensions`, both defaulting to the same seven-extension
   raster list `discover_images` itself uses -- no separate, narrower default for masks, since this
   module cannot inspect file content to justify one), with one shared `recursive`/`include_hidden`
@@ -185,12 +185,13 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   every colliding relative path) -- both diagnostics truncate past 10 already-sorted entries with a
   trailing `"... and N more"` via a small shared private helper. `image_root == mask_root` is legal
   (which physical files land on which side is governed entirely by `image_extensions`/`mask_
-  extensions`, with no special-casing based on root equality, since neither `resolve()` nor inode
-  identity is used anywhere here), but an image and a mask that would resolve to the exact same path
-  (only reachable when the two extension sets overlap under a shared root) is rejected with
-  `ValueError`, since an image and its own mask must be two distinct paths -- two different paths
-  referencing the same file via a hard link remain a legal, distinct pair, same as `discover_images`
-  itself never deduplicating by file identity. Both sides empty gives `()`. The result is a
+  extensions`, with no special-casing based on root equality). However, a pair is rejected with
+  `ValueError` when its returned `image` and `mask` `Path` values compare equal (only reachable when
+  the two extension sets overlap under a shared root), since one path cannot serve as both members
+  of the pair -- this does not call `resolve()`, compare inodes, or otherwise test physical file
+  identity: two different paths referencing the same file via a hard link remain a legal, distinct
+  pair, same as `discover_images` itself never deduplicating by file identity. Both sides empty gives
+  `()`. The result is a
   `tuple[ImageMaskPair, ...]` sorted by pairing key, independent of either `discover_images` call's
   own internal sort order. `discover_images`'s private root/extensions validators gained an optional,
   keyword-only `name` parameter (defaulting to `"root"`/`"extensions"`, so `discover_images`'s own

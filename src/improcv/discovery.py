@@ -5,7 +5,7 @@ it never opens, decodes, or otherwise inspects a file's content. This is a
 read-only filesystem operation: it does not create, write, or touch
 timestamps on anything, and it does not change the process's working
 directory. `discover_image_mask_pairs` builds on it to pair up images and
-masks discovered under two separate directories by a deterministic,
+masks discovered under image and mask roots by a deterministic,
 extension-stripped relative-path key -- neither function infers classes
 from directory names, produces train/validation/test splits, or loads/
 decodes any image; those remain out of scope for this slice.
@@ -433,18 +433,18 @@ def discover_image_mask_pairs(
     key, raises `ValueError` (listing every such key on either side). Both
     error messages truncate past 10 already-sorted entries with a trailing
     `"... and N more"` rather than dumping an unbounded diagnostic. `image_
-    root == mask_root` is not itself rejected -- which physical files land
-    on which side is governed entirely by `image_extensions`/`mask_
-    extensions` (disjoint extension sets under a shared root never produce
-    a collision); however, an image and a mask that resolve to the exact
-    same path (only possible when the two extension sets overlap under a
-    shared root) is rejected with `ValueError`, since an image and its own
-    mask must be two distinct paths. None of this relies on `resolve()`,
-    inode comparison, or an extra `stat` -- two syntactically different
-    roots that happen to reference the same directory are not specially
-    detected, and two different paths referencing the same file via a hard
-    link remain a legal, distinct pair (this module never deduplicates by
-    file identity).
+    root == mask_root` is legal -- which physical files land on which side
+    is governed entirely by `image_extensions`/`mask_extensions` (disjoint
+    extension sets under a shared root never produce a collision). However,
+    a pair is rejected with `ValueError` when its returned `image` and
+    `mask` `Path` values compare equal (only reachable when the two
+    extension sets overlap under a shared root), since one path cannot
+    serve as both members of the pair. This function does not call
+    `resolve()`, compare inodes, or otherwise test physical file identity --
+    two syntactically different roots that happen to reference the same
+    directory are not specially detected, and two different paths
+    referencing the same file via a hard link remain a legal, distinct
+    pair (this module never deduplicates by file identity).
 
     Both sides empty gives `()`. `average`-style partial modes
     (`strict=False`, `on_unmatched=...`) are not offered in this slice.
@@ -470,8 +470,8 @@ def discover_image_mask_pairs(
         Same as `discover_images` for each root/extensions pair; if
         stripping a matched extension would leave an empty pairing key; if
         a pairing key collides within either side; if the image and mask
-        key sets differ; or if an image and a mask resolve to the same
-        path.
+        key sets differ; or if a pair's returned `image` and `mask` `Path`
+        values compare equal.
     FileNotFoundError, NotADirectoryError, OSError
         Same as `discover_images`, from either traversal.
     RuntimeError
