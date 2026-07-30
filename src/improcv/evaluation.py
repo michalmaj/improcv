@@ -19,9 +19,14 @@ per-observation weight has no meaning there, and it has no `sample_weight` param
 or mAP. `auc` is a general-purpose trapezoidal area-under-curve helper with no ranking
 semantics of its own -- it also computes the trapezoidal area under the precision-recall curve
 (`auc(curve.recall, curve.precision)`), a distinct quantity from `average_precision_score` that
-this module deliberately does not expose under a separate name (see `auc`'s docstring). Does
-not cover plotting, multilabel classification, `average="binary"`, or multiclass ranking
-curves/averaging -- those are separate, later concerns, not part of this core.
+this module deliberately does not expose under a separate name (see `auc`'s docstring).
+`multiclass_roc_auc_score`/`multiclass_average_precision_score` aggregate one-vs-rest scores
+across classes (`average=None`/`"macro"`/`"weighted"`) by composing the binary functions above
+per class, one-vs-rest only -- no one-vs-one mode, no `"micro"` averaging, and no public
+multiclass curve types (a single class's own curve is already available from `roc_curve`/
+`precision_recall_curve` given the matching score column). Does not cover plotting, multilabel
+classification, or `average="binary"` -- those are separate, later concerns, not part of this
+core.
 
 Several deliberate departures from `scikit-learn.metrics`'s well-known behavior (documented at
 the call sites that enforce them): a duplicate value in an explicit `labels` sequence raises
@@ -59,6 +64,8 @@ __all__ = [
     "classification_metrics",
     "classification_metrics_from_confusion_matrix",
     "confusion_matrix",
+    "multiclass_average_precision_score",
+    "multiclass_roc_auc_score",
     "precision_recall_curve",
     "roc_auc_score",
     "roc_curve",
@@ -1837,6 +1844,294 @@ def roc_auc_score(
     return area
 
 
+def _compute_effective_class_support(
+    true_list: list[int],
+    labels_tuple: tuple[int, ...],
+    weights: npt.NDArray[np.float64] | None,
+    function_name: str,
+) -> npt.NDArray[np.float64]:
+    """Compute each label's effective support (as `float64`, aligned with `labels_tuple`), and
+    raise `ValueError` naming *every* label with zero effective support at once -- not just
+    whichever column a caller happens to process first.
+
+    Without `sample_weight`, a label's support is its exact count in `true_list`. With
+    `sample_weight`, a zero-weight sample contributes nothing (mirrors the ranking/classification
+    cores' existing "remove zero-weight samples" semantics); the remaining weights are summed via
+    `math.fsum` over a canonically sorted (ascending) sequence, not a plain running sum or
+    `np.bincount(weights=...)` -- both verified elsewhere in this module to be order-dependent for
+    extreme weight ratios, which would break sample-permutation invariance here too. An
+    `OverflowError` from `math.fsum` (a single label's total weight exceeding `float64`'s range)
+    is mapped to `ValueError`.
+    """
+    support = np.empty(len(labels_tuple), dtype=np.float64)
+    missing: list[int] = []
+
+    if weights is None:
+        for index, label in enumerate(labels_tuple):
+            count = sum(1 for true_label in true_list if true_label == label)
+            if count == 0:
+                missing.append(label)
+            else:
+                support[index] = float(count)
+    else:
+        weight_list = weights.tolist()
+        for index, label in enumerate(labels_tuple):
+            class_weights = sorted(
+                float(weight)
+                for true_label, weight in zip(true_list, weight_list, strict=True)
+                if true_label == label and weight > 0.0
+            )
+            if not class_weights:
+                missing.append(label)
+                continue
+            try:
+                support[index] = math.fsum(class_weights)
+            except OverflowError as exc:
+                raise ValueError(
+                    f"class label={label!r} has total sample weight that is not representable "
+                    "as a finite float64"
+                ) from exc
+
+    if missing:
+        raise ValueError(
+            f"{function_name} requires positive effective support for every label; missing "
+            f"labels: {tuple(missing)}"
+        )
+    return support
+
+
+def _check_multiclass_score_postconditions(
+    per_class: npt.NDArray[np.float64], n_classes: int
+) -> None:
+    if per_class.dtype != np.float64:
+        raise RuntimeError(
+            f"internal error: per-class multiclass scores have dtype {per_class.dtype}, "
+            "expected float64"
+        )
+    if per_class.shape != (n_classes,):
+        raise RuntimeError(
+            f"internal error: per-class multiclass scores have shape {per_class.shape}, "
+            f"expected ({n_classes},)"
+        )
+    if not np.all(np.isfinite(per_class)):
+        raise RuntimeError("internal error: per-class multiclass scores contain a non-finite value")
+    if not np.all((per_class >= 0.0) & (per_class <= 1.0)):
+        raise RuntimeError(
+            "internal error: per-class multiclass scores contain a value outside [0, 1]"
+        )
+    if per_class.flags.writeable:
+        raise RuntimeError("internal error: per-class multiclass scores are writeable")
+
+
+def multiclass_roc_auc_score(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    labels: Sequence[int] | npt.NDArray[np.integer],
+    average: Literal["macro", "weighted"] | None = "macro",
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
+) -> float | npt.NDArray[np.float64]:
+    """Compute multiclass, one-vs-rest ROC AUC: the area under each class's own binary,
+    one-vs-rest ROC curve, aggregated across classes.
+
+    `y_score` is a 2-D `(n_samples, len(labels))` score matrix -- column `i` is the one-vs-rest
+    ranking score for class `labels[i]` against every other class, with exactly the same meaning
+    as `roc_auc_score`'s 1-D `y_score` (an arbitrary finite ranking score, not required to lie in
+    `[0, 1]` or to sum to `1.0` across a row: unlike `sklearn.metrics.roc_auc_score`'s multiclass
+    mode, which requires `y_score` to hold calibrated probabilities summing to `1.0` per row, this
+    function computes each column's one-vs-rest AUC entirely independently of the other columns,
+    so no such requirement has any mathematical basis here). `labels` is required (no automatic
+    inference from `y_true`, unlike scikit-learn) and fixes the exact column order: `y_score[:,
+    i]` corresponds to `labels[i]`, in exactly the order given -- `labels` does not need to be
+    sorted (another deliberate departure from `sklearn.metrics.roc_auc_score`, which additionally
+    requires an explicit `labels` to already be in sorted order). This is one-vs-rest only: there
+    is no one-vs-one mode and no `multi_class` parameter.
+
+    Every class named in `labels` must have positive effective support (present in `y_true` with
+    at least one sample whose `sample_weight`, if given, is positive) -- a class with no effective
+    support raises `ValueError` naming every such label at once, never a silent skip, a `NaN`, or
+    a warning (unlike `sklearn.metrics.roc_auc_score`, verified directly to silently return `NaN`
+    with only an easily-missed `UndefinedMetricWarning` for a class absent from `y_true`, and to do
+    so inconsistently between `average="macro"` -- where that single `NaN` poisons the whole
+    aggregate -- and `average="weighted"` -- where it is instead silently masked to contribute
+    `0`). Once every named label has positive effective support, and there are at least 2 of them,
+    every class also has positive effective *negative* support automatically (the other classes'
+    effective samples) -- `roc_curve`'s own per-class negative-support check remains in place as a
+    second line of defense, but is never expected to trigger here.
+
+    `average=None` returns a new, independent, read-only `float64` array aligned with `labels`;
+    `result[i]` is bit-for-bit identical to calling `roc_auc_score(y_true, y_score[:, i],
+    positive_label=labels[i], sample_weight=sample_weight)` directly -- this function computes
+    each class's score by calling that same public function once per column on already-validated
+    inputs, rather than reimplementing or duplicating its arithmetic, so every existing tie/
+    overflow/underflow/`np.seterr`-isolation guarantee applies here unchanged. `average="macro"`
+    (the default) is the unweighted, canonical, label-order-independent mean of the per-class
+    array (`_canonical_mean`, the same reduction `classification_metrics` uses). `average=
+    "weighted"` weights each class by its effective support (canonically summed the same way);
+    for `sample_weight=None` this is each class's plain sample count.
+
+    `sample_weight` follows the same contract as the binary ranking functions' `sample_weight`
+    (keyword-only, `Sequence`/1-D `ndarray`, length `n_samples`, non-negative, at least one
+    positive value, `bool` rejected, exact-integer-to-`float64`) -- the same weight for a sample
+    is used identically across every one-vs-rest column, never repeated or rescaled per class.
+
+    Raises
+    ------
+    TypeError
+        If `y_true`/`labels`/`sample_weight` is not a `Sequence`/1-D `ndarray` of the accepted
+        element types, or if `y_score` is not a 2-D `ndarray` (a nested `Sequence`-of-`Sequence`s
+        is rejected, not silently converted) of an accepted dtype.
+    ValueError
+        If `labels` is empty, contains a duplicate, or has fewer than 2 entries; if any raw
+        `y_true` value is not present in `labels`; if `y_score`'s shape does not match
+        `(len(y_true), len(labels))`; if `y_score` contains NaN/Inf or an integer not exactly
+        representable as `float64`; if `sample_weight`'s length does not match `y_true`, contains
+        a negative value, or sums to zero; if any label in `labels` has zero effective support; or
+        if `average` is not one of `None`, `"macro"`, `"weighted"`.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+    """
+    require_one_of(average, (None, "macro", "weighted"), "average")
+
+    labels_tuple = _normalize_explicit_labels(labels)
+    if len(labels_tuple) < 2:
+        raise ValueError("multiclass ranking scores require at least 2 labels")
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    allowed_labels = set(labels_tuple)
+    for index, value in enumerate(true_list):
+        if value not in allowed_labels:
+            raise ValueError(f"y_true[{index}] = {value} is not present in labels")
+
+    score_matrix = _normalize_score_matrix(y_score, len(true_list), len(labels_tuple))
+
+    weights = (
+        None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
+    )
+
+    class_support = _compute_effective_class_support(
+        true_list, labels_tuple, weights, "multiclass_roc_auc_score"
+    )
+
+    per_class = np.empty(len(labels_tuple), dtype=np.float64)
+    for column, label in enumerate(labels_tuple):
+        try:
+            per_class[column] = roc_auc_score(
+                true_list,
+                score_matrix[:, column],
+                positive_label=label,
+                sample_weight=weights,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"failed to compute class label={label!r} from y_score column {column}: {exc}"
+            ) from exc
+
+    per_class.flags.writeable = False
+    _check_multiclass_score_postconditions(per_class, len(labels_tuple))
+
+    if average is None:
+        return per_class
+    if average == "macro":
+        return _canonical_mean(per_class)
+    total_support = _canonical_flat_sum(class_support, "total effective class support")
+    return _weighted_average(per_class, class_support, total_support)
+
+
+def multiclass_average_precision_score(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    labels: Sequence[int] | npt.NDArray[np.integer],
+    average: Literal["macro", "weighted"] | None = "macro",
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
+) -> float | npt.NDArray[np.float64]:
+    """Compute multiclass, one-vs-rest average precision: each class's own binary, one-vs-rest
+    average precision, aggregated across classes.
+
+    See `multiclass_roc_auc_score` for the shared `y_score`/`labels`/`sample_weight`/effective-
+    support/error contract, which applies identically here (including that `y_score` need not be
+    row-normalized probabilities, `labels` need not be sorted, and every named label must have
+    positive effective support). The one difference: a class does not need positive effective
+    *negative* support here, mirroring `average_precision_score`'s own existing relaxation (a
+    class that is effectively all-positive gives that class's own score exactly `1.0`) -- this
+    falls out of composing the existing binary `average_precision_score` per column unchanged,
+    not from a separate multiclass-specific rule.
+
+    `average=None` returns a new, independent, read-only `float64` array aligned with `labels`;
+    `result[i]` is bit-for-bit identical to calling `average_precision_score(y_true, y_score[:,
+    i], positive_label=labels[i], sample_weight=sample_weight)` directly. `average="macro"` (the
+    default) is `_canonical_mean` of the per-class array; `average="weighted"` weights each class
+    by its effective support via `_weighted_average`, exactly as in `multiclass_roc_auc_score`.
+
+    Raises
+    ------
+    TypeError
+        Same as `multiclass_roc_auc_score`.
+    ValueError
+        Same as `multiclass_roc_auc_score`, except no class needs effective negative support.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+    """
+    require_one_of(average, (None, "macro", "weighted"), "average")
+
+    labels_tuple = _normalize_explicit_labels(labels)
+    if len(labels_tuple) < 2:
+        raise ValueError("multiclass ranking scores require at least 2 labels")
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    allowed_labels = set(labels_tuple)
+    for index, value in enumerate(true_list):
+        if value not in allowed_labels:
+            raise ValueError(f"y_true[{index}] = {value} is not present in labels")
+
+    score_matrix = _normalize_score_matrix(y_score, len(true_list), len(labels_tuple))
+
+    weights = (
+        None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
+    )
+
+    class_support = _compute_effective_class_support(
+        true_list, labels_tuple, weights, "multiclass_average_precision_score"
+    )
+
+    per_class = np.empty(len(labels_tuple), dtype=np.float64)
+    for column, label in enumerate(labels_tuple):
+        try:
+            per_class[column] = average_precision_score(
+                true_list,
+                score_matrix[:, column],
+                positive_label=label,
+                sample_weight=weights,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"failed to compute class label={label!r} from y_score column {column}: {exc}"
+            ) from exc
+
+    per_class.flags.writeable = False
+    _check_multiclass_score_postconditions(per_class, len(labels_tuple))
+
+    if average is None:
+        return per_class
+    if average == "macro":
+        return _canonical_mean(per_class)
+    total_support = _canonical_flat_sum(class_support, "total effective class support")
+    return _weighted_average(per_class, class_support, total_support)
+
+
 def auc(
     x: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
     y: Sequence[float] | npt.NDArray[np.floating] | npt.NDArray[np.integer],
@@ -2661,6 +2956,93 @@ def _exact_integer_ndarray_to_float64(value: np.ndarray, name: str) -> npt.NDArr
     for index, (original, as_float) in enumerate(pairs):
         if int(as_float) != original:
             raise ValueError(f"{name}[{index}] is not exactly representable as float64")
+    return converted
+
+
+def _normalize_score_matrix(
+    value: object, expected_rows: int, expected_columns: int
+) -> npt.NDArray[np.float64]:
+    """Raise TypeError/ValueError unless `value` is a valid `(n_samples, n_classes)` score
+    matrix; return a new, independent, C-contiguous, writeable `float64` ndarray.
+
+    Deliberately narrower than `_normalize_score_sequence`: only a 2-D `ndarray` is accepted --
+    no nested `Sequence`-of-`Sequence`s (list-of-lists, tuple-of-tuples, ...). A multiclass score
+    matrix in practice comes from a `predict_proba`/`decision_function`-style output, already an
+    `ndarray`; accepting ragged nested sequences would add real validation complexity (ragged-row
+    detection, an unvectorized per-element pass) without a clear practical need -- a caller with a
+    nested list can always call `np.asarray(...)` first.
+
+    Shares its per-element numeric contract with `_normalize_score_ndarray` (same accepted
+    dtypes -- `float16`/`float32`/`float64`, or any integer dtype with every element exactly
+    representable as `float64` -- same rejection of `bool`/complex/object/wider-than-`float64`
+    floating dtypes, same rejection of NaN/Inf, same signed-zero canonicalization), applied over
+    the whole matrix at once rather than by calling that function once per column (which would
+    allocate/validate redundantly and report errors without a `[row, column]` index).
+
+    The input is never mutated, and the returned array never aliases it -- constructed via
+    `np.array(value, dtype=np.float64, order="C", copy=True)` explicitly, not
+    `value.astype(np.float64, copy=True)`: the latter preserves the *input's own* memory layout
+    (verified directly: an F-contiguous or transposed input stays non-C-contiguous even through
+    an `astype(copy=True)` call), which would silently break the C-contiguity this function
+    promises. The result stays writeable (an internal buffer this module slices per class column
+    immediately after; it is never exposed to a public caller).
+    """
+    name = "y_score"
+    if not isinstance(value, np.ndarray):
+        raise TypeError(
+            f"{name} must be a 2-D ndarray of shape ({expected_rows}, {expected_columns}), not "
+            f"{type(value).__name__} -- nested Python sequences are not accepted"
+        )
+    if value.ndim != 2:
+        raise ValueError(f"{name} must be 2-D, got shape {value.shape}")
+    if value.shape != (expected_rows, expected_columns):
+        raise ValueError(
+            f"{name} must have shape ({expected_rows}, {expected_columns}), got {value.shape}"
+        )
+
+    dtype = value.dtype
+    if np.issubdtype(dtype, np.floating):
+        if dtype not in _ALLOWED_SCORE_FLOAT_DTYPES:
+            raise TypeError(
+                f"{name} must have dtype float16, float32, or float64, got {dtype} -- a wider "
+                "floating dtype could narrow values in a platform-dependent way"
+            )
+        converted = np.array(value, dtype=np.float64, order="C", copy=True)
+    elif np.issubdtype(dtype, np.integer):
+        converted = _exact_integer_matrix_to_float64(value, name)
+    else:
+        raise TypeError(f"{name} must have a floating or integer dtype, got {dtype}")
+
+    if not np.all(np.isfinite(converted)):
+        raise ValueError(f"{name} must contain only finite values (no NaN or Inf)")
+    _canonicalize_signed_zero(converted)
+
+    if not converted.flags.c_contiguous:
+        raise RuntimeError("internal error: normalized score matrix is not C-contiguous")
+    return converted
+
+
+def _exact_integer_matrix_to_float64(value: np.ndarray, name: str) -> npt.NDArray[np.float64]:
+    """Widen a 2-D integer ndarray to float64, rejecting any value that would lose precision.
+
+    The 2-D counterpart of `_exact_integer_ndarray_to_float64` -- not a mechanical reuse of it,
+    since `value.tolist()` on a 2-D array gives a nested list of rows, not a flat list of
+    elements, so `zip`-ing it against another nested list would pair up whole rows rather than
+    individual scalars. `value.reshape(-1)` (default `order="C"`) instead gives a row-major flat
+    view regardless of `value`'s own strides/contiguity, so `divmod(flat_index, n_columns)`
+    always recovers the correct `[row, column]` for an error message, no matter how `value` was
+    laid out in memory.
+    """
+    converted = np.array(value, dtype=np.float64, order="C", copy=True)
+    n_columns = value.shape[1]
+    flat_original = value.reshape(-1).tolist()
+    flat_converted = converted.reshape(-1).tolist()
+    for flat_index, (original, as_float) in enumerate(
+        zip(flat_original, flat_converted, strict=True)
+    ):
+        if int(as_float) != original:
+            row, column = divmod(flat_index, n_columns)
+            raise ValueError(f"{name}[{row}, {column}] is not exactly representable as float64")
     return converted
 
 
