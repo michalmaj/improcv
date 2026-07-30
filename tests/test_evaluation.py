@@ -4998,6 +4998,7 @@ def test_multiclass_micro_repeats_sample_weight_not_tile(func) -> None:
     weights = evaluation._normalize_sample_weight(sample_weight, 2)
     score_matrix = evaluation._normalize_score_matrix(y_score, 2, 2)
     _, _, flat_weight = evaluation._flatten_multiclass_ovr([0, 1], labels, score_matrix, weights)
+    assert flat_weight is not None
     assert_array_equal(flat_weight, np.repeat(weights, 2))
     assert not np.array_equal(flat_weight, np.tile(weights, 2))
 
