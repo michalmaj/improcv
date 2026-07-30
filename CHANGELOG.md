@@ -387,14 +387,15 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   that requirement has no mathematical basis in this design. One-vs-rest only: no one-vs-one mode
   and no `multi_class` parameter (`sklearn`'s one-vs-one mode was verified directly to not support
   `sample_weight`, `average=None`, or `"micro"` at all, confirming it is fundamentally more
-  restrictive, not just a style choice this project declined). `average="micro"` is not supported in
-  this slice -- unlike `None`/`"macro"`/`"weighted"`, which are each invariant to a separate,
-  strictly increasing transform of every column, `"micro"` compares raw score values across columns
-  on one shared scale (`sklearn`'s own `multi_class="ovr"`-only micro implementation was verified
-  directly to ravel the one-hot labels/scores and repeat `sample_weight` once per class). Every
-  label named in `labels` must have positive effective support (present in `y_true` with at least
-  one sample whose `sample_weight`, if given, is positive), checked once up front, before any
-  per-class computation -- a label with none raises `ValueError` naming every such label at once,
+  restrictive, not just a style choice this project declined). `average="micro"` was deferred from
+  this slice (see the `average="micro"` entry below) -- unlike `None`/`"macro"`/`"weighted"`, which
+  are each invariant to a separate, strictly increasing transform of every column, `"micro"` compares
+  raw score values across columns on one shared scale (`sklearn`'s own `multi_class="ovr"`-only
+  micro implementation was verified directly to ravel the one-hot labels/scores and repeat
+  `sample_weight` once per class). Every label named in `labels` must have positive effective support
+  for `average=None`/`"macro"`/`"weighted"` (present in `y_true` with at least one sample whose
+  `sample_weight`, if given, is positive), checked once up front, before any per-class computation --
+  a label with none raises `ValueError` naming every such label at once,
   never a silent skip, a `NaN`, or a warning: `sklearn.metrics.roc_auc_score` was verified directly
   to instead silently return `NaN` (with only an easily-missed `UndefinedMetricWarning`) for a class
   absent from `y_true`, and to do so inconsistently between `average="macro"` (where that single
@@ -410,6 +411,33 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   already give a single class's own curve given the matching score column and `positive_label`); no
   multilabel support; no new dependency in this slice; the binary ranking core
   (`_compute_ranking_core`/`_compute_weighted_ranking_core`) was deliberately left untouched.
+- `improcv.evaluation`, Phase 5 slice: `average="micro"` for `multiclass_roc_auc_score` and
+  `multiclass_average_precision_score`, extending the existing `average` parameter -- no new public
+  function or type was added. Unlike `None`/`"macro"`/`"weighted"`, which reduce each class's own
+  independently-computed binary score, `"micro"` flattens the one-hot target and the score matrix
+  into one shared binary ranking problem (row-major/C-order: sample `i`'s class `j` occupies flat
+  position `i * len(labels) + j`, positive exactly when `y_true[i] == labels[j]`) and calls the
+  existing binary `roc_auc_score`/`average_precision_score` once on the result, via a new private
+  `_flatten_multiclass_ovr` helper shared by both functions -- the binary ranking core itself was
+  not touched. `result` is bit-for-bit identical to calling the binary function directly on an
+  independently-built flatten of the same shape. Because it compares raw scores across columns
+  directly, `"micro"` assumes a common, comparable scale across columns (still no probability-
+  simplex requirement) -- unlike the other three averages, which are each invariant to an
+  independent monotonic transform per column, `"micro"` is only invariant to a single shared
+  transform applied to the whole matrix. `sample_weight`, when given, is repeated once per class via
+  `np.repeat` (verified directly against `np.tile`, which would correspond to a different, incorrect
+  cell ordering) before flattening. `average="micro"` does not require per-class effective support --
+  a class absent from `y_true`, present only in zero-weight rows, or a single effectively present
+  class, is legal, since it only contributes negative cells to the flattened problem (`labels` must
+  still have at least 2 entries and every raw `y_true` value must still be one of `labels`, both
+  already required unconditionally); `None`/`"macro"`/`"weighted"` keep their existing strict
+  per-class support requirement unchanged. Errors raised by the underlying binary call are wrapped
+  with `"micro"`-specific context (e.g. `"failed to compute micro-averaged multiclass ROC AUC: ..."`)
+  rather than propagated raw. No new allocation-size helper was added: the flattened score array is
+  a view (`score_matrix.ravel(order="C")` on an already C-contiguous matrix), and the only new
+  allocations (`flat_true`, optionally `flat_weight`) are no larger than the score matrix that
+  `_normalize_score_matrix` already successfully allocated. No new public functions, types, or
+  exports; no one-vs-one; no multilabel; no new dependency.
 
 ### Fixed
 - `improcv.evaluation`: `classification_metrics`/`classification_metrics_from_confusion_matrix`'s

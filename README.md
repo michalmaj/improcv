@@ -938,6 +938,7 @@ per_class_auc = im.multiclass_roc_auc_score(y_true, y_score, labels=labels, aver
 weighted_ap = im.multiclass_average_precision_score(
     y_true, y_score, labels=labels, average="weighted"
 )
+micro_auc = im.multiclass_roc_auc_score(y_true, y_score, labels=labels, average="micro")
 ```
 
 These two functions build each class's score by composing the existing binary `roc_auc_score`/
@@ -956,20 +957,43 @@ converted; call `np.asarray(...)` yourself first if needed. Scores are arbitrary
 values, exactly like the binary functions' `y_score` -- there is no probability-simplex requirement
 (unlike `sklearn.metrics.roc_auc_score`'s multiclass mode, which requires each row to sum to `1.0`):
 each column's one-vs-rest score is computed entirely independently of the others, so no such
-requirement has a mathematical basis here. `average=None` returns a new, independent, read-only
-`float64` array aligned with `labels`; `average="macro"` (the default) is the unweighted,
-label-order-independent mean of the per-class array; `average="weighted"` weights each class by its
-effective support (`sample_weight`-summed if given, otherwise a plain count) -- `average="micro"` is
-not supported (it would compare score values across different columns on one shared scale, unlike
-`None`/`macro`/`weighted`, which are each invariant to a separate monotonic transform per column).
-`sample_weight` follows the exact same contract as the binary ranking functions (keyword-only,
-non-negative, at least one positive value, applied identically to every one-vs-rest column). Every
-label named in `labels` must have positive effective support -- a label with none raises `ValueError`
-naming every such label at once, never a silent skip, a `NaN`, or a warning (`sklearn.metrics.
-roc_auc_score` was verified directly to instead silently return `NaN` with only an easily-missed
-warning for a class absent from `y_true`). No public multiclass curve types are introduced --
-`roc_curve`/`precision_recall_curve` already give a single class's own curve when called with the
-matching score column and `positive_label`. No multilabel support.
+requirement has a mathematical basis for `None`/`"macro"`/`"weighted"`. `average=None` returns a
+new, independent, read-only `float64` array aligned with `labels`; `average="macro"` (the default)
+is the unweighted, label-order-independent mean of the per-class array; `average="weighted"`
+weights each class by its effective support (`sample_weight`-summed if given, otherwise a plain
+count). `sample_weight` follows the exact same contract as the binary ranking functions
+(keyword-only, non-negative, at least one positive value, applied identically to every one-vs-rest
+column for `None`/`"macro"`/`"weighted"`). Every label named in `labels` must have positive
+effective support for these three -- a label with none raises `ValueError` naming every such label
+at once, never a silent skip, a `NaN`, or a warning (`sklearn.metrics.roc_auc_score` was verified
+directly to instead silently return `NaN` with only an easily-missed warning for a class absent
+from `y_true`).
+
+`average="micro"` is different in kind, not just another reduction of the same per-class scores:
+it flattens the one-hot target and the score matrix into one shared binary ranking problem
+(row-major/C-order -- sample `i`'s class `j` occupies flat position `i * len(labels) + j`, positive
+exactly when `y_true[i] == labels[j]`) and calls the binary `roc_auc_score`/`average_precision_score`
+once on the result. Because it compares raw scores across columns directly, it assumes those
+columns share a common, comparable scale -- unlike `None`/`"macro"`/`"weighted"`, which are each
+invariant to an independent monotonic transform per column, `"micro"` is only invariant to a single
+shared monotonic transform applied to the whole matrix at once. It still does not require a
+probability simplex (no row needs to sum to `1.0`), only a shared scale. `average="micro"` also
+does not require per-class effective support -- a class absent from `y_true` (or present only in
+zero-weight rows), or a single effectively present class, is legal, since it only contributes
+negative cells to the flattened problem:
+
+```python
+y_true_partial = [0, 1, 0, 1]  # class 2 has zero support
+y_score_partial = np.array([[0.7, 0.2, 0.1], [0.1, 0.8, 0.1], [0.6, 0.3, 0.1], [0.2, 0.7, 0.1]])
+im.multiclass_roc_auc_score(y_true_partial, y_score_partial, labels=[0, 1, 2], average="micro")
+# average="macro"/"weighted"/None would raise ValueError here; "micro" does not.
+```
+
+`sample_weight` for `"micro"` is repeated once per class (`np.repeat`, not `np.tile`) before
+flattening, since each sample now contributes `len(labels)` cells instead of one. No public
+multiclass curve types are introduced -- `roc_curve`/`precision_recall_curve` already give a single
+class's own curve when called with the matching score column and `positive_label`. No one-vs-one
+mode, no multilabel support.
 
 Augmentation sampling and replay -- flip:
 

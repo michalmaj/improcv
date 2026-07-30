@@ -57,8 +57,8 @@ version decided at the time each is actually published, rather than mechanically
   `sample_weight` for the four binary ranking functions and for `confusion_matrix`/
   `classification_metrics` implemented; multiclass one-vs-rest score-level ROC AUC/average
   precision (`multiclass_roc_auc_score`/`multiclass_average_precision_score`,
-  `average=None`/`"macro"`/`"weighted"`) implemented; `average="micro"`, one-vs-one, and public
-  multiclass ROC/PR curve types remain planned, not started, see
+  `average=None`/`"macro"`/`"weighted"`/`"micro"`) implemented; one-vs-one and public multiclass
+  ROC/PR curve types remain planned, not started, see
   [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-scale sampling/replay implemented; perspective, anisotropic
