@@ -63,8 +63,9 @@ version decided at the time each is actually published, rather than mechanically
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-scale sampling/replay implemented; perspective, anisotropic
   scale, and canvas expansion remain planned, not started), and dataset discovery (deterministic,
-  extension-based image discovery implemented; image/mask pairing, manifests, dataset splits, and
-  batching/loading remain planned, not started). Bounding boxes/keypoints/polygons in augmentation, a
+  extension-based image discovery implemented; deterministic image/mask pairing implemented;
+  manifests, dataset splits, and batching/loading remain planned, not started). Bounding boxes/
+  keypoints/polygons in augmentation, a
   `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as
   each slice ships.

@@ -162,6 +162,43 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   never silently skipped or wrapped in a new exception type -- there is no OpenCV/NumPy involvement
   in this module at all). No image/mask pairing, class inference from directory names, dataset
   splits, manifests, or loading/decoding in this slice, and no new dependency.
+- `improcv.discovery`, Phase 5 slice (deterministic image/mask pairing): a new `ImageMaskPair`
+  `NamedTuple` (`image`/`mask`, both `Path`) and `discover_image_mask_pairs`, pairing up images and
+  masks discovered under two separate roots. Runs `discover_images` once per role (`image_root`/
+  `image_extensions`, `mask_root`/`mask_extensions`, both defaulting to the same seven-extension
+  raster list `discover_images` itself uses -- no separate, narrower default for masks, since this
+  module cannot inspect file content to justify one), with one shared `recursive`/`include_hidden`
+  policy for both roots -- the two traversals are sequential, independent snapshots, not one atomic
+  operation, and neither is re-stated afterward. Each discovered path is turned into a pairing key:
+  its POSIX-style path relative to its own root, with exactly one matched extension removed from the
+  end -- the *longest* matching configured extension when several could match (e.g. `.gz` and
+  `.nii.gz` both matching `scan.nii.gz` strip to `scan`, never `scan.nii`), never derived from
+  `Path.stem`/`Path.suffix` (neither understands multi-part extensions) or from argument order. The
+  relative directory is part of the key (`cats/001` and `dogs/001` never merge by basename alone);
+  extension matching is case-insensitive, but everything else in the key keeps its exact case, with
+  no Unicode normalization (an NFC- and an NFD-normalized form of the same visual name are different
+  keys). If stripping the matched extension would leave an empty final path component (e.g. a file
+  literally named `.jpg`, only reachable with `include_hidden=True`), this raises `ValueError` naming
+  the role, the relative path, and the matched extension, rather than inventing a placeholder key.
+  Pairing is a strict bijection with no partial-result mode: a duplicate key on either side, or an
+  image/mask key set mismatch, raises `ValueError` listing every offending key (with, for duplicates,
+  every colliding relative path) -- both diagnostics truncate past 10 already-sorted entries with a
+  trailing `"... and N more"` via a small shared private helper. `image_root == mask_root` is legal
+  (which physical files land on which side is governed entirely by `image_extensions`/`mask_
+  extensions`, with no special-casing based on root equality, since neither `resolve()` nor inode
+  identity is used anywhere here), but an image and a mask that would resolve to the exact same path
+  (only reachable when the two extension sets overlap under a shared root) is rejected with
+  `ValueError`, since an image and its own mask must be two distinct paths -- two different paths
+  referencing the same file via a hard link remain a legal, distinct pair, same as `discover_images`
+  itself never deduplicating by file identity. Both sides empty gives `()`. The result is a
+  `tuple[ImageMaskPair, ...]` sorted by pairing key, independent of either `discover_images` call's
+  own internal sort order. `discover_images`'s private root/extensions validators gained an optional,
+  keyword-only `name` parameter (defaulting to `"root"`/`"extensions"`, so `discover_images`'s own
+  error messages are unchanged bit-for-bit) so `discover_image_mask_pairs` can raise messages naming
+  `image_root`/`mask_root`/`image_extensions`/`mask_extensions` specifically. No suffix/prefix
+  convention (e.g. `mask_suffix=`), no class inference, no dataset splits, no manifests, no batching/
+  loading, no image/mask dimension or dtype validation, and no new dependency in this slice --
+  `improcv.discovery` remains stdlib-only.
 - `improcv.evaluation`, Phase 5 slice: binary one-vs-rest ROC and precision-recall curves plus
   ROC AUC -- `roc_curve`, `precision_recall_curve`, `roc_auc_score`, and their `RocCurve`/
   `PrecisionRecallCurve` result dataclasses. Binary, one-vs-rest: `positive_label` is always

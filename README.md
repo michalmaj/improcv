@@ -1143,9 +1143,54 @@ every descendant is classified from a fresh filesystem check at inspection time,
 from listing the directory, so a file deleted or replaced right before being inspected still raises
 rather than passing through unnoticed (a file changed *after* that check is an ordinary, undetected
 race, same as with any filesystem operation). An
-empty directory, or a directory with no matching files, returns `()`, not an error. This slice does
-not pair images with masks, infer classes from directory names, produce dataset splits, or load/
-decode any image, and adds no new dependency.
+empty directory, or a directory with no matching files, returns `()`, not an error. `discover_images`
+itself does not pair images with masks, infer classes from directory names, produce dataset splits,
+or load/decode any image, and adds no new dependency.
+
+Dataset image/mask pairing:
+
+```python
+pairs = im.discover_image_mask_pairs(
+    "dataset/images",
+    "dataset/masks",
+    image_extensions={".jpg", ".png"},
+    mask_extensions={".png"},
+)
+
+for pair in pairs:
+    image = cv2.imread(str(pair.image))
+    mask = cv2.imread(str(pair.mask), cv2.IMREAD_UNCHANGED)
+```
+
+`discover_image_mask_pairs` runs `discover_images` once for each root (its own `image_extensions`/
+`mask_extensions`, but the same `recursive`/`include_hidden` policy for both) and pairs up what it
+finds -- it only discovers and pairs *paths*, exactly like `discover_images` never opening, decoding,
+or otherwise inspecting a file, so it cannot and does not check image/mask dimensions, dtype, or any
+other semantic correspondence between a pair; that is entirely the caller's job (as in the example
+above). The two traversals are sequential, independent snapshots, not one atomic operation.
+
+Each discovered path becomes a *pairing key*: its POSIX-style path relative to its own root, with
+exactly one matched extension removed from the end -- the longest one, when several configured
+extensions could match (`.gz` and `.nii.gz` both matching `scan.nii.gz` strip to `scan`, not
+`scan.nii`). The relative directory is part of the key (`cats/001` and `dogs/001` are different
+keys, never merged by basename alone); matching the extension itself is case-insensitive, but
+everything else in the key keeps its original case, with no Unicode normalization (`Cat/001` and
+`cat/001` are different keys; an NFC- and an NFD-normalized form of the same visual name are
+different keys too). There is no suffix/prefix convention in this slice (e.g. `mask_suffix="_mask"`)
+-- an image and its mask must share the same relative path once each side's own extension is
+removed.
+
+Pairing is a strict bijection, with no partial-result mode: two different paths on the same side
+reducing to the same key is a duplicate and raises `ValueError` (naming every colliding key on
+either side, together with its colliding relative paths); an image key with no matching mask key,
+or vice versa, also raises `ValueError` (naming every such key on either side) -- both diagnostics
+truncate past 10 entries with a trailing `"... and N more"`. `image_root == mask_root` is not
+itself rejected (which physical files land on which side is governed entirely by `image_extensions`/
+`mask_extensions`), but an image and a mask that would resolve to the exact same path (only possible
+when the two extension sets overlap under a shared root) is rejected with `ValueError`, since an
+image and its own mask must be two distinct paths. Both sides empty gives `()`. This module never
+deduplicates by physical file identity: two different paths referencing the same file via a hard
+link remain a legal, distinct pair.
 
 ## Status
 

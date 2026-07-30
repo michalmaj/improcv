@@ -81,7 +81,7 @@ from improcv.detectors import (
     detect_fast_keypoints,
     detect_mser_regions,
 )
-from improcv.discovery import discover_images
+from improcv.discovery import ImageMaskPair, discover_image_mask_pairs, discover_images
 from improcv.dnn import (
     create_dnn_batch_blob,
     create_dnn_blob,
@@ -232,6 +232,7 @@ __all__ = [
     "HoughCircleMethod",
     "Image",
     "ImageFloat32",
+    "ImageMaskPair",
     "ImageU8",
     "InpaintMethod",
     "Labels",
@@ -296,6 +297,7 @@ __all__ = [
     "detect_fast_keypoints",
     "detect_mser_regions",
     "dilate",
+    "discover_image_mask_pairs",
     "discover_images",
     "distance_transform",
     "draw_bounding_boxes",
