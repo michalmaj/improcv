@@ -80,6 +80,18 @@ __all__ = [
 # to int32 later is a compatible extension, not a breaking one.
 _MASK_DTYPES = (np.uint8, np.uint16, np.int16)
 
+# apply_perspective's own, narrower mask dtype contract -- excludes int16.
+# Verified directly via this project's own CI: cv2.warpPerspective with an
+# int16 mask raises "Unknown C++ exception from OpenCV code" on Windows
+# (opencv-python-headless==4.14.0.94), while the identical wheel version
+# works correctly for the same call on Linux and macOS -- a genuine,
+# platform-specific upstream OpenCV limitation, not something this project
+# can fix. warpAffine is unaffected by this (verified: the same int16 mask
+# through apply_affine works on all three platforms), so only apply_
+# perspective's mask contract is narrowed; _MASK_DTYPES above is unchanged
+# and still applies to flip/crop/affine.
+_PERSPECTIVE_MASK_DTYPES = (np.uint8, np.uint16)
+
 # Mirrors transforms._GEOMETRIC_DTYPES exactly (uint8/uint16/int16/float32/
 # float64) -- duplicated here, not imported, since transforms.py's constant is
 # module-private and every other module in this project defines its own
@@ -1035,13 +1047,21 @@ def apply_perspective(
     `interpolation` selects an OpenCV interpolation mode only -- it does not accept
     `cv2.WARP_INVERSE_MAP` or any other warp-control flag bit, exactly as in `apply_affine`.
 
-    If `mask` is given, it must satisfy the same shape/dtype contract as `apply_affine`'s `mask`
-    (shape `(H, W)`/`(H, W, 1)`, dtype `uint8`/`uint16`/`int16`, spatial size matching `image`;
-    verified directly that `warpPerspective` has the identical mask dtype/singleton-channel
-    behavior as `warpAffine`, including silently downcasting an `int64` mask to `int32` and
-    rejecting `bool`) and is always warped with `interpolation=cv2.INTER_NEAREST`,
-    `border_mode=cv2.BORDER_CONSTANT`, and `border_value=mask_border_value` -- the caller cannot
-    change the mask's interpolation or border mode, only the fill value.
+    If `mask` is given, it must satisfy the same shape contract as `apply_affine`'s `mask`
+    (shape `(H, W)`/`(H, W, 1)`, spatial size matching `image`) but a *narrower* dtype contract:
+    `uint8`/`uint16` only, not `int16` -- unlike every other dtype behavior in this module,
+    verified directly to be identical between `warpPerspective` and `warpAffine` (silently
+    downcasting an `int64` mask to `int32`, rejecting `bool`), an `int16` mask specifically was
+    found (via this project's own CI) to make `cv2.warpPerspective` raise "Unknown C++ exception
+    from OpenCV code" on Windows (`opencv-python-headless==4.14.0.94`) while the identical wheel
+    version works correctly for the same call on Linux and macOS -- a genuine, platform-specific
+    upstream OpenCV limitation affecting `warpPerspective` only (`warpAffine` with the same
+    `int16` mask is unaffected on all three platforms), not something this project can fix, so
+    `apply_perspective` does not accept `int16` masks at all rather than support them
+    unreliably depending on the caller's platform. `mask` is always warped with
+    `interpolation=cv2.INTER_NEAREST`, `border_mode=cv2.BORDER_CONSTANT`, and
+    `border_value=mask_border_value` -- the caller cannot change the mask's interpolation or
+    border mode, only the fill value.
 
     Returns
     -------
@@ -1078,7 +1098,7 @@ def apply_perspective(
     if mask is None:
         return augmented_image
 
-    _require_mask(mask, "mask")
+    _require_mask(mask, "mask", _PERSPECTIVE_MASK_DTYPES)
     _require_matching_spatial_shape(mask, image, "mask", "image")
     require_integral(mask_border_value, "mask_border_value")
     require_fits_dtype(mask_border_value, mask.dtype, "mask_border_value")
@@ -1459,7 +1479,7 @@ def _require_matches_source_size(
         )
 
 
-def _require_mask(mask: object, name: str) -> None:
+def _require_mask(mask: object, name: str, dtypes: tuple[type, ...] = _MASK_DTYPES) -> None:
     if not isinstance(mask, np.ndarray):
         raise TypeError(f"{name} must be a NumPy array, got {type(mask).__name__}")
     if mask.ndim not in (2, 3):
@@ -1468,7 +1488,7 @@ def _require_mask(mask: object, name: str) -> None:
         raise ValueError(f"{name} must have shape (H, W) or (H, W, 1), got {mask.shape}")
     if mask.size == 0:
         raise ValueError(f"{name} must not be empty, got shape {mask.shape}")
-    require_dtype(mask, _MASK_DTYPES, name)
+    require_dtype(mask, dtypes, name)
 
 
 def _require_matching_spatial_shape(a: np.ndarray, b: np.ndarray, name_a: str, name_b: str) -> None:

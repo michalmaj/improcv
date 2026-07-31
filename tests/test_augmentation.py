@@ -3055,7 +3055,7 @@ def test_apply_perspective_mask_hw1_shape_preserved() -> None:
     assert result.mask.shape == (10, 12, 1)
 
 
-@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.int16])
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16])
 def test_apply_perspective_supported_mask_dtypes(dtype: type) -> None:
     image = _make_image(10, 12)
     mask = _make_mask(10, 12, dtype=dtype)
@@ -3065,7 +3065,7 @@ def test_apply_perspective_supported_mask_dtypes(dtype: type) -> None:
     assert result.mask.dtype == dtype
 
 
-@pytest.mark.parametrize("dtype", [np.bool_, np.int32, np.int64, np.float32])
+@pytest.mark.parametrize("dtype", [np.bool_, np.int16, np.int32, np.int64, np.float32])
 def test_apply_perspective_rejects_unsupported_mask_dtype(dtype: type) -> None:
     image = _make_image(10, 12)
     mask = np.zeros((10, 12), dtype=dtype)
@@ -3075,17 +3075,23 @@ def test_apply_perspective_rejects_unsupported_mask_dtype(dtype: type) -> None:
         apply_perspective(image, params, mask=mask)
 
 
-def test_apply_perspective_mask_signed_negative_ignore_label_preserved() -> None:
-    # distortion_scale=0.0 (identity) so a single isolated labeled pixel is
-    # guaranteed to survive nearest-neighbor resampling unchanged -- a strong
-    # random distortion could legitimately drop an isolated single pixel.
+def test_apply_perspective_int16_mask_rejected_unlike_apply_affine() -> None:
+    # Deliberate, narrower contract than apply_affine/apply_flip/apply_crop: verified
+    # via this project's own Windows CI that cv2.warpPerspective (not warpAffine) with
+    # an int16 mask raises "Unknown C++ exception from OpenCV code" on Windows for the
+    # same opencv-python-headless version that works fine on Linux/macOS -- excluded
+    # outright rather than supported unreliably depending on the caller's platform.
     image = _make_image(10, 12)
-    mask = np.zeros((10, 12), dtype=np.int16)
-    mask[5, 6] = -1
+    mask = _make_mask(10, 12, dtype=np.int16)
     rng = np.random.default_rng(0)
     params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.0)
-    result = apply_perspective(image, params, mask=mask)
-    assert -1 in np.unique(result.mask)
+    with pytest.raises(TypeError, match="dtype"):
+        apply_perspective(image, params, mask=mask)
+
+    # the identical mask, through apply_affine, remains fully supported.
+    affine_params = sample_affine(rng, source_size=(12, 10))
+    affine_result = apply_affine(image, affine_params, mask=mask)
+    assert affine_result.mask.dtype == np.int16
 
 
 def test_apply_perspective_mask_always_uses_nearest_neighbor(

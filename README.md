@@ -1148,10 +1148,15 @@ otherwise -- verified directly that even `cv2.getPerspectiveTransform(src, src)`
 below that); a hand-constructed `PerspectiveParameters` may still be applied to a smaller source size
 via `apply_perspective`, as long as its `matrix` independently passes the same rank/horizon checks.
 
-`apply_perspective` mirrors `apply_affine`'s contract exactly (same `interpolation`/`border_mode`/
-`border_value`/`mask_border_value`, same mask dtype restriction, same source-size replay guard, same
-unchanged output size, same nearest-neighbor/constant-border mask policy), using `improcv.transforms.
-warp_perspective` instead of `warp_affine`.
+`apply_perspective` mirrors `apply_affine`'s contract closely (same `interpolation`/`border_mode`/
+`border_value`/`mask_border_value`, same source-size replay guard, same unchanged output size, same
+nearest-neighbor/constant-border mask policy), using `improcv.transforms.warp_perspective` instead of
+`warp_affine` -- with one deliberate exception: `apply_perspective`'s mask dtype contract is narrower,
+`uint8`/`uint16` only, not `int16`. This was found via this project's own CI, not anticipated: an
+`int16` mask makes `cv2.warpPerspective` (not `warpAffine`) raise "Unknown C++ exception from OpenCV
+code" on Windows for the exact `opencv-python-headless` version that works correctly on Linux and
+macOS -- a genuine, platform-specific upstream OpenCV limitation, so `int16` is excluded outright
+rather than supported unreliably depending on the caller's platform.
 
 This slice covers flip, crop, a shear+rotation+translation+isotropic-scale affine transform, and a
 single-homography perspective transform: no anisotropic scale, no canvas expansion, no photometric

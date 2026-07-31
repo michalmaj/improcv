@@ -177,13 +177,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   applied via `apply_perspective` to a smaller source size, as long as its `matrix` independently
   passes the same rank/horizon checks.
 
-  `apply_perspective` mirrors `apply_affine`'s contract exactly (`interpolation`/`border_mode`/
-  `border_value`/`mask_border_value`, mask dtype restriction, source-size replay guard, unchanged
-  output size, nearest-neighbor/constant-border mask policy, `WARP_INVERSE_MAP` rejection, `cv2.error`
-  mapped to `RuntimeError`), using a new `improcv.transforms.warp_perspective` import (`transforms.py`
-  itself is unchanged). No canvas expansion, no anisotropic scale, no bounding box/keypoint/polygon
-  support, no probability/application policy (always samples, like `sample_affine`), and no
-  `Compose`-style pipeline. No new dependency.
+  `apply_perspective` mirrors `apply_affine`'s contract closely (`interpolation`/`border_mode`/
+  `border_value`/`mask_border_value`, source-size replay guard, unchanged output size,
+  nearest-neighbor/constant-border mask policy, `WARP_INVERSE_MAP` rejection, `cv2.error` mapped to
+  `RuntimeError`), using a new `improcv.transforms.warp_perspective` import (`transforms.py` itself is
+  unchanged) -- except for one deliberate, narrower mask dtype contract: `uint8`/`uint16` only, not
+  `int16`. This project's own CI caught a genuine, platform-specific upstream OpenCV limitation: an
+  `int16` mask makes `cv2.warpPerspective` (not `warpAffine`) raise "Unknown C++ exception from OpenCV
+  code" on Windows for the exact `opencv-python-headless==4.14.0.94` build that passes correctly on
+  Linux and macOS -- so `apply_perspective` excludes `int16` outright rather than support it
+  unreliably depending on the caller's platform; `apply_affine`/`apply_flip`/`apply_crop`'s own
+  `int16` mask support is unaffected. No canvas expansion, no anisotropic scale, no bounding
+  box/keypoint/polygon support, no probability/application policy (always samples, like
+  `sample_affine`), and no `Compose`-style pipeline. No new dependency.
 - New `improcv.discovery` module, Phase 5 slice (deterministic extension-based dataset image
   discovery): `discover_images`, finding candidate image files under a directory by filename
   extension only -- a file's content is never opened or decoded, so an empty, corrupted, or
