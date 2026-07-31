@@ -3604,12 +3604,13 @@ def test_sample_affine_identity_axis_scale_matches_pre_axis_scale_matrix_bit_for
 
 
 def test_sample_affine_default_axis_scale_preserves_rng_sequence_across_calls() -> None:
-    # Manually reconstructs the pre-axis-scale draw sequence (angle, dx, dy,
-    # scale, shear_x, shear_y -- in that order, exactly as sample_affine
-    # sampled them before anisotropic scale existed), not another run of
-    # the current implementation -- a shared bug in the new code could
-    # otherwise make two runs of the same implementation agree while both
-    # silently diverge from the real, pre-feature sequence.
+    # Manually reconstructs the pre-axis-scale default draw sequence
+    # (angle, dx, dy, scale). The default singleton shear ranges consumed no
+    # RNG state, exactly as the current singleton-aware helper still
+    # guarantees -- not another run of the current implementation, since a
+    # shared bug in the new code could otherwise make two runs of the same
+    # implementation agree while both silently diverge from the real,
+    # pre-feature sequence.
     source_size = (10, 8)
     center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
     angle_range = (-5.0, 5.0)

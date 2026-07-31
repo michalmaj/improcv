@@ -11,12 +11,11 @@ RNG themselves. The same sampled parameters can be applied to an image and
 its segmentation mask (or to a second image of the same spatial size) any
 number of times, always producing the same result.
 
-Affine coverage is a stable subset of the general affine group: shear,
-rotation, isotropic scale, and anisotropic (per-axis) scale (a similarity
-transform plus a sequential shear plus an independent axis-scale step), all
-composed around the image center. Perspective coverage is a single,
-replayable homography sampled by displacing each of the source rectangle's
-four corners inward, independently, within a bound controlled by
+Affine coverage is a stable subset of the general affine group: sequential
+shear, anisotropic axis scale, rotation with isotropic scale, and
+translation, all composed around the image center. Perspective coverage is
+a single, replayable homography sampled by displacing each of the source
+rectangle's four corners inward, independently, within a bound controlled by
 `distortion_scale`; both affine and perspective always produce output the
 same size as the source (no canvas expansion). Canvas expansion (a
 `rotate_bound`-style growing output), resize, photometric augmentation,
@@ -139,8 +138,8 @@ class CropParameters:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class AffineParameters:
-    """The result of `sample_affine`: a shear + anisotropic-scale + rotation + translation +
-    isotropic-scale matrix.
+    """The result of `sample_affine`: a replayable affine transform composed from shear,
+    anisotropic axis scale, rotation with isotropic scale, and translation.
 
     `matrix` (shape ``(2, 3)``, dtype ``float64``, finite, a new read-only
     buffer) is the sole source of truth for replay -- `apply_affine` applies
@@ -542,8 +541,8 @@ def sample_affine(
     shear_x_range: tuple[float, float] = (0.0, 0.0),
     shear_y_range: tuple[float, float] = (0.0, 0.0),
 ) -> AffineParameters:
-    """Sample a shear + anisotropic-scale + rotation + translation + isotropic-scale affine
-    transform.
+    """Sample a replayable affine transform with shear, anisotropic axis scale, rotation,
+    isotropic scale, and translation.
 
     `source_size` is `(width, height)`. `angle_range` is in degrees, with
     the same positive (counter-clockwise) direction and center convention
