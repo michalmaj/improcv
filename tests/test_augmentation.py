@@ -17,6 +17,7 @@ from improcv.augmentation import (
     apply_crop,
     apply_flip,
     apply_perspective,
+    expand_affine_canvas,
     sample_affine,
     sample_crop,
     sample_flip,
@@ -31,6 +32,14 @@ def _make_image(height: int, width: int, channels: int | None = 3) -> np.ndarray
 
 def _make_mask(height: int, width: int, dtype: type = np.uint8) -> np.ndarray:
     return (np.arange(height * width) % 4).astype(dtype).reshape(height, width)
+
+
+def _output_size(params: AffineParameters) -> tuple[int, int]:
+    # Narrows AffineParameters.output_size (tuple[int, int] | None) for
+    # Pyright at call sites that already know, from how params was built,
+    # that expand_affine_canvas has set it.
+    assert params.output_size is not None
+    return params.output_size
 
 
 # --- import hygiene ---
@@ -4058,6 +4067,755 @@ def test_apply_affine_error_message_uses_instance_wording_not_exactly() -> None:
     with pytest.raises(TypeError) as exc_info:
         apply_affine(_make_image(8, 10), "not-params")  # type: ignore[arg-type]
     assert "exactly" not in str(exc_info.value)
+
+
+# --- AffineParameters: output_size field compatibility ---
+
+
+def test_affine_parameters_five_positional_arguments_still_construct_with_output_size() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0)
+    assert params.output_size is None
+
+
+def test_affine_parameters_output_size_is_keyword_only_eighth_positional_rejected() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    with pytest.raises(TypeError):
+        AffineParameters(
+            matrix,
+            (10, 8),
+            0.0,
+            (0.0, 0.0),
+            1.0,
+            (0.0, 0.0),  # type: ignore[misc]
+            (1.0, 1.0),
+            (10, 8),
+        )
+
+
+def test_affine_parameters_output_size_accepted_as_keyword() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, output_size=(20, 16))
+    assert params.output_size == (20, 16)
+
+
+def test_affine_parameters_match_args_excludes_output_size() -> None:
+    assert AffineParameters.__match_args__ == (
+        "matrix",
+        "source_size",
+        "angle",
+        "translation",
+        "scale",
+    )
+
+
+def test_affine_parameters_five_positional_pattern_matching_unaffected_by_output_size() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 1.5, (2.0, 3.0), 1.1, output_size=(20, 16))
+    match params:
+        case AffineParameters(m, s, a, t, sc):
+            assert m is params.matrix
+            assert s == (10, 8)
+            assert a == 1.5
+            assert t == (2.0, 3.0)
+            assert sc == 1.1
+        case _:
+            pytest.fail("pattern match failed")
+
+
+def test_affine_parameters_equality_includes_output_size() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    a = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, output_size=(20, 16))
+    b = AffineParameters(matrix.copy(), (10, 8), 0.0, (0.0, 0.0), 1.0, output_size=(20, 16))
+    c = AffineParameters(matrix.copy(), (10, 8), 0.0, (0.0, 0.0), 1.0, output_size=(21, 16))
+    assert a == b
+    assert a != c
+
+
+def test_affine_parameters_old_params_default_output_size_none_equality_unaffected() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    a = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0)
+    b = AffineParameters(matrix.copy(), (10, 8), 0.0, (0.0, 0.0), 1.0)
+    assert a == b
+    assert a.output_size is None
+    assert b.output_size is None
+
+
+def test_affine_parameters_repr_and_asdict_contain_output_size() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, output_size=(20, 16))
+    assert "output_size" in repr(params)
+    d = dataclasses.asdict(params)
+    assert d["output_size"] == (20, 16)
+
+
+def test_affine_parameters_default_output_size_is_none() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0)
+    assert params.output_size is None
+
+
+def test_affine_parameters_output_size_does_not_restore_hashability() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, output_size=(20, 16))
+    with pytest.raises(TypeError):
+        hash(params)
+
+
+# --- expand_affine_canvas: API/validation ---
+
+
+def test_expand_affine_canvas_is_exported() -> None:
+    assert im.expand_affine_canvas is expand_affine_canvas
+
+
+def test_expand_affine_canvas_rejects_non_affine_parameters() -> None:
+    with pytest.raises(TypeError, match="AffineParameters"):
+        expand_affine_canvas("not-params")  # type: ignore[arg-type]
+
+
+def test_expand_affine_canvas_rejects_invalid_matrix() -> None:
+    bad = dataclasses.replace(
+        sample_affine(np.random.default_rng(0), source_size=(5, 4)),
+        matrix=np.eye(3, dtype=np.float64),  # type: ignore[arg-type]
+    )
+    with pytest.raises(ValueError, match=r"\(2, 3\)"):
+        expand_affine_canvas(bad)
+
+
+@pytest.mark.parametrize("bad", [(10,), (10, 8, 1), "10x8", [10, 8]])
+def test_expand_affine_canvas_rejects_malformed_hand_built_output_size(bad: object) -> None:
+    base = sample_affine(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=bad)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError)):
+        expand_affine_canvas(params)
+
+
+def test_expand_affine_canvas_rejects_bool_in_hand_built_output_size() -> None:
+    base = sample_affine(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(True, 8))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        expand_affine_canvas(params)
+
+
+def test_expand_affine_canvas_rejects_non_positive_hand_built_output_size() -> None:
+    base = sample_affine(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(0, 8))
+    with pytest.raises(ValueError, match="positive"):
+        expand_affine_canvas(params)
+
+
+# --- expand_affine_canvas: idempotence/fail-fast ---
+
+
+def test_expand_affine_canvas_rejects_already_expanded_params() -> None:
+    params = sample_affine(np.random.default_rng(0), source_size=(5, 4))
+    expanded = expand_affine_canvas(params)
+    with pytest.raises(ValueError, match="already define an output_size"):
+        expand_affine_canvas(expanded)
+
+
+def test_expand_affine_canvas_rejects_hand_built_params_with_output_size_set() -> None:
+    base = sample_affine(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(20, 16))
+    with pytest.raises(ValueError, match="already define an output_size"):
+        expand_affine_canvas(params)
+
+
+def test_expand_affine_canvas_does_not_mutate_input_params() -> None:
+    params = sample_affine(np.random.default_rng(0), source_size=(5, 4), angle_range=(30.0, 30.0))
+    original_matrix = params.matrix.copy()
+    expand_affine_canvas(params)
+    np.testing.assert_array_equal(params.matrix, original_matrix)
+    assert params.output_size is None
+
+
+# --- expand_affine_canvas: bounds and matrix (manual oracles) ---
+
+
+def test_expand_affine_canvas_identity() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (5, 4), 0.0, (0.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (5, 4)
+    np.testing.assert_array_equal(expanded.matrix, matrix)
+    # sampling metadata copied unchanged
+    assert expanded.source_size == (5, 4)
+    assert expanded.angle == 0.0
+    assert expanded.translation == (0.0, 0.0)
+    assert expanded.scale == 1.0
+
+
+def test_expand_affine_canvas_positive_integer_translation() -> None:
+    matrix = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (5, 4), 0.0, (2.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (7, 4)
+    # dx=2 is preserved verbatim in the adjusted matrix -- shift_x is 0 here.
+    np.testing.assert_allclose(expanded.matrix, [[1.0, 0.0, 2.0], [0.0, 1.0, 0.0]])
+
+
+def test_expand_affine_canvas_positive_fractional_translation() -> None:
+    matrix = np.array([[1.0, 0.0, 0.25], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (5, 4), 0.0, (0.25, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (6, 4)
+    np.testing.assert_allclose(expanded.matrix, [[1.0, 0.0, 0.25], [0.0, 1.0, 0.0]])
+
+
+def test_expand_affine_canvas_negative_integer_translation() -> None:
+    matrix = np.array([[1.0, 0.0, -2.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (5, 4), 0.0, (-2.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (7, 4)
+    # dx=-2 is fully absorbed by a +2 canvas-origin shift.
+    np.testing.assert_allclose(expanded.matrix, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], atol=1e-9)
+
+
+def test_expand_affine_canvas_negative_fractional_translation() -> None:
+    matrix = np.array([[1.0, 0.0, -0.25], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (5, 4), 0.0, (-0.25, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (6, 4)
+    # -0.25 + 0.25 shift == 0.0 -- this does not mean translation "disappeared":
+    # the destination origin itself moved left by 0.25 to accommodate it.
+    np.testing.assert_allclose(expanded.matrix, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], atol=1e-9)
+    # params.translation itself, as sampling metadata, is untouched.
+    assert expanded.translation == (-0.25, 0.0)
+
+
+@pytest.mark.parametrize("angle,expected", [(90.0, (3, 3)), (180.0, (3, 2)), (270.0, (3, 3))])
+def test_expand_affine_canvas_non_square_right_angles_are_grow_only(
+    angle: float, expected: tuple[int, int]
+) -> None:
+    # source=(3,2): rotate_bound's own tight bbox at 90/270 is (2,3), narrower
+    # than the source width of 3 -- expand_affine_canvas's grow-only, union-
+    # with-source contract deliberately keeps width>=3 instead, per the
+    # documented, approved departure from rotate_bound parity.
+    source_size = (3, 2)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+    matrix = np.asarray(cv2.getRotationMatrix2D(center, angle, 1.0), dtype=np.float64)
+    params = AffineParameters(matrix, source_size, angle, (0.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == expected
+    assert _output_size(expanded)[0] >= source_size[0]
+    assert _output_size(expanded)[1] >= source_size[1]
+
+
+def test_expand_affine_canvas_45_degrees_on_2x2_matches_rotate_bound() -> None:
+    source_size = (2, 2)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+    matrix = np.asarray(cv2.getRotationMatrix2D(center, 45.0, 1.0), dtype=np.float64)
+    params = AffineParameters(matrix, source_size, 45.0, (0.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    # rotate_bound gives (3, 3) here (test_rotate_bound_does_not_truncate_canvas_on_small_image);
+    # the square-source, no-translation case is exactly where the grow-only
+    # union with source is a no-op, so this reduces to rotate_bound's answer.
+    assert expanded.output_size == (3, 3)
+
+
+def test_expand_affine_canvas_centered_shrink_does_not_shrink_canvas() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), scale_range=(0.5, 0.5))
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (10, 8)
+
+
+def test_expand_affine_canvas_scale_up_grows_canvas() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), scale_range=(2.0, 2.0))
+    expanded = expand_affine_canvas(params)
+    assert _output_size(expanded)[0] > 10
+    assert _output_size(expanded)[1] > 8
+
+
+def test_expand_affine_canvas_shear_only_one_corner_negative() -> None:
+    matrix = np.array([[1.0, 0.6, -0.9], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (6, 4), 0.0, (0.0, 0.0), 1.0, shear=(0.6, 0.0))
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (9, 4)
+
+
+def test_expand_affine_canvas_anisotropic_scale_grows_only_stretched_axis() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng, source_size=(10, 8), axis_scale_x_range=(2.0, 2.0), axis_scale_y_range=(1.0, 1.0)
+    )
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (20, 8)
+
+
+def test_expand_affine_canvas_reflection_matches_source_bbox() -> None:
+    # x -> -x about the image's own vertical center axis: det < 0, but the
+    # bbox is unchanged (a reflection about the source's own center axis
+    # maps the rectangle onto itself) -- no rank/orientation check needed.
+    matrix = np.array([[-1.0, 0.0, 4.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (5, 4), 0.0, (0.0, 0.0), 1.0)
+    assert np.linalg.det(matrix[:, :2]) < 0
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (5, 4)
+
+
+def test_expand_affine_canvas_singular_matrix_floors_to_source_size() -> None:
+    # A degenerate (rank-deficient) linear part collapses the transformed
+    # footprint to a point/line -- the grow-only union with the source
+    # footprint still guarantees a legal, source-sized-or-larger canvas.
+    matrix = np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (5, 4), 0.0, (0.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (5, 4)
+
+
+@pytest.mark.parametrize("source_size", [(1, 1), (1, 10), (10, 1)])
+def test_expand_affine_canvas_singleton_dimensions_identity(source_size: tuple[int, int]) -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, source_size, 0.0, (0.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == source_size
+
+
+def test_expand_affine_canvas_uses_matrix_not_mismatched_metadata() -> None:
+    # Regression test: sampling metadata (translation=(999.0, 999.0)) is
+    # deliberately inconsistent with the matrix's own dx=3.0 -- bounds must
+    # follow the matrix, never the metadata.
+    matrix = np.array([[1.0, 0.0, 3.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        angle=0.0,
+        translation=(999.0, 999.0),
+        scale=1.0,
+    )
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == (8, 4)  # matches matrix's dx=3, not metadata's 999
+    assert expanded.translation == (999.0, 999.0)  # metadata copied unchanged, still mismatched
+
+
+# --- expand_affine_canvas: rounding/snapping ---
+
+
+@pytest.mark.parametrize("angle", [90.0, 180.0, 270.0])
+def test_expand_affine_canvas_exact_right_angles_no_spurious_pixel(angle: float) -> None:
+    source_size = (20, 20)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+    matrix = np.asarray(cv2.getRotationMatrix2D(center, angle, 1.0), dtype=np.float64)
+    params = AffineParameters(matrix, source_size, angle, (0.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    # a square source rotated by an exact right angle must not gain a
+    # spurious extra pixel from cos/sin's ~1e-17 floating-point noise.
+    assert expanded.output_size == (20, 20)
+
+
+def test_expand_affine_canvas_near_right_angle_is_not_snapped_to_exact() -> None:
+    # A 1e-6-degree perturbation from 90 degrees is a real geometric change,
+    # not representation noise -- for a large enough source it must be able
+    # to require an extra pixel, and must not be silently treated the same
+    # as exactly 90 degrees.
+    source_size = (1000, 700)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+
+    def build(angle: float) -> AffineParameters:
+        matrix = np.asarray(cv2.getRotationMatrix2D(center, angle, 1.0), dtype=np.float64)
+        return AffineParameters(matrix, source_size, angle, (0.0, 0.0), 1.0)
+
+    exact = expand_affine_canvas(build(90.0))
+    just_under = expand_affine_canvas(build(89.999999))
+    just_over = expand_affine_canvas(build(90.000001))
+
+    assert just_under.output_size != exact.output_size
+    assert just_over.output_size != exact.output_size
+
+
+def test_expand_affine_canvas_translation_1e_minus_7_is_not_zeroed() -> None:
+    matrix = np.array([[1.0, 0.0, 1e-7], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (1000, 700), 0.0, (1e-7, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.matrix[0, 2] == pytest.approx(1e-7, abs=0.0, rel=1e-9)
+
+
+def test_expand_affine_canvas_translation_1e_minus_12_is_not_zeroed() -> None:
+    matrix = np.array([[1.0, 0.0, 1e-12], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (1000, 700), 0.0, (1e-12, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert expanded.matrix[0, 2] == pytest.approx(1e-12, abs=0.0, rel=1e-6)
+
+
+def test_expand_affine_canvas_snapping_does_not_use_decimal_rounding() -> None:
+    # A regression guard against reintroducing rotate_bound's coarse
+    # round(value, 6): that threshold would destroy a 1e-7 translation
+    # (already covered above) -- this test additionally locks in that the
+    # module does not import/call the round-to-6-decimals idiom for this
+    # feature by checking the actual snap tolerance is far tighter than 1e-6
+    # at a moderate image magnitude.
+    from improcv.augmentation import _snap_near_integer
+
+    value = 10.0 + 5e-7
+    snapped = _snap_near_integer(value, magnitude=10.0)
+    assert snapped == value  # NOT snapped to 10.0 -- 5e-7 is far above the ULP-scale tolerance
+
+
+def test_expand_affine_canvas_snap_helper_absorbs_only_ulp_scale_noise() -> None:
+    from improcv.augmentation import _snap_near_integer
+
+    # cos(90 degrees) * 20 ~ 1.2e-15 -- must snap to 0.0
+    noisy = 20 * abs(np.cos(np.radians(90.0)))
+    assert _snap_near_integer(noisy, magnitude=20.0) == 0.0
+    # a value nowhere near an integer must be returned unchanged
+    assert _snap_near_integer(5.37, magnitude=20.0) == 5.37
+
+
+# --- expand_affine_canvas: grow-only semantics ---
+
+
+@pytest.mark.parametrize(
+    "source_size,angle,scale,shear_x",
+    [
+        ((10, 8), 0.0, 1.0, 0.0),
+        ((10, 8), 37.0, 1.0, 0.0),
+        ((10, 8), 90.0, 1.0, 0.0),
+        ((3, 2), 90.0, 1.0, 0.0),
+        ((10, 8), 0.0, 0.3, 0.0),
+        ((10, 8), 0.0, 1.0, 0.7),
+        ((7, 13), 123.0, 0.6, -0.4),
+    ],
+)
+def test_expand_affine_canvas_is_always_grow_only(
+    source_size: tuple[int, int], angle: float, scale: float, shear_x: float
+) -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng,
+        source_size=source_size,
+        angle_range=(angle, angle),
+        scale_range=(scale, scale),
+        shear_x_range=(shear_x, shear_x),
+    )
+    expanded = expand_affine_canvas(params)
+    assert _output_size(expanded)[0] >= source_size[0]
+    assert _output_size(expanded)[1] >= source_size[1]
+
+
+# --- expand_affine_canvas: numerics ---
+
+
+def test_expand_affine_canvas_rejects_non_finite_transformed_coordinates() -> None:
+    matrix = np.array([[1e308, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (10, 10), 0.0, (0.0, 0.0), 1.0)
+    with pytest.raises(ValueError, match="finite"):
+        expand_affine_canvas(params)
+
+
+def test_expand_affine_canvas_rejects_output_size_overflow() -> None:
+    huge = 3_000_000_000.0
+    matrix = np.array([[1.0, 0.0, huge], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (10, 10), 0.0, (huge, 0.0), 1.0)
+    with pytest.raises(ValueError, match="int32"):
+        expand_affine_canvas(params)
+
+
+def test_expand_affine_canvas_no_floating_point_error_under_seterr_raise() -> None:
+    previous = np.seterr(all="raise")
+    try:
+        rng = np.random.default_rng(0)
+        params = sample_affine(
+            rng, source_size=(10, 8), angle_range=(37.0, 37.0), translation_x_range=(2.0, 2.0)
+        )
+        expanded = expand_affine_canvas(params)
+        assert np.all(np.isfinite(expanded.matrix))
+    finally:
+        np.seterr(**previous)
+
+
+def test_expand_affine_canvas_no_warning_under_warnings_as_errors() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        rng = np.random.default_rng(0)
+        params = sample_affine(rng, source_size=(10, 8), angle_range=(37.0, 37.0))
+        expand_affine_canvas(params)
+
+
+def test_expand_affine_canvas_does_not_add_rank_or_condition_number_check() -> None:
+    # A finite, but extremely poorly conditioned, affine matrix (already
+    # legal for apply_affine today) must still be accepted here -- no new
+    # rank/determinant/condition-number policy is introduced by expansion.
+    matrix = np.array([[1e-10, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(matrix, (10, 10), 0.0, (0.0, 0.0), 1.0)
+    expanded = expand_affine_canvas(params)
+    assert np.all(np.isfinite(expanded.matrix))
+
+
+# --- expand_affine_canvas: adjusted-matrix construction ---
+
+
+def test_expand_affine_canvas_adjusted_matrix_is_independent_read_only_float64() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), angle_range=(30.0, 30.0))
+    expanded = expand_affine_canvas(params)
+    assert expanded.matrix.shape == (2, 3)
+    assert expanded.matrix.dtype == np.float64
+    assert not expanded.matrix.flags.writeable
+    assert not np.shares_memory(expanded.matrix, params.matrix)
+
+
+def test_expand_affine_canvas_returns_base_affine_parameters_type() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8))
+    expanded = expand_affine_canvas(params)
+    assert type(expanded) is AffineParameters
+
+
+# --- apply_affine: expanded canvas ---
+
+
+def test_apply_affine_with_expanded_params_changes_output_shape() -> None:
+    image = _make_image(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    assert result.shape == (_output_size(expanded)[1], _output_size(expanded)[0], 3)
+
+
+def test_apply_affine_with_expanded_params_uses_same_output_size_for_mask() -> None:
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    pair = apply_affine(image, expanded, mask=mask)
+    assert (
+        pair.image.shape[:2]
+        == pair.mask.shape[:2]
+        == (_output_size(expanded)[1], _output_size(expanded)[0])
+    )
+
+
+def test_apply_affine_default_none_output_size_unchanged_behavior() -> None:
+    image = _make_image(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8))
+    assert params.output_size is None
+    result = apply_affine(image, params)
+    assert result.shape == image.shape
+
+
+def test_apply_affine_rejects_hand_built_output_size_overflow() -> None:
+    image = _make_image(8, 10)
+    base = sample_affine(np.random.default_rng(0), source_size=(10, 8))
+    params = dataclasses.replace(base, output_size=(2_500_000_000, 8))
+    with pytest.raises(ValueError, match="int32"):
+        apply_affine(image, params)
+
+
+def test_apply_affine_expanded_singleton_channel_mask_shape_restored() -> None:
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10).reshape(8, 10, 1)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    pair = apply_affine(image, expanded, mask=mask)
+    assert pair.mask.shape == (_output_size(expanded)[1], _output_size(expanded)[0], 1)
+
+
+def test_apply_affine_expanded_does_not_mutate_or_alias_input() -> None:
+    image = _make_image(8, 10)
+    original = image.copy()
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    np.testing.assert_array_equal(image, original)
+    assert not np.shares_memory(result, image)
+
+
+def test_apply_affine_expanded_output_is_writeable() -> None:
+    image = _make_image(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    assert result.flags.writeable
+
+
+@pytest.mark.parametrize("channels", [None, 1, 3, 4])
+def test_apply_affine_expanded_preserves_dtype_and_channel_layout(channels: int | None) -> None:
+    image = _make_image(8, 10, channels=channels)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    assert result.dtype == image.dtype
+    if channels is None:
+        assert result.ndim == 2
+    else:
+        assert result.shape[2] == channels
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.int16, np.float32, np.float64])
+def test_apply_affine_expanded_supports_all_image_dtypes(dtype: type) -> None:
+    image = (np.arange(80).reshape(8, 10) % 100).astype(dtype)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    assert result.dtype == dtype
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.int16])
+def test_apply_affine_expanded_supports_all_mask_dtypes(dtype: type) -> None:
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10, dtype=dtype)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    pair = apply_affine(image, expanded, mask=mask)
+    assert pair.mask.dtype == dtype
+
+
+def test_apply_affine_expanded_supports_read_only_input() -> None:
+    image = _make_image(8, 10)
+    image.setflags(write=False)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    assert result.shape[:2] == (_output_size(expanded)[1], _output_size(expanded)[0])
+
+
+def test_apply_affine_expanded_supports_non_contiguous_input() -> None:
+    base = _make_image(8, 20)
+    image = base[:, ::2]
+    assert not image.flags["C_CONTIGUOUS"]
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    assert result.shape[:2] == (_output_size(expanded)[1], _output_size(expanded)[0])
+
+
+def test_apply_affine_expanded_supports_fortran_order_input() -> None:
+    image = np.asfortranarray(_make_image(8, 10))
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    result = apply_affine(image, expanded)
+    assert result.shape[:2] == (_output_size(expanded)[1], _output_size(expanded)[0])
+
+
+def test_apply_affine_expanded_mask_uses_nearest_neighbor_and_constant_border(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    calls = []
+    real_warp_affine = augmentation_module._warp_affine
+
+    def spy(image, matrix, output_size, **kwargs):
+        calls.append((kwargs.get("interpolation"), kwargs.get("border_mode")))
+        return real_warp_affine(image, matrix, output_size, **kwargs)
+
+    monkeypatch.setattr(augmentation_module, "_warp_affine", spy)
+
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), translation_x_range=(3.0, 3.0))
+    expanded = expand_affine_canvas(params)
+    apply_affine(image, expanded, mask=mask)
+
+    assert calls[-1] == (cv2.INTER_NEAREST, cv2.BORDER_CONSTANT)
+
+
+# --- apply_affine/expand_affine_canvas: replay and direct oracle ---
+
+
+def test_apply_affine_expanded_replay_is_bit_exact_across_calls() -> None:
+    image = _make_image(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), angle_range=(20.0, 20.0))
+    expanded = expand_affine_canvas(params)
+    result_a = apply_affine(image, expanded)
+    result_b = apply_affine(image, expanded)
+    np.testing.assert_array_equal(result_a, result_b)
+
+
+def test_apply_affine_expanded_replay_image_and_mask_together() -> None:
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), angle_range=(20.0, 20.0))
+    expanded = expand_affine_canvas(params)
+    pair_a = apply_affine(image, expanded, mask=mask)
+    pair_b = apply_affine(image, expanded, mask=mask)
+    np.testing.assert_array_equal(pair_a.image, pair_b.image)
+    np.testing.assert_array_equal(pair_a.mask, pair_b.mask)
+
+
+def test_apply_affine_expanded_params_and_source_array_not_mutated_by_replay() -> None:
+    image = _make_image(8, 10)
+    original = image.copy()
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), angle_range=(20.0, 20.0))
+    expanded = expand_affine_canvas(params)
+    matrix_before = expanded.matrix.copy()
+    apply_affine(image, expanded)
+    apply_affine(image, expanded)
+    np.testing.assert_array_equal(image, original)
+    np.testing.assert_array_equal(expanded.matrix, matrix_before)
+
+
+def test_apply_affine_expanded_matches_independently_built_direct_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Independently (not via expand_affine_canvas) builds the expected
+    # adjusted matrix/output_size for a pure integer translation, and
+    # verifies apply_affine's actual call to _warp_affine receives exactly
+    # that matrix and output_size.
+    import improcv.augmentation as augmentation_module
+
+    source_size = (5, 4)
+    dx = 2.0
+    original_matrix = np.array([[1.0, 0.0, dx], [0.0, 1.0, 0.0]], dtype=np.float64)
+    params = AffineParameters(original_matrix, source_size, 0.0, (dx, 0.0), 1.0)
+
+    # Independent oracle: source footprint [-0.5,4.5]x[-0.5,3.5], transformed
+    # footprint [1.5,6.5]x[-0.5,3.5] -- union width=7, height=4, shift=(0,0).
+    expected_output_size = (7, 4)
+    expected_matrix = np.array([[1.0, 0.0, dx], [0.0, 1.0, 0.0]], dtype=np.float64)
+
+    expanded = expand_affine_canvas(params)
+    assert expanded.output_size == expected_output_size
+    np.testing.assert_allclose(expanded.matrix, expected_matrix)
+
+    calls = []
+    real_warp_affine = augmentation_module._warp_affine
+
+    def spy(image, matrix, output_size, **kwargs):
+        calls.append((np.array(matrix, copy=True), output_size))
+        return real_warp_affine(image, matrix, output_size, **kwargs)
+
+    monkeypatch.setattr(augmentation_module, "_warp_affine", spy)
+
+    image = _make_image(4, 5, channels=None)
+    apply_affine(image, expanded)
+
+    called_matrix, called_output_size = calls[0]
+    assert called_output_size == expected_output_size
+    np.testing.assert_allclose(called_matrix, expected_matrix)
+
+
+# --- expand_affine_canvas: RNG regression (sample_affine untouched) ---
+
+
+def test_expand_affine_canvas_does_not_touch_rng() -> None:
+    rng = np.random.default_rng(0)
+    state_before = rng.bit_generator.state
+    params = sample_affine(rng, source_size=(10, 8), angle_range=(20.0, 20.0))
+    state_after_sample = rng.bit_generator.state
+    expand_affine_canvas(params)
+    state_after_expand = rng.bit_generator.state
+    assert state_after_expand == state_after_sample
+    assert state_after_sample != state_before
 
 
 # --- affine regression: renamed private helper stays invisible publicly ---

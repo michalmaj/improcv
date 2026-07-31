@@ -224,6 +224,50 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   AffineParameters" wording is also corrected to "params must be an AffineParameters instance",
   matching the `isinstance` check `_require_affine_parameters` already performed. `transforms.py`
   is unchanged. No new dependency.
+- `improcv.augmentation`: replayable affine canvas expansion -- a new `expand_affine_canvas(params:
+  AffineParameters) -> AffineParameters` conversion, and a new keyword-only
+  `AffineParameters.output_size: tuple[int, int] | None = None` field. `expand_affine_canvas` is a
+  purely deterministic conversion (never touches any RNG, never calls `sample_affine`) that grows
+  `params`' stored output size -- and returns an adjusted, independent, read-only `matrix` -- so that
+  `apply_affine` no longer crops any transformed content; `apply_affine`'s own public signature is
+  unchanged, it simply renders to `params.output_size` when set (`None`, the default, is exactly
+  today's fixed-`source_size` behavior). Bounds are computed by transforming the source's full
+  `(width, height)` *pixel-cell footprint* (`[-0.5, width - 0.5] x [-0.5, height - 0.5]`, not just
+  the rectangle of pixel centers) through `params.matrix` directly -- never through
+  `params.translation`/`.angle`/`.scale`/`.shear`/`.axis_scale`, which remain sampling metadata a
+  hand-built `params` need not agree with `matrix` on -- and unioning that transformed footprint
+  with the original, untransformed source footprint: the result is never smaller than `source_size`
+  in either dimension, and no transformed content is cropped, though a transform pushing content
+  up/left can have part of its translation absorbed by a shift in the new canvas origin (the full
+  transform, translation included, is still applied exactly once; `params.translation` itself is
+  copied unchanged and never mutated to reflect that shift). This grow-only, union-with-source
+  contract is a deliberate, documented departure from `improcv.transforms.rotate_bound`'s leaner
+  output: verified directly that a non-square source rotated at or near 90/270 degrees has a tight
+  rotated bounding box narrower than the source in one dimension, while `expand_affine_canvas` keeps
+  that dimension at least as large as the source instead. Bounds/shift values are snapped to the
+  nearest integer only within a `16 * ulp(magnitude)` tolerance of floating-point noise from the
+  handful of matrix multiplications involved (e.g. `cos(90°)` landing at `~6.12e-17` instead of
+  exactly `0.0`) -- never a fixed decimal-place round like `rotate_bound`'s own `round(value, 6)`,
+  which is far coarser than that noise and would risk erasing a deliberately sampled sub-`1e-6`
+  translation; verified directly that a `1e-6`-degree perturbation away from a right angle can
+  legitimately change the required output size for a large-enough source, and that
+  `expand_affine_canvas` does not treat `89.999999`/`90.0`/`90.000001` degrees as equivalent, nor
+  zero out a `1e-7`/`1e-12` translation. `output_size`, once set, is part of the full source of truth
+  `apply_affine` replays (together with `matrix`) -- `expand_affine_canvas` is not idempotent and
+  raises `ValueError` if called again on already-expanded (or hand-built already-`output_size`-set)
+  `params`, rather than silently expanding twice. The computed output size is additionally required
+  to fit OpenCV's `int32` `cv::Size dsize` (verified directly, identically, against both OpenCV 4.9
+  and 5.0: `2**31 - 1` per dimension is accepted, `2**31` raises `cv2.error`); no new rank,
+  determinant, or condition-number check is added -- any finite affine matrix accepted by
+  `apply_affine` today, including a reflection or a singular matrix, remains legal here. Preexisting
+  five-positional-argument construction, `shear=`/`axis_scale=` keyword construction,
+  `__match_args__` (unchanged, still the original five field names), and positional pattern matching
+  all keep working exactly as before; a new `_check_warp_postconditions` helper generalizes the
+  existing shape-preserving postcondition check for a spatial size that may legitimately differ from
+  the input's, used by `apply_affine` for both the fixed- and expanded-canvas cases alike (`flip`/
+  `crop`/`apply_perspective` are unaffected). Perspective canvas expansion, resize, crop-to-fit, and
+  per-side margins remain out of scope; `improcv.transforms` (including `rotate_bound`) is
+  unchanged. No new dependency.
 - New `improcv.discovery` module, Phase 5 slice (deterministic extension-based dataset image
   discovery): `discover_images`, finding candidate image files under a directory by filename
   extension only -- a file's content is never opened or decoded, so an empty, corrupted, or
