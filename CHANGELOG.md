@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.2.0a2] - 2026-07-31
+
 ### Added
 - New `improcv.dnn` module, Phase 5 slice (DNN blob preprocessing): `create_dnn_blob` and
   `create_dnn_batch_blob`, wrapping `cv2.dnn.blobFromImage`/`blobFromImages` to turn `uint8`/
@@ -98,13 +100,14 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   pipeline, and no new dependency.
 - `improcv.augmentation`: affine augmentation sampling and replay for rotation, translation, and
   isotropic scale -- `sample_affine`/`apply_affine`, plus the `AffineParameters` result type. Covers
-  a stable similarity-transform subset of the general affine group; shear is a deliberately separate,
-  future extension (its parameterization and singularity behavior need their own audit), and
-  perspective, canvas expansion (a `rotate_bound`-style growing output), bounding boxes/keypoints/
-  polygons, and any `Compose`-style pipeline remain out of scope. `sample_affine` follows the same
-  `rng: np.random.Generator` contract as `sample_flip`/`sample_crop`; each of `angle_range`/
-  `translation_x_range`/`translation_y_range`/`scale_range` is an independently sampled `(low, high)`
-  tuple (`scale_range` additionally requires a positive `low`). The transform is built as rotation +
+  a stable similarity-transform subset of the general affine group; shear, perspective, and affine
+  canvas expansion (a `rotate_bound`-style growing output) were deliberately deferred from this
+  initial slice and added later in the 0.2.0a2 development series (see below); bounding
+  boxes/keypoints/polygons and any `Compose`-style pipeline remain out of scope. `sample_affine`
+  follows the same `rng: np.random.Generator` contract as `sample_flip`/`sample_crop`; each of
+  `angle_range`/`translation_x_range`/`translation_y_range`/`scale_range` is an independently
+  sampled `(low, high)` tuple (`scale_range` additionally requires a positive `low`). The transform
+  is built as rotation +
   isotropic scale around the image center (via `cv2.getRotationMatrix2D`, using the same center
   convention as `improcv.transforms.rotate`), then translated in the destination coordinate system --
   a fixed composition order, not an implementation detail, since translation does not commute with
@@ -467,7 +470,7 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   weighted input, naively summing `precision_recall_curve`'s own recall increments can round to
   `0.9999999999999999` even when the true result is exactly `1.0`. `sample_weight` for
   `confusion_matrix`/`classification_metrics`/`classification_metrics_from_confusion_matrix` is
-  added separately, below in this same `[Unreleased]` series; `auc(x, y)` has no `sample_weight`
+  added separately, later in the 0.2.0a2 development series; `auc(x, y)` has no `sample_weight`
   (it operates on curve points, not per-observation weights). No new public result type, no
   multiclass score matrix, and no new dependency in this slice.
 - `improcv.evaluation`, Phase 5 slice: an optional, keyword-only `sample_weight` for
@@ -631,7 +634,7 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   contract depends on). Legal underflow in either reducer still never depends on the caller's own
   `np.seterr`/`np.errstate` configuration.
 - `improcv.evaluation`: the weighted ROC/precision-recall/ROC-AUC/average-precision path
-  (`sample_weight`, added earlier in this same `[Unreleased]` series) could leak a raw
+  (`sample_weight`, added earlier in the 0.2.0a2 development series) could leak a raw
   `FloatingPointError` or `RuntimeWarning` for legal, extreme-but-finite weights whenever the
   caller had previously called `np.seterr(under="raise")`/`np.seterr(under="warn")` -- a public
   function's result must not depend on the caller's own global NumPy error-state configuration.
@@ -682,8 +685,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   ordinary fast path for non-underflowing, non-overflowing data (and therefore `roc_auc_score`'s
   own bit-identical result on its own `[0, 1]`-bounded domain, which never reaches either
   fallback trigger) is unchanged.
-- `improcv.evaluation`: `auc`'s overflow fallback (introduced alongside `auc` itself, in this same
-  `[Unreleased]` series) previously rescaled every value by a single `0.5`/`2.0` factor before
+- `improcv.evaluation`: `auc`'s overflow fallback (introduced alongside `auc` itself, earlier in the
+  0.2.0a2 development series) previously rescaled every value by a single `0.5`/`2.0` factor before
   recombining, which is not actually exact at the extremes: (1) it wrongly raised `ValueError` for
   inputs whose true trapezoidal area is a finite, representable `float64` reached only through
   cancellation between huge intermediate contributions (e.g. segments individually far larger than
@@ -691,8 +694,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   underflow a genuine subnormal residual to `0.0` (halving a value already at the edge of the
   subnormal range loses it entirely). The fallback now recomputes the exact trapezoidal sum as a
   rational number (`fractions.Fraction`, standard library) over the already-normalized `float64`
-  values, converting just the final total back to `float` -- since amended below in this same
-  `[Unreleased]` series to also cover underflow and mixed-sign cancellation, not overflow alone.
+  values, converting just the final total back to `float` -- since amended later in the 0.2.0a2
+  development series to also cover underflow and mixed-sign cancellation, not overflow alone.
   `ValueError` is now raised only when that exact total's `float()` conversion itself overflows
   (i.e. the true area genuinely is not representable as a finite `float64`), never merely because
   the fast, unscaled `float64` attempt happened to overflow. The ordinary, non-overflowing fast path
