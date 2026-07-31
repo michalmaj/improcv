@@ -12,15 +12,16 @@ its segmentation mask (or to a second image of the same spatial size) any
 number of times, always producing the same result.
 
 Affine coverage is a stable subset of the general affine group: shear,
-rotation, and isotropic scale (a similarity transform plus a sequential
-shear), all composed around the image center. Perspective coverage is a
-single, replayable homography sampled by displacing each of the source
-rectangle's four corners inward, independently, within a bound controlled
-by `distortion_scale`; both affine and perspective always produce
-output the same size as the source (no canvas expansion). Anisotropic
-scale, canvas expansion (a `rotate_bound`-style growing output), resize,
-photometric augmentation, bounding boxes/keypoints/polygons, and any
-`Compose`-style pipeline are deliberately out of scope for this slice.
+rotation, isotropic scale, and anisotropic (per-axis) scale (a similarity
+transform plus a sequential shear plus an independent axis-scale step), all
+composed around the image center. Perspective coverage is a single,
+replayable homography sampled by displacing each of the source rectangle's
+four corners inward, independently, within a bound controlled by
+`distortion_scale`; both affine and perspective always produce output the
+same size as the source (no canvas expansion). Canvas expansion (a
+`rotate_bound`-style growing output), resize, photometric augmentation,
+bounding boxes/keypoints/polygons, and any `Compose`-style pipeline are
+deliberately out of scope for this slice.
 """
 
 from __future__ import annotations
@@ -138,18 +139,19 @@ class CropParameters:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class AffineParameters:
-    """The result of `sample_affine`: a shear + rotation + translation + isotropic-scale matrix.
+    """The result of `sample_affine`: a shear + anisotropic-scale + rotation + translation +
+    isotropic-scale matrix.
 
     `matrix` (shape ``(2, 3)``, dtype ``float64``, finite, a new read-only
     buffer) is the sole source of truth for replay -- `apply_affine` applies
-    it directly. `angle`/`translation`/`scale`/`shear` are sampling metadata
-    only, recorded to make debugging, logging, and a readable `repr` easier;
-    `apply_affine` never reconstructs the matrix from them, nor cross-checks
-    the matrix against them beyond each field's own basic validity (finite,
-    `scale > 0`). `source_size` is `(width, height)`, matching
-    `CropParameters`'s own convention, and exists for the same reason: to
-    make replay safe by refusing to reapply these parameters to a
-    differently-sized image.
+    it directly. `angle`/`translation`/`scale`/`shear`/`axis_scale` are
+    sampling metadata only, recorded to make debugging, logging, and a
+    readable `repr` easier; `apply_affine` never reconstructs the matrix
+    from them, nor cross-checks the matrix against them beyond each field's
+    own basic validity (finite, `scale > 0`, `axis_scale` components `> 0`).
+    `source_size` is `(width, height)`, matching `CropParameters`'s own
+    convention, and exists for the same reason: to make replay safe by
+    refusing to reapply these parameters to a differently-sized image.
 
     `shear` is `(shear_x, shear_y)`, keyword-only so that the pre-existing
     five-positional-argument construction (`AffineParameters(matrix,
@@ -157,6 +159,15 @@ class AffineParameters:
     `__match_args__` -- used for positional pattern matching -- stays
     exactly the five original field names; `shear` defaults to `(0.0, 0.0)`
     when omitted.
+
+    `axis_scale` is `(axis_scale_x, axis_scale_y)`, also keyword-only for the
+    same compatibility reason, defaulting to `(1.0, 1.0)` (no anisotropic
+    deformation). Each component is a positive, dimensionless multiplier
+    applied *on top of* `scale`, not a final axis scale by itself -- the
+    actual realized per-axis scale is `scale * axis_scale[0]` (x) and
+    `scale * axis_scale[1]` (y). `axis_scale` is never used to derive those
+    effective scales for validation or replay; it exists purely as sampling
+    metadata, exactly like `shear`.
     """
 
     matrix: npt.NDArray[np.float64]
@@ -165,6 +176,7 @@ class AffineParameters:
     translation: tuple[float, float]
     scale: float
     shear: tuple[float, float] = field(default=(0.0, 0.0), kw_only=True)
+    axis_scale: tuple[float, float] = field(default=(1.0, 1.0), kw_only=True)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, AffineParameters):
@@ -176,6 +188,7 @@ class AffineParameters:
             and self.translation == other.translation
             and self.scale == other.scale
             and self.shear == other.shear
+            and self.axis_scale == other.axis_scale
         )
 
     __hash__ = None  # type: ignore[assignment]
@@ -524,10 +537,13 @@ def sample_affine(
     translation_x_range: tuple[float, float] = (0.0, 0.0),
     translation_y_range: tuple[float, float] = (0.0, 0.0),
     scale_range: tuple[float, float] = (1.0, 1.0),
+    axis_scale_x_range: tuple[float, float] = (1.0, 1.0),
+    axis_scale_y_range: tuple[float, float] = (1.0, 1.0),
     shear_x_range: tuple[float, float] = (0.0, 0.0),
     shear_y_range: tuple[float, float] = (0.0, 0.0),
 ) -> AffineParameters:
-    """Sample a shear + rotation + translation + isotropic-scale affine transform.
+    """Sample a shear + anisotropic-scale + rotation + translation + isotropic-scale affine
+    transform.
 
     `source_size` is `(width, height)`. `angle_range` is in degrees, with
     the same positive (counter-clockwise) direction and center convention
@@ -537,7 +553,14 @@ def sample_affine(
     are in pixels (a positive `x` shifts content right, a positive `y`
     shifts it down, matching `improcv.transforms.translate`); float
     (subpixel) values are legal. `scale_range` is a positive, dimensionless,
-    isotropic multiplier (`1.0` is unchanged size). `shear_x_range`/
+    isotropic multiplier (`1.0` is unchanged size) applied identically to
+    both axes. `axis_scale_x_range`/`axis_scale_y_range` are positive,
+    dimensionless *axis multipliers* layered on top of `scale`, not final
+    axis scales by themselves: the actual realized scale along each axis is
+    `effective_scale_x = scale * axis_scale_x` and `effective_scale_y =
+    scale * axis_scale_y`. `1.0` for both (the default) means no
+    anisotropic deformation -- the transform is then purely isotropic, as
+    it was before this parameter existed. `shear_x_range`/
     `shear_y_range` are raw, dimensionless shear coefficients (not degrees):
     `shear_x` maps `x' = x + shear_x * y` and `shear_y` (applied after
     `shear_x`) maps `y' = y + shear_y * x'`, both in the coordinate system
@@ -557,30 +580,35 @@ def sample_affine(
     Each range is a `(low, high)` tuple: a Python or NumPy real scalar pair
     (`bool`/`np.bool_` rejected), both finite, with `low <= high` (equal
     endpoints are legal and always sample that exact constant); `scale_range`
-    additionally requires `low > 0` (`shear_x_range`/`shear_y_range` have no
-    such restriction -- negative, zero, and positive coefficients are all
-    legal). Every range is sampled independently via `rng.uniform(low,
-    high)` -- `low` itself is reachable, but for a non-degenerate range,
-    sampling a value exactly equal to `high` is not guaranteed (a property
-    of continuous floating-point sampling, not a bug). As a compatibility
-    guarantee for code written before shear existed, a singleton
-    `shear_x_range`/`shear_y_range` (`low == high`, including the `(0.0,
-    0.0)` default) does not consume any `rng` state at all -- it never calls
-    `rng.uniform` -- so an existing call site that never set these two
+    and `axis_scale_x_range`/`axis_scale_y_range` additionally require
+    `low > 0` (`shear_x_range`/`shear_y_range` have no such restriction --
+    negative, zero, and positive coefficients are all legal). Every range is
+    sampled independently via `rng.uniform(low, high)` -- `low` itself is
+    reachable, but for a non-degenerate range, sampling a value exactly
+    equal to `high` is not guaranteed (a property of continuous
+    floating-point sampling, not a bug). As a compatibility guarantee for
+    code written before shear (and, later, anisotropic scale) existed, a
+    singleton `shear_x_range`/`shear_y_range`/`axis_scale_x_range`/
+    `axis_scale_y_range` (`low == high`, including each parameter's own
+    default) does not consume any `rng` state at all -- it never calls
+    `rng.uniform` -- so an existing call site that never set these
     parameters keeps sampling `angle`/`translation`/`scale` from exactly the
-    same `rng` state, call after call, as it did before shear was added.
+    same `rng` state, call after call, as it did before shear and
+    anisotropic scale were added.
 
-    The transform is built as: shear x, then shear y (both around
-    `source_size`'s center), then rotation + isotropic scale around that
-    same center (via `cv2.getRotationMatrix2D`), then translated by `(dx,
-    dy)` in the destination coordinate system. Shear does not commute with
-    rotation, and translation does not commute with the linear part in
-    general, so this composition order is a fixed, documented part of the
-    contract, not an implementation detail. When both `shear_x` and
-    `shear_y` sample to exactly `0.0` (true for the defaults), the matrix is
-    built via the pre-shear code path with no extra matrix multiplication,
-    so it is bit-for-bit identical to what this function produced before
-    shear existed.
+    The transform is built as: shear x, then shear y, then anisotropic axis
+    scale (all three around `source_size`'s center), then rotation +
+    isotropic scale around that same center (via `cv2.getRotationMatrix2D`),
+    then translated by `(dx, dy)` in the destination coordinate system.
+    Shear does not commute with axis scale or rotation, and translation does
+    not commute with the linear part in general, so this composition order
+    is a fixed, documented part of the contract, not an implementation
+    detail. When `shear_x`, `shear_y` sample to exactly `0.0` and
+    `axis_scale_x`, `axis_scale_y` both sample to exactly `1.0` (all true
+    for the defaults), the matrix is built via the original pre-shear code
+    path with no extra matrix multiplication at all, so it is bit-for-bit
+    identical to what this function produced before shear or anisotropic
+    scale existed.
 
     `rng` must be an actual `numpy.random.Generator` instance (same contract
     as `sample_flip`/`sample_crop`); the exact number and order of internal
@@ -591,7 +619,7 @@ def sample_affine(
     AffineParameters
         Independent of `rng`'s state after this call; `matrix` is the sole
         source of truth for replay via `apply_affine`. `angle`/
-        `translation`/`scale`/`shear` are sampling metadata for
+        `translation`/`scale`/`shear`/`axis_scale` are sampling metadata for
         debugging/logging/`repr` only.
 
     Raises
@@ -602,11 +630,16 @@ def sample_affine(
     ValueError
         If `source_size`/any `*_range` has the wrong length or an
         out-of-contract value (non-finite, `low > high`, non-positive
-        `scale_range`), if the sampled, otherwise-legal parameters combine
-        into a non-finite matrix (representable only as `inf`/`NaN`, e.g.
-        from an astronomically large `scale`/`shear`/`source_size`
-        combination -- verified directly reachable from finite inputs), or
-        if `shear_x * shear_y` is large enough that `float64` can no longer
+        `scale_range`/`axis_scale_x_range`/`axis_scale_y_range`), if the
+        sampled, otherwise-legal parameters combine into a non-finite
+        matrix (representable only as `inf`/`NaN`, e.g. from an
+        astronomically large `scale`/`shear`/`source_size` combination --
+        verified directly reachable from finite inputs), if `scale *
+        axis_scale_x` or `scale * axis_scale_y` is not representable as a
+        finite, strictly positive `float64` (e.g. it overflows to `inf` or
+        underflows to exactly `0.0` even though `scale` and the axis
+        multiplier are each individually finite and positive), or if
+        `shear_x * shear_y` is large enough that `float64` can no longer
         distinguish `1.0 + shear_x*shear_y` from `shear_x*shear_y` itself,
         silently losing the unit term the sequential shear matrix depends
         on for invertibility. There is no other limit on shear magnitude:
@@ -626,6 +659,12 @@ def sample_affine(
     scale_low, scale_high = _normalize_range(scale_range, "scale_range")
     if scale_low <= 0:
         raise ValueError(f"scale_range must be positive, got {scale_range}")
+    axis_scale_x_low, axis_scale_x_high = _normalize_range(axis_scale_x_range, "axis_scale_x_range")
+    if axis_scale_x_low <= 0:
+        raise ValueError(f"axis_scale_x_range must be positive, got {axis_scale_x_range}")
+    axis_scale_y_low, axis_scale_y_high = _normalize_range(axis_scale_y_range, "axis_scale_y_range")
+    if axis_scale_y_low <= 0:
+        raise ValueError(f"axis_scale_y_range must be positive, got {axis_scale_y_range}")
     shear_x_bounds = _normalize_range(shear_x_range, "shear_x_range")
     shear_y_bounds = _normalize_range(shear_y_range, "shear_y_range")
 
@@ -633,21 +672,30 @@ def sample_affine(
     dx = float(rng.uniform(tx_low, tx_high))
     dy = float(rng.uniform(ty_low, ty_high))
     scale = float(rng.uniform(scale_low, scale_high))
-    shear_x = _sample_shear_range(rng, shear_x_bounds)
-    shear_y = _sample_shear_range(rng, shear_y_bounds)
+    shear_x = _sample_singleton_aware_range(rng, shear_x_bounds)
+    shear_y = _sample_singleton_aware_range(rng, shear_y_bounds)
+    axis_x = _sample_singleton_aware_range(rng, (axis_scale_x_low, axis_scale_x_high))
+    axis_y = _sample_singleton_aware_range(rng, (axis_scale_y_low, axis_scale_y_high))
 
     center = ((source_width - 1) / 2.0, (source_height - 1) / 2.0)
     rs_matrix = cv2.getRotationMatrix2D(center, angle, scale)
 
-    if shear_x == 0.0 and shear_y == 0.0:
-        # Fast path: no shear multiplication at all, so the result is
-        # bit-for-bit identical to what this function produced before
-        # shear existed, not merely numerically close to it.
+    axis_identity = axis_x == 1.0 and axis_y == 1.0
+
+    if axis_identity and shear_x == 0.0 and shear_y == 0.0:
+        # Fast path: no shear or axis-scale multiplication at all, so the
+        # result is bit-for-bit identical to what this function produced
+        # before shear or anisotropic scale existed, not merely numerically
+        # close to it.
         matrix = rs_matrix
         matrix[0, 2] += dx
         matrix[1, 2] += dy
         matrix = np.asarray(matrix, dtype=np.float64)
-    else:
+    elif axis_identity:
+        # Existing shear-only path, numerically untouched: axis scale plays
+        # no part here at all, so this branch must remain byte-for-byte the
+        # same code that shipped before anisotropic scale existed.
+        #
         # Extreme, but individually finite, shear/scale/center values can
         # overflow intermediate products (e.g. shear_x * shear_y) to inf --
         # expected and handled by the finite-matrix checks below, not a sign
@@ -700,6 +748,79 @@ def sample_affine(
             combined[0, 2] += dx
             combined[1, 2] += dy
             matrix = np.asarray(combined, dtype=np.float64)
+    else:
+        # Genuinely anisotropic path: at least one axis multiplier differs
+        # from 1.0. Plain Python float multiplication (not a NumPy ufunc) is
+        # used deliberately here -- np.errstate does not govern it, it never
+        # raises for overflow/underflow, and it can legitimately produce
+        # inf (overflow) or exactly 0.0 (underflow) from two individually
+        # finite, positive operands. Checking these two scalars explicitly,
+        # before any matrix is built, catches a case the final whole-matrix
+        # np.isfinite check below cannot: an underflow to exactly 0.0 is
+        # still "finite", so it would otherwise silently produce a
+        # degenerate, zero-width-axis transform from two legal positive
+        # inputs.
+        effective_scale_x = scale * axis_x
+        effective_scale_y = scale * axis_y
+        if not math.isfinite(effective_scale_x) or effective_scale_x <= 0.0:
+            raise ValueError(
+                "sampled scale and axis_scale_x combine to a non-representable "
+                f"positive float64 x scale (scale={scale!r}, axis_scale_x={axis_x!r}, "
+                f"product={effective_scale_x!r})"
+            )
+        if not math.isfinite(effective_scale_y) or effective_scale_y <= 0.0:
+            raise ValueError(
+                "sampled scale and axis_scale_y combine to a non-representable "
+                f"positive float64 y scale (scale={scale!r}, axis_scale_y={axis_y!r}, "
+                f"product={effective_scale_y!r})"
+            )
+
+        if not (shear_x == 0.0 and shear_y == 0.0):
+            with np.errstate(over="ignore", invalid="ignore"):
+                shear_product = shear_x * shear_y
+                shear_diagonal = 1.0 + shear_product
+
+            if not np.isfinite(shear_product) or not np.isfinite(shear_diagonal):
+                raise ValueError(
+                    "sampled affine parameters do not produce a finite transform matrix"
+                )
+            if shear_diagonal == shear_product:
+                raise ValueError(
+                    "sampled shear coefficients are too large to preserve "
+                    "an invertible sequential shear matrix in float64"
+                )
+
+        with np.errstate(over="ignore", invalid="ignore"):
+            rs_3x3 = np.eye(3, dtype=np.float64)
+            rs_3x3[:2, :] = rs_matrix
+
+            cx, cy = center
+            to_origin = np.eye(3, dtype=np.float64)
+            to_origin[0, 2] = -cx
+            to_origin[1, 2] = -cy
+            from_origin = np.eye(3, dtype=np.float64)
+            from_origin[0, 2] = cx
+            from_origin[1, 2] = cy
+
+            axis_3x3 = np.eye(3, dtype=np.float64)
+            axis_3x3[0, 0] = axis_x
+            axis_3x3[1, 1] = axis_y
+            axis_centered = from_origin @ axis_3x3 @ to_origin
+
+            if shear_x == 0.0 and shear_y == 0.0:
+                combined = (rs_3x3 @ axis_centered)[:2, :].copy()
+            else:
+                shear_3x3 = np.eye(3, dtype=np.float64)
+                shear_3x3[0, 1] = shear_x
+                shear_3x3[1, 0] = shear_y
+                shear_3x3[1, 1] = shear_diagonal
+                shear_centered = from_origin @ shear_3x3 @ to_origin
+
+                combined = (rs_3x3 @ axis_centered @ shear_centered)[:2, :].copy()
+
+            combined[0, 2] += dx
+            combined[1, 2] += dy
+            matrix = np.asarray(combined, dtype=np.float64)
 
     if matrix.shape != (2, 3) or matrix.dtype != np.float64:
         raise RuntimeError(
@@ -717,6 +838,7 @@ def sample_affine(
         translation=(dx, dy),
         scale=scale,
         shear=(shear_x, shear_y),
+        axis_scale=(axis_x, axis_y),
     )
 
 
@@ -753,12 +875,16 @@ def apply_affine(
 ) -> Image | AugmentedImageMask:
     """Apply a previously sampled affine transform to `image` (and optionally `mask`).
 
-    `params` must be exactly an `AffineParameters` (its fields are
+    `params` must be an `AffineParameters` instance (its fields are
     re-validated here too, since a frozen dataclass can still be constructed
     by hand with invalid field values). Only `params.matrix` is used to
-    perform the transform; `angle`/`translation`/`scale`/`shear` are checked
-    for basic internal consistency (each finite, `scale > 0`) but are never
-    used to reconstruct or cross-check the matrix numerically.
+    perform the transform; `angle`/`translation`/`scale`/`shear`/
+    `axis_scale` are checked for basic internal consistency (each finite,
+    `scale > 0`, `axis_scale` components `> 0`) but are never used to
+    reconstruct or cross-check the matrix numerically -- in particular,
+    `apply_affine` does not compute `scale * axis_scale` and never rejects
+    metadata merely because that product would be non-representable; only
+    `params.matrix` itself must be finite.
 
     `image`'s spatial size (`(width, height)`) must equal `params.source_size`
     *exactly* -- the same replay guard as `apply_crop`. Output spatial size
@@ -1145,11 +1271,14 @@ def _normalize_range(value: object, name: str) -> tuple[float, float]:
     return (low_f, high_f)
 
 
-def _sample_shear_range(rng: np.random.Generator, bounds: tuple[float, float]) -> float:
-    # A singleton range (including the (0.0, 0.0) default) must not consume
-    # any rng state at all -- existing call sites that never set a shear
-    # range must keep sampling angle/translation/scale from exactly the
-    # same rng state, call after call, as they did before shear existed.
+def _sample_singleton_aware_range(rng: np.random.Generator, bounds: tuple[float, float]) -> float:
+    # A singleton range (including each parameter's own default) must not
+    # consume any rng state at all -- existing call sites that never set
+    # shear or axis-scale ranges must keep sampling angle/translation/scale
+    # from exactly the same rng state, call after call, as they did before
+    # shear/anisotropic scale existed. Shared by shear_x/shear_y and
+    # axis_scale_x/axis_scale_y -- this body was already fully generic
+    # before the rename, nothing else about its behavior changes.
     low, high = bounds
     if low == high:
         return low
@@ -1255,6 +1384,9 @@ def _require_affine_parameters(params: object) -> None:
     _require_finite_pair(params.translation, "params.translation")
     require_positive(params.scale, "params.scale")
     _require_finite_pair(params.shear, "params.shear")
+    _require_finite_pair(params.axis_scale, "params.axis_scale")
+    require_positive(params.axis_scale[0], "params.axis_scale[0]")
+    require_positive(params.axis_scale[1], "params.axis_scale[1]")
 
 
 def _require_source_size(source_size: object) -> None:

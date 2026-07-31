@@ -190,6 +190,40 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `int16` mask support is unaffected. No canvas expansion, no anisotropic scale, no bounding
   box/keypoint/polygon support, no probability/application policy (always samples, like
   `sample_affine`), and no `Compose`-style pipeline. No new dependency.
+- `improcv.augmentation`: anisotropic (per-axis) affine scale -- `sample_affine` gains keyword-only
+  `axis_scale_x_range`/`axis_scale_y_range` (each an independently sampled `(low, high)` tuple with
+  the same shape/finiteness contract as the other `*_range` parameters, plus the same positivity
+  requirement as `scale_range`), and `AffineParameters` gains a keyword-only
+  `axis_scale: tuple[float, float] = (1.0, 1.0)` field -- the pre-existing five-positional-argument
+  construction, `shear=` keyword construction, `__match_args__` (unchanged, still the original five
+  field names), and positional pattern matching all keep working exactly as before. Both new ranges
+  are *axis multipliers* layered on top of the existing `scale_range`, not final axis scales by
+  themselves: the realized per-axis scale is `effective_scale_x = scale * axis_scale_x` and
+  `effective_scale_y = scale * axis_scale_y`; `params.axis_scale` records the sampled multipliers
+  only; `params.scale` is unchanged in meaning. Composition order is shear x, then shear y, then
+  anisotropic axis scale, then rotation + isotropic scale around the same center as before, then
+  translation -- axis scale does not commute with shear or rotation, so this is a fixed, documented
+  part of the contract. When `axis_scale_x_range`/`axis_scale_y_range` are left at their `(1.0,
+  1.0)` default (alongside shear's own `(0.0, 0.0)` default), the matrix is built via the original
+  pre-shear, pre-axis-scale code path with no extra matrix multiplication at all (bit-for-bit
+  identical to before this change) and no extra `rng.uniform` call is made for either new range, so
+  existing call sites keep sampling `angle`/`translation`/`scale`/`shear` from exactly the same `rng`
+  sequence, call after call, as they did before anisotropic scale existed. Both axis multipliers
+  must be strictly positive (no reflection is ever sampled); `scale * axis_scale_x` and
+  `scale * axis_scale_y` are additionally required to be representable as a finite, strictly
+  positive `float64` -- verified directly that plain Python `float` multiplication (used
+  deliberately here instead of a NumPy ufunc, since `np.errstate` does not govern it) can silently
+  underflow two individually finite, positive operands to exactly `0.0`, which the existing
+  whole-matrix `np.isfinite` check alone would not catch (`0.0` is finite), so this adds a dedicated
+  check on the two effective scales themselves, checked only on the new anisotropic code path.
+  There is no numerical-rank or condition-number check beyond that -- the existing affine policy of
+  accepting a merely poorly conditioned (but still representable) matrix is unchanged and not
+  extended by this feature. `apply_affine`'s public signature is unchanged; only
+  `AffineParameters` validation (`axis_scale` must be a finite pair of strictly positive values) and
+  its docstring were touched -- the docstring's pre-existing "params must be exactly an
+  AffineParameters" wording is also corrected to "params must be an AffineParameters instance",
+  matching the `isinstance` check `_require_affine_parameters` already performed. `transforms.py`
+  is unchanged. No new dependency.
 - New `improcv.discovery` module, Phase 5 slice (deterministic extension-based dataset image
   discovery): `discover_images`, finding candidate image files under a directory by filename
   extension only -- a file's content is never opened or decoded, so an empty, corrupted, or
