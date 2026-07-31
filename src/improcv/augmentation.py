@@ -222,7 +222,8 @@ class PerspectiveParameters:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class AugmentedImageMask:
-    """The image+mask result of `apply_flip`/`apply_crop`/`apply_affine` when called with a `mask`.
+    """The image+mask result of `apply_flip`/`apply_crop`/`apply_affine`/`apply_perspective` when
+    called with a `mask`.
 
     Equality (`==`) compares both fields by value via `np.array_equal`, never
     by identity -- the default dataclass-generated equality would compare
@@ -875,10 +876,10 @@ def sample_perspective(
     internal draws against `rng` is an implementation detail, not part of the public contract,
     and may change between releases without notice.
 
-    `distortion_scale == 0.0` (the default range's lower bound, and any explicit `0.0`) takes an
-    explicit identity fast path: no `rng` draw happens at all (verified directly: the
-    generator's `bit_generator.state` is unchanged), `matrix` is exactly `np.eye(3,
-    dtype=np.float64)`, and `destination_points` are exactly the source corners.
+    `distortion_scale == 0.0` takes an explicit identity fast path: no `rng` draw happens at
+    all (verified directly: the generator's `bit_generator.state` is unchanged), `matrix` is
+    exactly `np.eye(3, dtype=np.float64)`, and `destination_points` are exactly the source
+    corners.
 
     `distortion_scale <= 0.5` is not an arbitrary cap: after normalizing both axes to `[0, 1]`,
     each corner moves inward by at most `a = distortion_scale / 2 <= 1/4`. For two consecutive
@@ -1022,7 +1023,7 @@ def apply_perspective(
 ) -> Image | AugmentedImageMask:
     """Apply a previously sampled perspective transform to `image` (and optionally `mask`).
 
-    `params` must be exactly a `PerspectiveParameters` (its fields are re-validated here too,
+    `params` must be a `PerspectiveParameters` instance (its fields are re-validated here too,
     since a frozen dataclass can still be constructed by hand with invalid field values). Only
     `params.matrix` is used to perform the transform; `destination_points` is checked for basic
     internal consistency (a 4-tuple of finite `(x, y)` pairs) but is never used to reconstruct
