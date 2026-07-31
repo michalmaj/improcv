@@ -4599,6 +4599,28 @@ def test_apply_affine_default_none_output_size_unchanged_behavior() -> None:
     assert result.shape == image.shape
 
 
+def test_apply_affine_accepts_valid_hand_built_output_size() -> None:
+    # A valid, hand-built output_size (never produced via expand_affine_canvas)
+    # must be accepted identically -- this locks in output_size's (width,
+    # height) convention against result.shape's (height, width) one.
+    image = _make_image(4, 5, channels=None)
+    matrix = np.eye(2, 3, dtype=np.float64)
+
+    params = AffineParameters(
+        matrix,
+        (5, 4),
+        0.0,
+        (0.0, 0.0),
+        1.0,
+        output_size=(7, 6),
+    )
+
+    result = apply_affine(image, params)
+
+    assert result.shape == (6, 7)
+    assert result.dtype == image.dtype
+
+
 def test_apply_affine_rejects_hand_built_output_size_overflow() -> None:
     image = _make_image(8, 10)
     base = sample_affine(np.random.default_rng(0), source_size=(10, 8))
