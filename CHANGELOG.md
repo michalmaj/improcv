@@ -139,6 +139,57 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `scale` from exactly the same `rng` sequence, call after call, as they did before shear existed.
   `apply_affine`'s public signature, the mask dtype contract, and `transforms.py` are all
   unchanged. No new dependency.
+- `improcv.augmentation`, Phase 5 slice: replayable perspective augmentation for image + optional
+  mask -- a new `PerspectiveParameters` (`matrix`, `source_size`, `destination_points`) plus
+  `sample_perspective`/`apply_perspective`, following the same sampler/apply split as `sample_affine`/
+  `apply_affine`. `sample_perspective(rng, source_size, *, distortion_scale=0.5)` displaces each of
+  the source rectangle's four corners inward, independently, within a region bounded by
+  `distortion_scale` -- a single value in `[0.0, 0.5]`, not a range: it only bounds each corner's own
+  draw region, it is not itself a directly-realized transform parameter the way `AffineParameters`'
+  `angle`/`translation`/`scale` are (two very different destination quadrilaterals can share the same
+  `distortion_scale`), so `PerspectiveParameters` does not store it -- only `destination_points`, the
+  four `(x, y)` corners actually realized, in `top-left, top-right, bottom-right, bottom-left` order,
+  recorded *after* the `float32` quantization `cv2.getPerspectiveTransform` itself requires for its
+  input points (verified directly on OpenCV 4.9 and 5.0) -- never the pre-quantization draw. Source
+  corners are never stored (always deterministically `(0, 0)`, `(width-1, 0)`, `(width-1,
+  height-1)`, `(0, height-1)`). `distortion_scale=0.0` takes an explicit identity fast path: no `rng`
+  draw at all (verified directly via `bit_generator.state` before/after), `matrix` exactly
+  `np.eye(3, dtype=np.float64)`.
+
+  The `0.5` cap is a geometric proof, not a fitted constant: after normalizing both axes to `[0, 1]`,
+  each corner moves inward by at most `distortion_scale / 2 <= 1/4`; the signed turn at every
+  quadrilateral corner is then bounded below by `(1 - 2a)**2 - a**2 = 1 - 4a + 3a**2 >= 3/16 > 0` for
+  `a <= 1/4` -- strictly convex, non-self-intersecting, never mirrored, in exact real arithmetic.
+  `sample_perspective` still checks this on the actual `float32`-quantized points (rounding for an
+  extreme `source_size` could otherwise erode the guarantee numerically, not just in theory) and
+  additionally rejects a resulting matrix that is numerically rank-deficient or has a projective
+  horizon crossing the source rectangle -- verified directly that `cv2.warpPerspective` does not
+  raise for either (silently returns a degenerate image instead), and that `np.linalg.det() != 0` is
+  an insufficient rank test (OpenCV 5.0 can return a fully degenerate `getPerspectiveTransform` result
+  with a nonzero-but-astronomically-small determinant, e.g. `-1.2e-31`, that a naive check would
+  accept) -- `np.linalg.matrix_rank`'s own SVD-based tolerance is used instead, and both the rank and
+  horizon checks are scale-invariant (each normalizes by its own matrix's/row's largest absolute
+  element first, verified directly that `matrix`, `matrix * 1e200`, and `matrix * 1e-200` reach the
+  same accept/reject decision). No retry/resampling: a rejection raises `ValueError` immediately.
+  `sample_perspective` requires both `source_size` dimensions `>= 2` (verified directly that even
+  `cv2.getPerspectiveTransform(src, src)` is not identity below that -- a 4-corner correspondence
+  needs 4 distinct, non-collinear points); a hand-constructed `PerspectiveParameters` may still be
+  applied via `apply_perspective` to a smaller source size, as long as its `matrix` independently
+  passes the same rank/horizon checks.
+
+  `apply_perspective` mirrors `apply_affine`'s contract closely (`interpolation`/`border_mode`/
+  `border_value`/`mask_border_value`, source-size replay guard, unchanged output size,
+  nearest-neighbor/constant-border mask policy, `WARP_INVERSE_MAP` rejection, `cv2.error` mapped to
+  `RuntimeError`), using a new `improcv.transforms.warp_perspective` import (`transforms.py` itself is
+  unchanged) -- except for one deliberate, narrower mask dtype contract: `uint8`/`uint16` only, not
+  `int16`. This project's own CI caught a genuine, platform-specific upstream OpenCV limitation: an
+  `int16` mask makes `cv2.warpPerspective` (not `warpAffine`) raise "Unknown C++ exception from OpenCV
+  code" on Windows for the exact `opencv-python-headless==4.14.0.94` build that passes correctly on
+  Linux and macOS -- so `apply_perspective` excludes `int16` outright rather than support it
+  unreliably depending on the caller's platform; `apply_affine`/`apply_flip`/`apply_crop`'s own
+  `int16` mask support is unaffected. No canvas expansion, no anisotropic scale, no bounding
+  box/keypoint/polygon support, no probability/application policy (always samples, like
+  `sample_affine`), and no `Compose`-style pipeline. No new dependency.
 - New `improcv.discovery` module, Phase 5 slice (deterministic extension-based dataset image
   discovery): `discover_images`, finding candidate image files under a directory by filename
   extension only -- a file's content is never opened or decoded, so an empty, corrupted, or

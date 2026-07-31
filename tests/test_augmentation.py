@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import warnings
 
@@ -11,12 +12,15 @@ from improcv.augmentation import (
     AugmentedImageMask,
     CropParameters,
     FlipParameters,
+    PerspectiveParameters,
     apply_affine,
     apply_crop,
     apply_flip,
+    apply_perspective,
     sample_affine,
     sample_crop,
     sample_flip,
+    sample_perspective,
 )
 
 
@@ -2277,3 +2281,1115 @@ def test_apply_affine_shear_maps_unexpected_opencv_error(monkeypatch: pytest.Mon
     with pytest.raises(RuntimeError, match="OpenCV failed") as exc_info:
         apply_affine(image, params)
     assert exc_info.value.__cause__ is error
+
+
+# =====================================================================
+# sample_perspective / apply_perspective / PerspectiveParameters
+# =====================================================================
+
+
+def _independent_source_corners(width: int, height: int) -> np.ndarray:
+    return np.array(
+        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype=np.float32
+    )
+
+
+# --- sample_perspective: scalar distortion_scale contract ---
+
+
+def test_sample_perspective_default_distortion_scale_is_half() -> None:
+    rng_default = np.random.default_rng(0)
+    rng_explicit = np.random.default_rng(0)
+    default_params = sample_perspective(rng_default, source_size=(10, 8))
+    explicit_params = sample_perspective(rng_explicit, source_size=(10, 8), distortion_scale=0.5)
+    assert default_params == explicit_params
+
+
+def test_sample_perspective_distortion_scale_zero_is_identity() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.0)
+    assert isinstance(params, PerspectiveParameters)
+    np.testing.assert_array_equal(params.matrix, np.eye(3))
+
+
+def test_sample_perspective_distortion_scale_half_is_legal() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.5)
+    assert isinstance(params, PerspectiveParameters)
+
+
+def test_sample_perspective_rejects_negative_distortion_scale() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="distortion_scale"):
+        sample_perspective(rng, source_size=(10, 8), distortion_scale=-0.1)
+
+
+def test_sample_perspective_rejects_distortion_scale_above_half() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="distortion_scale"):
+        sample_perspective(rng, source_size=(10, 8), distortion_scale=0.51)
+
+
+def test_sample_perspective_rejects_bool_distortion_scale() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(TypeError, match="distortion_scale"):
+        sample_perspective(rng, source_size=(10, 8), distortion_scale=True)  # type: ignore[arg-type]
+
+
+def test_sample_perspective_rejects_nan_distortion_scale() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="distortion_scale"):
+        sample_perspective(rng, source_size=(10, 8), distortion_scale=float("nan"))
+
+
+def test_sample_perspective_rejects_inf_distortion_scale() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="distortion_scale"):
+        sample_perspective(rng, source_size=(10, 8), distortion_scale=float("inf"))
+
+
+def test_sample_perspective_signature_has_no_distortion_scale_range() -> None:
+    import inspect
+
+    signature = inspect.signature(sample_perspective)
+    assert "distortion_scale_range" not in signature.parameters
+    assert "distortion_scale" in signature.parameters
+
+
+# --- sample_perspective: source size edge cases ---
+
+
+def test_sample_perspective_rejects_1x1() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match=">= 2"):
+        sample_perspective(rng, source_size=(1, 1))
+
+
+def test_sample_perspective_rejects_1xn() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match=">= 2"):
+        sample_perspective(rng, source_size=(1, 8))
+
+
+def test_sample_perspective_rejects_nx1() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match=">= 2"):
+        sample_perspective(rng, source_size=(8, 1))
+
+
+def test_sample_perspective_accepts_2x2() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(2, 2), distortion_scale=0.5)
+    assert params.source_size == (2, 2)
+
+
+def test_apply_perspective_manual_identity_accepts_1x1_source_size() -> None:
+    params = PerspectiveParameters(
+        matrix=np.eye(3, dtype=np.float64),
+        source_size=(1, 1),
+        destination_points=((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
+    )
+    image = np.array([[5]], dtype=np.uint8)
+    result = apply_perspective(image, params)
+    np.testing.assert_array_equal(result, image)
+
+
+# --- sample_perspective: identity fast path / RNG state ---
+
+
+def test_sample_perspective_identity_consumes_no_rng_state() -> None:
+    rng = np.random.default_rng(0)
+    before = copy.deepcopy(rng.bit_generator.state)
+    sample_perspective(rng, source_size=(10, 8), distortion_scale=0.0)
+    after = copy.deepcopy(rng.bit_generator.state)
+    assert before == after
+
+
+def test_sample_perspective_identity_matrix_is_exact_eye() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.0)
+    assert np.array_equal(params.matrix, np.eye(3, dtype=np.float64))
+    assert params.matrix.dtype == np.float64
+
+
+def test_sample_perspective_identity_destination_points_equal_source_points() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.0)
+    assert params.destination_points == ((0.0, 0.0), (9.0, 0.0), (9.0, 7.0), (0.0, 7.0))
+
+
+def test_sample_perspective_identity_matrix_is_independent_and_read_only() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.0)
+    assert not params.matrix.flags.writeable
+    with pytest.raises(ValueError):
+        params.matrix[0, 0] = 5.0
+
+
+def test_apply_perspective_identity_preserves_image_and_mask() -> None:
+    rng = np.random.default_rng(0)
+    image = _make_image(8, 10)
+    mask = _make_mask(8, 10)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.0)
+    result = apply_perspective(image, params, mask=mask)
+    np.testing.assert_array_equal(result.image, image)
+    np.testing.assert_array_equal(result.mask, mask)
+    assert not np.shares_memory(result.image, image)
+    assert not np.shares_memory(result.mask, mask)
+
+
+def test_sample_perspective_consumes_rng_when_distortion_scale_positive() -> None:
+    rng = np.random.default_rng(0)
+    before = copy.deepcopy(rng.bit_generator.state)
+    sample_perspective(rng, source_size=(10, 8), distortion_scale=0.5)
+    after = copy.deepcopy(rng.bit_generator.state)
+    assert before != after
+
+
+# --- sample_perspective: determinism / replay ---
+
+
+def test_sample_perspective_fresh_generators_same_seed_give_same_params() -> None:
+    a = sample_perspective(np.random.default_rng(5), source_size=(10, 8), distortion_scale=0.4)
+    b = sample_perspective(np.random.default_rng(5), source_size=(10, 8), distortion_scale=0.4)
+    assert a == b
+
+
+def test_sample_perspective_consecutive_calls_can_differ() -> None:
+    rng = np.random.default_rng(3)
+    results = [
+        sample_perspective(rng, source_size=(10, 8), distortion_scale=0.4) for _ in range(10)
+    ]
+    assert len({r.destination_points for r in results}) > 1
+
+
+def test_sample_perspective_params_are_replayable() -> None:
+    rng = np.random.default_rng(2)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.4)
+    image = _make_image(8, 10)
+    first = apply_perspective(image, params)
+    second = apply_perspective(image, params)
+    np.testing.assert_array_equal(first, second)
+
+
+# --- sampled quadrilateral: safe-region regression (not a proof, just regression) ---
+
+
+def _signed_turns(points: tuple[tuple[float, float], ...]) -> list[float]:
+    turns = []
+    count = len(points)
+    for index in range(count):
+        x0, y0 = points[index]
+        x1, y1 = points[(index + 1) % count]
+        x2, y2 = points[(index + 2) % count]
+        v1x, v1y = x1 - x0, y1 - y0
+        v2x, v2y = x2 - x1, y2 - y1
+        turns.append(v1x * v2y - v1y * v2x)
+    return turns
+
+
+@pytest.mark.parametrize("source_size", [(37, 23), (2, 2), (5, 5), (2, 1000), (1000, 2)])
+def test_sample_perspective_max_distortion_always_gives_convex_quadrilateral(
+    source_size: tuple[int, int],
+) -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(300):
+        params = sample_perspective(rng, source_size=source_size, distortion_scale=0.5)
+        turns = _signed_turns(params.destination_points)
+        assert all(turn > 0.0 for turn in turns)
+
+
+def test_sample_perspective_destination_points_within_documented_regions() -> None:
+    rng = np.random.default_rng(0)
+    width, height = 20, 16
+    max_dx = 0.5 * (width - 1) / 2.0
+    max_dy = 0.5 * (height - 1) / 2.0
+    for _ in range(200):
+        params = sample_perspective(rng, source_size=(width, height), distortion_scale=0.5)
+        tl, tr, br, bl = params.destination_points
+        assert 0.0 <= tl[0] <= max_dx and 0.0 <= tl[1] <= max_dy
+        assert (width - 1) - max_dx <= tr[0] <= width - 1 and 0.0 <= tr[1] <= max_dy
+        assert (width - 1) - max_dx <= br[0] <= width - 1
+        assert (height - 1) - max_dy <= br[1] <= height - 1
+        assert 0.0 <= bl[0] <= max_dx
+        assert (height - 1) - max_dy <= bl[1] <= height - 1
+
+
+# --- destination_points reflect float32-quantized values, not pre-quantization draws ---
+
+
+def test_sample_perspective_destination_points_are_float32_quantized() -> None:
+    # A real np.random.Generator's C-extension attributes can't be monkeypatched
+    # (e.g. `.uniform` is read-only), so this checks quantization structurally
+    # instead: a float64 value fresh out of `rng.uniform` is, with overwhelming
+    # probability, not already exactly representable in float32 -- so if the
+    # stored metadata is idempotent under a float32 round-trip, it must have
+    # actually been quantized (as opposed to storing the pre-quantization draw).
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.5)
+    for x, y in params.destination_points:
+        assert x == float(np.float32(x))
+        assert y == float(np.float32(y))
+
+
+# --- perspective matrix geometry: numerical rank ---
+
+
+def test_perspective_matrix_geometry_rejects_singular_rank_2_matrix() -> None:
+    matrix = np.array([[1.0, 2.0, 0.0], [2.0, 4.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="rank"):
+        apply_perspective(image, params)
+
+
+def test_perspective_matrix_geometry_rejects_zero_matrix() -> None:
+    matrix = np.zeros((3, 3), dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="zero matrix"):
+        apply_perspective(image, params)
+
+
+def test_perspective_matrix_geometry_maps_linalgerror_to_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    def boom(*args, **kwargs):
+        raise np.linalg.LinAlgError("simulated SVD failure")
+
+    monkeypatch.setattr(augmentation_module.np.linalg, "matrix_rank", boom)
+
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="numerical rank"):
+        apply_perspective(image, params)
+
+
+def test_perspective_matrix_geometry_message_mentions_numerical_rank_not_exact_determinant() -> (
+    None
+):
+    matrix = np.array([[1.0, 2.0, 0.0], [2.0, 4.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError) as exc_info:
+        apply_perspective(image, params)
+    message = str(exc_info.value)
+    assert "numerically full-rank" in message
+    assert "must not be the zero matrix" not in message
+
+
+def test_perspective_matrix_geometry_accepts_well_conditioned_matrix() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.5)
+    image = _make_image(8, 10)
+    result = apply_perspective(image, params)
+    assert result.shape == image.shape
+
+
+# --- perspective matrix geometry: horizon check ---
+
+
+def test_perspective_matrix_geometry_rejects_horizon_crossing_matrix() -> None:
+    matrix = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    assert np.linalg.matrix_rank(matrix) == 3  # confirm this fails via horizon, not rank
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="horizon"):
+        apply_perspective(image, params)
+
+
+def test_perspective_matrix_geometry_rejects_zero_denominator_corner() -> None:
+    # w(x, y) = x - 2 -> exactly zero at x=2, well inside a (5, 4) source rectangle.
+    matrix = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, -2.0]],
+        dtype=np.float64,
+    )
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="horizon"):
+        apply_perspective(image, params)
+
+
+def test_perspective_matrix_geometry_accepts_all_negative_denominators() -> None:
+    matrix = np.array(
+        [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]],
+        dtype=np.float64,
+    )
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    result = apply_perspective(image, params)
+    assert result.shape == image.shape
+
+
+# --- perspective matrix geometry: scale invariance ---
+
+
+@pytest.mark.parametrize("factor", [1.0, 1e200, 1e-200])
+def test_perspective_matrix_geometry_decision_is_scale_invariant_for_valid_matrix(
+    factor: float,
+) -> None:
+    # Scale-invariance is a claim about the accept/reject *decision* of the geometry
+    # checker, not about the warped pixels being bit-identical: cv2.warpPerspective's
+    # own per-pixel homogeneous division can lose precision at such extreme
+    # magnitudes even though the mathematical transform is unchanged.
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.4)
+    scaled_matrix = params.matrix * factor
+    assert np.all(np.isfinite(scaled_matrix))
+    scaled_params = PerspectiveParameters(
+        matrix=scaled_matrix,
+        source_size=params.source_size,
+        destination_points=params.destination_points,
+    )
+    image = _make_image(8, 10)
+    result = apply_perspective(image, scaled_params)  # must not raise
+    assert result.shape == image.shape
+
+
+@pytest.mark.parametrize("factor", [1.0, 1e200, 1e-200])
+def test_perspective_matrix_geometry_horizon_decision_is_scale_invariant(factor: float) -> None:
+    matrix = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    scaled = matrix * factor
+    assert np.all(np.isfinite(scaled))
+    params = PerspectiveParameters(
+        matrix=scaled,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="horizon"):
+        apply_perspective(image, params)
+
+
+# --- PerspectiveParameters validation (apply) ---
+
+
+def test_apply_perspective_rejects_non_perspective_parameters() -> None:
+    image = _make_image(4, 5)
+    with pytest.raises(TypeError, match="PerspectiveParameters"):
+        apply_perspective(image, "not-params")  # type: ignore[arg-type]
+
+
+def test_apply_perspective_accepts_subclass_of_perspective_parameters() -> None:
+    class SubParameters(PerspectiveParameters):
+        pass
+
+    params = SubParameters(
+        matrix=np.eye(3, dtype=np.float64),
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    result = apply_perspective(image, params)
+    np.testing.assert_array_equal(result, image)
+
+
+def test_apply_perspective_rejects_non_ndarray_matrix() -> None:
+    params = PerspectiveParameters(
+        matrix="not-an-array",  # type: ignore[arg-type]
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(TypeError, match="matrix"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_wrong_matrix_dtype() -> None:
+    params = PerspectiveParameters(
+        matrix=np.eye(3, dtype=np.float32),  # type: ignore[arg-type]
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(TypeError, match="float64"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_wrong_matrix_shape() -> None:
+    params = PerspectiveParameters(
+        matrix=np.eye(2, 3, dtype=np.float64),
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="shape"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_non_finite_matrix() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    matrix[0, 0] = float("nan")
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="finite"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_bad_destination_points_length() -> None:
+    params = PerspectiveParameters(
+        matrix=np.eye(3, dtype=np.float64),
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0)),  # type: ignore[arg-type]
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="destination_points"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_non_finite_destination_point() -> None:
+    params = PerspectiveParameters(
+        matrix=np.eye(3, dtype=np.float64),
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, float("nan")), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="destination_points"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_source_size_mismatch() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(999, 999))
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="source_size"):
+        apply_perspective(image, params)
+
+
+# --- apply_perspective: image ---
+
+
+@pytest.mark.parametrize("channels", [None, 3])
+def test_apply_perspective_grayscale_and_bgr(channels: int | None) -> None:
+    image = _make_image(10, 12, channels=channels)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params)
+    assert result.shape == image.shape
+
+
+def test_apply_perspective_bgra() -> None:
+    image = _make_image(10, 12, channels=4)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params)
+    assert result.shape == image.shape
+
+
+def test_apply_perspective_hw1_shape_preserved() -> None:
+    image = _make_image(10, 12).reshape(-1)[: 10 * 12].reshape(10, 12, 1)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params)
+    assert result.shape == (10, 12, 1)
+    expected = im.warp_perspective(image[:, :, 0], params.matrix, params.source_size)
+    np.testing.assert_array_equal(result[:, :, 0], expected)
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.int16, np.float32, np.float64])
+def test_apply_perspective_supported_image_dtypes(dtype: type) -> None:
+    image = _make_image(10, 12).astype(dtype)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params)
+    assert result.dtype == dtype
+
+
+def test_apply_perspective_rejects_unsupported_image_dtype() -> None:
+    image = _make_image(10, 12).astype(np.int32)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(TypeError, match="dtype"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_inverse_mapping_flag() -> None:
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    with pytest.raises(ValueError, match="interpolation"):
+        apply_perspective(image, params, interpolation=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP)
+
+
+def test_apply_perspective_does_not_call_warp_perspective_after_bad_interpolation_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    def boom(*args, **kwargs):
+        pytest.fail("_warp_perspective must not be called after a validation error")
+
+    monkeypatch.setattr(augmentation_module, "_warp_perspective", boom)
+
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(ValueError):
+        apply_perspective(image, params, interpolation=cv2.WARP_INVERSE_MAP)
+
+
+@pytest.mark.parametrize(
+    "bad_interpolation",
+    [cv2.WARP_INVERSE_MAP, cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, cv2.WARP_FILL_OUTLIERS, -1],
+)
+def test_apply_perspective_rejects_warp_modifier_flags(bad_interpolation: int) -> None:
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(ValueError, match="interpolation|warp modifier flags"):
+        apply_perspective(image, params, interpolation=bad_interpolation)
+
+
+@pytest.mark.parametrize("bad_interpolation", [True, 1.5, "nearest", None])
+def test_apply_perspective_rejects_non_integral_interpolation(bad_interpolation: object) -> None:
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(TypeError):
+        apply_perspective(image, params, interpolation=bad_interpolation)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "interpolation",
+    [cv2.INTER_NEAREST, cv2.INTER_LINEAR, cv2.INTER_CUBIC, cv2.INTER_AREA, cv2.INTER_LANCZOS4],
+)
+def test_apply_perspective_accepts_legal_interpolation_modes(interpolation: int) -> None:
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params, interpolation=interpolation)
+    assert result.shape == image.shape
+
+
+@pytest.mark.parametrize("attr_name", ["INTER_LINEAR_EXACT", "INTER_NEAREST_EXACT"])
+def test_apply_perspective_handles_exact_interpolation_modes_if_available(attr_name: str) -> None:
+    interpolation = getattr(cv2, attr_name, None)
+    if interpolation is None:
+        pytest.skip(f"cv2.{attr_name} not available on this OpenCV build")
+
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    try:
+        result = apply_perspective(image, params, interpolation=interpolation)
+    except RuntimeError as exc:
+        assert isinstance(exc.__cause__, cv2.error)
+    else:
+        assert result.shape == image.shape
+
+
+def test_apply_perspective_border_value_fills_exposed_pixels() -> None:
+    image = np.full((10, 10), 5, dtype=np.uint8)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 10), distortion_scale=0.5)
+    result = apply_perspective(image, params, border_value=200)
+    assert 200 in np.unique(result)
+
+
+def test_apply_perspective_accepts_read_only_non_contiguous_and_fortran_order() -> None:
+    image = _make_image(10, 12, channels=3)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    expected = apply_perspective(image, params)
+
+    read_only = image.copy()
+    read_only.setflags(write=False)
+    np.testing.assert_array_equal(apply_perspective(read_only, params), expected)
+
+    fortran = np.asfortranarray(image)
+    np.testing.assert_array_equal(apply_perspective(fortran, params), expected)
+
+
+def test_apply_perspective_non_contiguous_slice() -> None:
+    image = _make_image(10, 24, channels=3)
+    non_contiguous = image[:, ::2]
+    assert not non_contiguous.flags["C_CONTIGUOUS"]
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(non_contiguous, params)
+    expected = im.warp_perspective(non_contiguous, params.matrix, params.source_size)
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_apply_perspective_does_not_mutate_image() -> None:
+    image = _make_image(10, 12)
+    before = image.copy()
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    apply_perspective(image, params)
+    np.testing.assert_array_equal(image, before)
+
+
+def test_apply_perspective_result_does_not_alias_image() -> None:
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params)
+    assert not np.shares_memory(result, image)
+
+
+def test_apply_perspective_matches_warp_perspective_directly() -> None:
+    image = _make_image(10, 12, channels=3)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.4)
+    result = apply_perspective(image, params, border_value=42)
+    expected = im.warp_perspective(image, params.matrix, params.source_size, border_value=42)
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_apply_perspective_arbitrary_same_size_wrong_shape_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    image = np.arange(4 * 5 * 3, dtype=np.uint8).reshape(4, 5, 3)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(5, 4))
+
+    monkeypatch.setattr(
+        augmentation_module,
+        "_warp_perspective",
+        lambda *a, **k: np.zeros((4, 15), dtype=image.dtype),
+    )
+    with pytest.raises(RuntimeError, match="shape"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_maps_unexpected_opencv_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import improcv.augmentation as augmentation_module
+
+    error = cv2.error("simulated failure")
+    monkeypatch.setattr(
+        augmentation_module,
+        "_warp_perspective",
+        lambda *a, **k: (_ for _ in ()).throw(error),
+    )
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(RuntimeError, match="OpenCV failed") as exc_info:
+        apply_perspective(image, params)
+    assert exc_info.value.__cause__ is error
+
+
+def test_apply_perspective_postcondition_violation_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    monkeypatch.setattr(
+        augmentation_module,
+        "_warp_perspective",
+        lambda *a, **k: np.zeros((999, 999), dtype=np.uint8),
+    )
+    image = _make_image(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(RuntimeError, match="internal error"):
+        apply_perspective(image, params)
+
+
+# --- apply_perspective: mask ---
+
+
+def test_apply_perspective_with_mask_returns_augmented_image_mask() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params, mask=mask)
+    assert isinstance(result, AugmentedImageMask)
+    expected_mask = im.warp_perspective(
+        mask, params.matrix, params.source_size, interpolation=cv2.INTER_NEAREST
+    )
+    np.testing.assert_array_equal(result.mask, expected_mask)
+
+
+def test_apply_perspective_mask_hw1_shape_preserved() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12).reshape(10, 12, 1)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params, mask=mask)
+    assert result.mask.shape == (10, 12, 1)
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16])
+def test_apply_perspective_supported_mask_dtypes(dtype: type) -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12, dtype=dtype)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.2)
+    result = apply_perspective(image, params, mask=mask)
+    assert result.mask.dtype == dtype
+
+
+@pytest.mark.parametrize("dtype", [np.bool_, np.int16, np.int32, np.int64, np.float32])
+def test_apply_perspective_rejects_unsupported_mask_dtype(dtype: type) -> None:
+    image = _make_image(10, 12)
+    mask = np.zeros((10, 12), dtype=dtype)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(TypeError, match="dtype"):
+        apply_perspective(image, params, mask=mask)
+
+
+def test_apply_perspective_int16_mask_rejected_unlike_apply_affine() -> None:
+    # Deliberate, narrower contract than apply_affine/apply_flip/apply_crop: verified
+    # via this project's own Windows CI that cv2.warpPerspective (not warpAffine) with
+    # an int16 mask raises "Unknown C++ exception from OpenCV code" on Windows for the
+    # same opencv-python-headless version that works fine on Linux/macOS -- excluded
+    # outright rather than supported unreliably depending on the caller's platform.
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12, dtype=np.int16)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.0)
+    with pytest.raises(TypeError, match="dtype"):
+        apply_perspective(image, params, mask=mask)
+
+    # the identical mask, through apply_affine, remains fully supported.
+    affine_params = sample_affine(rng, source_size=(12, 10))
+    affine_result = apply_affine(image, affine_params, mask=mask)
+    assert affine_result.mask.dtype == np.int16
+
+
+def test_apply_perspective_mask_always_uses_nearest_neighbor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    calls = []
+    real_warp_perspective = augmentation_module._warp_perspective
+
+    def spy(image, matrix, output_size, **kwargs):
+        calls.append(kwargs.get("interpolation"))
+        return real_warp_perspective(image, matrix, output_size, **kwargs)
+
+    monkeypatch.setattr(augmentation_module, "_warp_perspective", spy)
+
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    apply_perspective(image, params, mask=mask, interpolation=cv2.INTER_LINEAR)
+
+    assert calls[0] == cv2.INTER_LINEAR
+    assert calls[1] == cv2.INTER_NEAREST
+
+
+def test_apply_perspective_mask_border_value_fills_exposed_pixels() -> None:
+    image = np.zeros((10, 10), dtype=np.uint8)
+    mask = np.full((10, 10), 3, dtype=np.uint8)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 10), distortion_scale=0.5)
+    result = apply_perspective(image, params, mask=mask, mask_border_value=250)
+    assert 250 in np.unique(result.mask)
+
+
+def test_apply_perspective_rejects_mask_border_value_out_of_dtype_range() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12, dtype=np.uint8)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(ValueError, match="mask_border_value"):
+        apply_perspective(image, params, mask=mask, mask_border_value=300)
+
+
+def test_apply_perspective_rejects_bool_mask_border_value() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12, dtype=np.uint8)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(TypeError, match="mask_border_value"):
+        apply_perspective(image, params, mask=mask, mask_border_value=True)
+
+
+def test_apply_perspective_rejects_mask_spatial_mismatch() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(9, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(ValueError, match="spatial size"):
+        apply_perspective(image, params, mask=mask)
+
+
+def test_apply_perspective_mask_contains_no_new_values_beyond_input_and_border() -> None:
+    image = _make_image(20, 20)
+    mask = _make_mask(20, 20)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(20, 20), distortion_scale=0.3)
+    result = apply_perspective(image, params, mask=mask, mask_border_value=9)
+    allowed = set(np.unique(mask).tolist()) | {9}
+    assert set(np.unique(result.mask).tolist()) <= allowed
+
+
+def test_apply_perspective_error_only_on_mask_warp_is_mapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    real_warp_perspective = augmentation_module._warp_perspective
+    error = cv2.error("simulated mask failure")
+    calls = {"count": 0}
+
+    def image_ok_mask_fails(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return real_warp_perspective(*args, **kwargs)
+        raise error
+
+    monkeypatch.setattr(augmentation_module, "_warp_perspective", image_ok_mask_fails)
+
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10))
+    with pytest.raises(RuntimeError, match="OpenCV failed") as exc_info:
+        apply_perspective(image, params, mask=mask)
+    assert exc_info.value.__cause__ is error
+    assert calls["count"] == 2
+
+
+def test_apply_perspective_mask_does_not_mutate_or_alias() -> None:
+    image = _make_image(10, 12)
+    mask = _make_mask(10, 12)
+    mask_before = mask.copy()
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.3)
+    result = apply_perspective(image, params, mask=mask)
+    np.testing.assert_array_equal(mask, mask_before)
+    assert not np.shares_memory(result.mask, mask)
+
+
+# --- PerspectiveParameters: type behavior ---
+
+
+def test_perspective_parameters_equality() -> None:
+    rng = np.random.default_rng(0)
+    a = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    b = dataclasses.replace(a)
+    assert a == b
+
+
+def test_perspective_parameters_inequality_on_matrix() -> None:
+    a = PerspectiveParameters(
+        matrix=np.eye(3, dtype=np.float64),
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    other_matrix = np.eye(3, dtype=np.float64)
+    other_matrix[0, 2] = 1.0
+    b = dataclasses.replace(a, matrix=other_matrix)
+    assert a != b
+
+
+def test_perspective_parameters_inequality_on_destination_points() -> None:
+    a = PerspectiveParameters(
+        matrix=np.eye(3, dtype=np.float64),
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    b = dataclasses.replace(a, destination_points=((1.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)))
+    assert a != b
+
+
+def test_perspective_parameters_hash_raises() -> None:
+    params = PerspectiveParameters(
+        matrix=np.eye(3, dtype=np.float64),
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    with pytest.raises(TypeError):
+        hash(params)
+
+
+def test_perspective_parameters_matrix_is_read_only() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    assert not params.matrix.flags.writeable
+
+
+def test_perspective_parameters_does_not_have_distortion_scale_field() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    assert not hasattr(params, "distortion_scale")
+    assert {f.name for f in dataclasses.fields(params)} == {
+        "matrix",
+        "source_size",
+        "destination_points",
+    }
+
+
+# --- manual examples / independent oracle ---
+
+
+def test_perspective_manual_identity_example() -> None:
+    width, height = 5, 4
+    source = _independent_source_corners(width, height)
+    matrix = cv2.getPerspectiveTransform(source, source)
+    np.testing.assert_array_equal(matrix, np.eye(3))
+    params = PerspectiveParameters(
+        matrix=np.array(matrix, dtype=np.float64),
+        source_size=(width, height),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(height, width)
+    np.testing.assert_array_equal(apply_perspective(image, params), image)
+
+
+def test_perspective_manual_safe_single_corner_matches_independent_oracle() -> None:
+    width, height = 5, 4
+    source = _independent_source_corners(width, height)
+    destination = np.array([[0.5, 0.4], [4, 0], [4, 3], [0, 3]], dtype=np.float32)
+    expected_matrix = cv2.getPerspectiveTransform(source, destination)
+
+    params = PerspectiveParameters(
+        matrix=np.array(expected_matrix, dtype=np.float64),
+        source_size=(width, height),
+        destination_points=((0.5, 0.4), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(height, width)
+    result = apply_perspective(image, params)
+    expected_result = im.warp_perspective(image, params.matrix, params.source_size)
+    np.testing.assert_array_equal(result, expected_result)
+
+
+def test_perspective_manual_symmetric_shrink_matches_expected_matrix() -> None:
+    width, height = 5, 4
+    source = _independent_source_corners(width, height)
+    destination = np.array([[1.0, 0.75], [3.0, 0.75], [3.0, 2.25], [1.0, 2.25]], dtype=np.float32)
+    matrix = cv2.getPerspectiveTransform(source, destination)
+    expected = np.array([[0.5, 0.0, 1.0], [0.0, 0.5, 0.75], [0.0, 0.0, 1.0]], dtype=np.float64)
+    np.testing.assert_allclose(matrix, expected)
+
+    params = PerspectiveParameters(
+        matrix=np.array(matrix, dtype=np.float64),
+        source_size=(width, height),
+        destination_points=((1.0, 0.75), (3.0, 0.75), (3.0, 2.25), (1.0, 2.25)),
+    )
+    image = _make_image(height, width)
+    result = apply_perspective(image, params)
+    expected_result = im.warp_perspective(image, params.matrix, params.source_size)
+    np.testing.assert_array_equal(result, expected_result)
+
+
+def test_perspective_manual_horizon_only_example() -> None:
+    matrix = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)),
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="horizon"):
+        apply_perspective(image, params)
+
+
+# --- global np.seterr / warnings isolation ---
+
+
+def test_sample_perspective_no_floating_point_error_under_seterr_raise() -> None:
+    previous = np.seterr(all="raise")
+    try:
+        rng = np.random.default_rng(0)
+        sample_perspective(rng, source_size=(12, 10), distortion_scale=0.5)
+    finally:
+        np.seterr(**previous)
+
+
+def test_apply_perspective_no_floating_point_error_under_seterr_raise() -> None:
+    previous = np.seterr(all="raise")
+    try:
+        rng = np.random.default_rng(0)
+        params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.5)
+        image = _make_image(10, 12)
+        apply_perspective(image, params)
+    finally:
+        np.seterr(**previous)
+
+
+def test_sample_and_apply_perspective_no_warning_under_seterr_warn() -> None:
+    previous = np.seterr(under="warn")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            rng = np.random.default_rng(0)
+            params = sample_perspective(rng, source_size=(12, 10), distortion_scale=0.5)
+            image = _make_image(10, 12)
+            mask = _make_mask(10, 12)
+            apply_perspective(image, params, mask=mask)
+    finally:
+        np.seterr(**previous)
+
+
+# --- affine regression: renamed private helper stays invisible publicly ---
+
+
+def test_apply_affine_source_size_error_message_unchanged_after_helper_rename() -> None:
+    params = dataclasses.replace(
+        sample_affine(np.random.default_rng(0), source_size=(5, 4)),
+        source_size="not-a-tuple",  # type: ignore[arg-type]
+    )
+    image = _make_image(4, 5)
+    with pytest.raises(TypeError, match=r"^params\.source_size must be a tuple"):
+        apply_affine(image, params)
+
+
+# --- import hygiene (extended for perspective) ---
+
+
+def test_augmentation_module_still_does_not_import_new_dependencies() -> None:
+    from pathlib import Path
+
+    import improcv.augmentation
+
+    source = Path(improcv.augmentation.__file__).read_text()
+    # cv2/numpy are already legitimate dependencies of this module; this only
+    # guards against a brand-new third-party import sneaking in with perspective.
+    disallowed = ["scipy", "torch", "torchvision", "albumentations"]
+    for name in disallowed:
+        assert name not in source
