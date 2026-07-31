@@ -1184,13 +1184,14 @@ Pairing is a strict bijection, with no partial-result mode: two different paths 
 reducing to the same key is a duplicate and raises `ValueError` (naming every colliding key on
 either side, together with its colliding relative paths); an image key with no matching mask key,
 or vice versa, also raises `ValueError` (naming every such key on either side) -- both diagnostics
-truncate past 10 entries with a trailing `"... and N more"`. `image_root == mask_root` is not
-itself rejected (which physical files land on which side is governed entirely by `image_extensions`/
-`mask_extensions`), but an image and a mask that would resolve to the exact same path (only possible
-when the two extension sets overlap under a shared root) is rejected with `ValueError`, since an
-image and its own mask must be two distinct paths. Both sides empty gives `()`. This module never
-deduplicates by physical file identity: two different paths referencing the same file via a hard
-link remain a legal, distinct pair.
+truncate past 10 entries with a trailing `"... and N more"`. `image_root == mask_root` is legal
+(which physical files land on which side is governed entirely by `image_extensions`/
+`mask_extensions`). However, a pair is rejected with `ValueError` when its returned `image` and
+`mask` `Path` values compare equal (only reachable when the two extension sets overlap under a
+shared root), since one path cannot serve as both members of the pair -- this does not call
+`resolve()`, compare inodes, or otherwise test physical file identity: two different paths
+referencing the same file via a hard link remain a legal, distinct pair. Both sides empty gives
+`()`.
 
 ## Status
 
