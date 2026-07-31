@@ -1102,10 +1102,62 @@ the canvas the way `im.rotate_bound` does. The mask is always warped with neares
 interpolation and a constant border (`mask_border_value`, default `0`); the caller cannot change
 the mask's interpolation or border mode, only the fill value.
 
-This slice covers flip, crop, and a shear+rotation+translation+isotropic-scale affine transform: no
-perspective warp, no anisotropic scale, no canvas expansion, no photometric augmentation
-(brightness/contrast/blur/noise), no bounding box/keypoint/polygon support, and no `Compose`-style
-augmentation pipeline.
+Augmentation sampling and replay -- perspective:
+
+```python
+perspective_params = im.sample_perspective(
+    rng,
+    source_size=(image.shape[1], image.shape[0]),
+    distortion_scale=0.5,
+)
+
+pair = im.apply_perspective(
+    image,
+    perspective_params,
+    mask=mask,
+    mask_border_value=255,
+)
+```
+
+`sample_perspective` samples a single, replayable `3x3` projective transform (`PerspectiveParameters`)
+by displacing each of the source rectangle's four corners inward, independently, within a region
+controlled by `distortion_scale` -- a single value in `[0.0, 0.5]` (not a range: it only bounds how
+far *each corner's own draw* can land, it is not itself a directly-realized transform parameter the
+way `sample_affine`'s `angle`/`translation`/`scale` are). `distortion_scale=0.0` (identity) consumes
+no `rng` state at all and gives `matrix == np.eye(3)` exactly. The actual sampled geometry is
+recorded in `PerspectiveParameters.destination_points` -- the four `(x, y)` corners, in `top-left,
+top-right, bottom-right, bottom-left` order, *after* the `float32` quantization `cv2.
+getPerspectiveTransform` itself requires for its input points (verified directly against OpenCV 4.9
+and 5.0) -- not the pre-quantization draw. `matrix` remains the sole source of truth for replay via
+`apply_perspective`; `destination_points` is metadata only, never reconstructed or cross-checked
+against the matrix. The corresponding source corners are never stored (always deterministically
+`(0, 0)`, `(width-1, 0)`, `(width-1, height-1)`, `(0, height-1)` for the given `source_size`).
+
+`distortion_scale`'s `0.5` cap is a geometric guarantee, not a fitted constant: after normalizing
+both axes to `[0, 1]`, each corner moves inward by at most `distortion_scale / 2 <= 1/4`, which keeps
+the signed turn at every corner of the resulting quadrilateral bounded away from zero in exact
+arithmetic -- always strictly convex, non-self-intersecting, and never mirrored. `sample_perspective`
+still checks this property on the actual, `float32`-quantized points (rounding for an extreme
+`source_size` could otherwise erode the guarantee) and additionally rejects a resulting matrix that
+is numerically rank-deficient or whose projective horizon crosses the source rectangle -- verified
+directly that `cv2.warpPerspective` does not raise for either condition, silently producing a
+degenerate image instead, so `improcv` checks both explicitly before ever calling it. There is no
+retry/resampling loop: a rejection raises `ValueError` immediately. `sample_perspective` requires
+both `source_size` dimensions to be at least `2` (a 4-corner correspondence is not well defined
+otherwise -- verified directly that even `cv2.getPerspectiveTransform(src, src)` is not identity
+below that); a hand-constructed `PerspectiveParameters` may still be applied to a smaller source size
+via `apply_perspective`, as long as its `matrix` independently passes the same rank/horizon checks.
+
+`apply_perspective` mirrors `apply_affine`'s contract exactly (same `interpolation`/`border_mode`/
+`border_value`/`mask_border_value`, same mask dtype restriction, same source-size replay guard, same
+unchanged output size, same nearest-neighbor/constant-border mask policy), using `improcv.transforms.
+warp_perspective` instead of `warp_affine`.
+
+This slice covers flip, crop, a shear+rotation+translation+isotropic-scale affine transform, and a
+single-homography perspective transform: no anisotropic scale, no canvas expansion, no photometric
+augmentation (brightness/contrast/blur/noise), no bounding box/keypoint/polygon support, no
+probability/application policy for perspective (it always samples, like `sample_affine`), and no
+`Compose`-style augmentation pipeline.
 
 Dataset image discovery:
 

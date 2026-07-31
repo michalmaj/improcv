@@ -1,17 +1,23 @@
-"""Geometric augmentation: reproducible flip, crop, and affine sampling for image + mask pairs.
+"""Geometric augmentation: reproducible flip, crop, affine, and perspective sampling for
+image + mask pairs.
 
 This module separates *sampling* random parameters from *applying* them:
-`sample_flip`/`sample_crop`/`sample_affine` consume an explicit
-`np.random.Generator` and return an independent, replayable parameter object
-(`FlipParameters`/`CropParameters`/`AffineParameters`); `apply_flip`/
-`apply_crop`/`apply_affine` are pure functions of that result and never touch
-any RNG themselves. The same sampled parameters can be applied to an image
-and its segmentation mask (or to a second image of the same spatial size)
-any number of times, always producing the same result.
+`sample_flip`/`sample_crop`/`sample_affine`/`sample_perspective` consume an
+explicit `np.random.Generator` and return an independent, replayable
+parameter object (`FlipParameters`/`CropParameters`/`AffineParameters`/
+`PerspectiveParameters`); `apply_flip`/`apply_crop`/`apply_affine`/
+`apply_perspective` are pure functions of that result and never touch any
+RNG themselves. The same sampled parameters can be applied to an image and
+its segmentation mask (or to a second image of the same spatial size) any
+number of times, always producing the same result.
 
 Affine coverage is a stable subset of the general affine group: shear,
 rotation, and isotropic scale (a similarity transform plus a sequential
-shear), all composed around the image center. Perspective, anisotropic
+shear), all composed around the image center. Perspective coverage is a
+single, replayable homography sampled by displacing each of the source
+rectangle's four corners inward, independently, within a bound controlled
+by `distortion_scale`; both affine and perspective always produce
+output the same size as the source (no canvas expansion). Anisotropic
 scale, canvas expansion (a `rotate_bound`-style growing output), resize,
 photometric augmentation, bounding boxes/keypoints/polygons, and any
 `Compose`-style pipeline are deliberately out of scope for this slice.
@@ -19,6 +25,7 @@ photometric augmentation, bounding boxes/keypoints/polygons, and any
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import overload
 
@@ -34,6 +41,7 @@ from improcv._validation import (
     require_image_ndim,
     require_int,
     require_integral,
+    require_point_2d,
     require_positive,
     require_positive_integral,
     require_range,
@@ -43,6 +51,7 @@ from improcv.transforms import FlipDirection
 from improcv.transforms import crop as _crop
 from improcv.transforms import flip as _flip
 from improcv.transforms import warp_affine as _warp_affine
+from improcv.transforms import warp_perspective as _warp_perspective
 from improcv.types import Image
 
 __all__ = [
@@ -50,12 +59,15 @@ __all__ = [
     "AugmentedImageMask",
     "CropParameters",
     "FlipParameters",
+    "PerspectiveParameters",
     "apply_affine",
     "apply_crop",
     "apply_flip",
+    "apply_perspective",
     "sample_affine",
     "sample_crop",
     "sample_flip",
+    "sample_perspective",
 ]
 
 # Segmentation masks get a deliberately narrower dtype contract than images:
@@ -152,6 +164,45 @@ class AffineParameters:
             and self.translation == other.translation
             and self.scale == other.scale
             and self.shear == other.shear
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class PerspectiveParameters:
+    """The result of `sample_perspective`: a full `3x3` projective transform matrix.
+
+    `matrix` (shape ``(3, 3)``, dtype ``float64``, finite, a new read-only buffer) is the sole
+    source of truth for replay -- `apply_perspective` applies it directly. `destination_points`
+    is sampling metadata only: the four `(x, y)` destination corners actually used to build
+    `matrix` via `cv2.getPerspectiveTransform`, in `top-left, top-right, bottom-right,
+    bottom-left` order, recorded *after* the `float32` quantization that OpenCV itself requires
+    for its input points -- so this is exactly what the solver saw, not the pre-quantization
+    draw. `apply_perspective` never reconstructs `matrix` from `destination_points`, nor
+    cross-checks the two numerically, mirroring `AffineParameters`' own metadata-is-not-truth
+    contract. The corresponding source corners are never stored -- they are always
+    deterministically `(0, 0)`, `(width - 1, 0)`, `(width - 1, height - 1)`, `(0, height - 1)`
+    for `source_size == (width, height)`, in the same corner order.
+
+    `source_size` is `(width, height)`, matching `AffineParameters`'/`CropParameters`' own
+    convention, and exists for the same reason: `apply_perspective` refuses to replay these
+    parameters against a differently-sized image.
+    """
+
+    matrix: npt.NDArray[np.float64]
+    source_size: tuple[int, int]
+    destination_points: tuple[
+        tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]
+    ]
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PerspectiveParameters):
+            return NotImplemented
+        return (
+            bool(np.array_equal(self.matrix, other.matrix))
+            and self.source_size == other.source_size
+            and self.destination_points == other.destination_points
         )
 
     __hash__ = None  # type: ignore[assignment]
@@ -776,6 +827,270 @@ def apply_affine(
     return AugmentedImageMask(image=augmented_image, mask=augmented_mask)
 
 
+def sample_perspective(
+    rng: np.random.Generator,
+    source_size: tuple[int, int],
+    *,
+    distortion_scale: float = 0.5,
+) -> PerspectiveParameters:
+    """Sample a replayable perspective transform by displacing each source corner inward.
+
+    `source_size` is `(width, height)`; both dimensions must be at least `2` -- a genuine
+    four-corner correspondence is not well defined otherwise (verified directly: even
+    `cv2.getPerspectiveTransform(src, src)` does not return identity for `width < 2` or
+    `height < 2`, since the four "source corners" collapse to fewer than four distinct,
+    non-collinear points). The four source corners are always the deterministic rectangle
+    `(0, 0)`, `(width - 1, 0)`, `(width - 1, height - 1)`, `(0, height - 1)`, in `top-left,
+    top-right, bottom-right, bottom-left` order.
+
+    `distortion_scale` is a single value in `[0.0, 1/2]` (not a range) -- it is the maximum
+    fraction of half the source width/height that each corner may be displaced inward, not a
+    directly-sampled transform parameter the way `AffineParameters.angle`/`.scale` are: it only
+    bounds the region each corner is drawn from,
+
+    ```text
+    max_dx = distortion_scale * (width - 1) / 2.0
+    max_dy = distortion_scale * (height - 1) / 2.0
+
+    top_left     ~ (Uniform[0, max_dx),                    Uniform[0, max_dy))
+    top_right    ~ (Uniform[(width-1)-max_dx, width-1),    Uniform[0, max_dy))
+    bottom_right ~ (Uniform[(width-1)-max_dx, width-1),    Uniform[(height-1)-max_dy, height-1))
+    bottom_left  ~ (Uniform[0, max_dx),                    Uniform[(height-1)-max_dy, height-1))
+    ```
+
+    each independently via `rng.uniform` -- `low` is reachable, `high` is not guaranteed
+    (an ordinary property of continuous floating-point sampling). The exact number and order of
+    internal draws against `rng` is an implementation detail, not part of the public contract,
+    and may change between releases without notice.
+
+    `distortion_scale == 0.0` (the default range's lower bound, and any explicit `0.0`) takes an
+    explicit identity fast path: no `rng` draw happens at all (verified directly: the
+    generator's `bit_generator.state` is unchanged), `matrix` is exactly `np.eye(3,
+    dtype=np.float64)`, and `destination_points` are exactly the source corners.
+
+    `distortion_scale <= 0.5` is not an arbitrary cap: after normalizing both axes to `[0, 1]`,
+    each corner moves inward by at most `a = distortion_scale / 2 <= 1/4`. For two consecutive
+    edges of the resulting quadrilateral, the signed turn at their shared corner is bounded
+    below by `(1 - 2*a)**2 - a**2 = 1 - 4*a + 3*a**2`, which for `a <= 1/4` is at least `3/16 >
+    0` -- so in exact real arithmetic, the destination quadrilateral is always strictly convex,
+    non-self-intersecting, and keeps the same corner order (never mirrored). This is a
+    geometric proof for the real-number construction, not a guarantee that survives every
+    floating-point rounding step: the four destination points actually used are the ones
+    quantized to `float32` (`cv2.getPerspectiveTransform`'s own required input dtype -- verified
+    directly against OpenCV 4.9 and 5.0), so this function still checks, on those quantized
+    points, that all four consecutive signed turns are strictly positive (no epsilon margin) --
+    this is expected to always hold given the proof above, but for an extreme `source_size`
+    (still representable, but pushing coordinates far enough that `float32` rounding matters)
+    it is a real, tested safeguard, not a formality. It then also checks the constructed matrix
+    itself is numerically full-rank and free of a projective horizon crossing the source
+    rectangle (see `apply_perspective`) -- raising `ValueError`, never silently returning a
+    degenerate transform or retrying with a new draw.
+
+    Returns
+    -------
+    PerspectiveParameters
+        Independent of `rng`'s state after this call; `matrix` is the sole source of truth for
+        replay via `apply_perspective`. `destination_points` are sampling metadata for
+        debugging/logging/`repr` only.
+
+    Raises
+    ------
+    TypeError
+        If `rng` is not a `numpy.random.Generator`, or `source_size` is not a 2-tuple of
+        positive integral (non-`bool`) values, or `distortion_scale` is not a real number
+        (`bool`/`np.bool_` rejected).
+    ValueError
+        If either `source_size` dimension is not representable as `np.intp` on this platform,
+        if either dimension is less than `2`, if `distortion_scale` is outside `[0.0, 0.5]` or
+        is `NaN`/infinite, or if the sampled corners do not combine into a strictly convex,
+        consistently-oriented, numerically full-rank, horizon-free transform (see above).
+    """
+    _require_generator(rng)
+    source_width, source_height = _normalize_size(source_size, "source_size")
+    if source_width < 2 or source_height < 2:
+        raise ValueError(
+            "source_size must have both dimensions >= 2 for a well-defined perspective "
+            f"transform (a 4-corner correspondence requires 4 distinct, non-collinear source "
+            f"points), got {(source_width, source_height)}"
+        )
+    require_range(distortion_scale, 0.0, 0.5, "distortion_scale")
+
+    source_points = _perspective_source_corners((source_width, source_height))
+
+    if distortion_scale == 0.0:
+        matrix = np.eye(3, dtype=np.float64)
+        matrix.setflags(write=False)
+        return PerspectiveParameters(
+            matrix=matrix,
+            source_size=(source_width, source_height),
+            destination_points=source_points,
+        )
+
+    max_dx = distortion_scale * (source_width - 1) / 2.0
+    max_dy = distortion_scale * (source_height - 1) / 2.0
+
+    raw_destination_points = (
+        (rng.uniform(0.0, max_dx), rng.uniform(0.0, max_dy)),
+        (
+            rng.uniform((source_width - 1) - max_dx, source_width - 1),
+            rng.uniform(0.0, max_dy),
+        ),
+        (
+            rng.uniform((source_width - 1) - max_dx, source_width - 1),
+            rng.uniform((source_height - 1) - max_dy, source_height - 1),
+        ),
+        (
+            rng.uniform(0.0, max_dx),
+            rng.uniform((source_height - 1) - max_dy, source_height - 1),
+        ),
+    )
+
+    source_array = np.array(source_points, dtype=np.float32)
+    destination_array = np.array(raw_destination_points, dtype=np.float32)
+    destination_points = (
+        (float(destination_array[0, 0]), float(destination_array[0, 1])),
+        (float(destination_array[1, 0]), float(destination_array[1, 1])),
+        (float(destination_array[2, 0]), float(destination_array[2, 1])),
+        (float(destination_array[3, 0]), float(destination_array[3, 1])),
+    )
+
+    _require_convex_quadrilateral(destination_points, "sampled destination_points")
+
+    raw_matrix = cv2.getPerspectiveTransform(source_array, destination_array)
+    matrix = np.array(raw_matrix, dtype=np.float64, order="C", copy=True)
+    if matrix.shape != (3, 3) or matrix.dtype != np.float64:
+        raise RuntimeError(
+            f"internal error: sampled perspective matrix has shape {matrix.shape} and "
+            f"dtype {matrix.dtype}, expected (3, 3) float64"
+        )
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("sampled perspective parameters do not produce a finite transform matrix")
+
+    _require_perspective_matrix_geometry(matrix, (source_width, source_height), "matrix")
+
+    matrix.setflags(write=False)
+
+    return PerspectiveParameters(
+        matrix=matrix,
+        source_size=(source_width, source_height),
+        destination_points=destination_points,
+    )
+
+
+@overload
+def apply_perspective(
+    image: Image,
+    params: PerspectiveParameters,
+    *,
+    mask: None = None,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+) -> Image: ...
+@overload
+def apply_perspective(
+    image: Image,
+    params: PerspectiveParameters,
+    *,
+    mask: np.ndarray,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+    mask_border_value: int = 0,
+) -> AugmentedImageMask: ...
+def apply_perspective(
+    image: Image,
+    params: PerspectiveParameters,
+    *,
+    mask: np.ndarray | None = None,
+    interpolation: int = cv2.INTER_LINEAR,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: float | tuple[float, ...] = 0,
+    mask_border_value: int = 0,
+) -> Image | AugmentedImageMask:
+    """Apply a previously sampled perspective transform to `image` (and optionally `mask`).
+
+    `params` must be exactly a `PerspectiveParameters` (its fields are re-validated here too,
+    since a frozen dataclass can still be constructed by hand with invalid field values). Only
+    `params.matrix` is used to perform the transform; `destination_points` is checked for basic
+    internal consistency (a 4-tuple of finite `(x, y)` pairs) but is never used to reconstruct
+    or cross-check the matrix numerically. A hand-constructed `params` is also checked for the
+    same numerical-full-rank and horizon-free geometry `sample_perspective` itself enforces
+    (see `sample_perspective`'s docstring) -- `cv2.warpPerspective` does not raise for a
+    singular or horizon-crossing matrix, verified directly: it silently returns a degenerate
+    (typically all-border-fill) image instead, so this must be checked here rather than left to
+    OpenCV.
+
+    `image`'s spatial size (`(width, height)`) must equal `params.source_size` *exactly* -- the
+    same replay guard as `apply_affine`/`apply_crop`. A `PerspectiveParameters` built by hand
+    for a `source_size` with a dimension of `1` remains legal here (unlike `sample_perspective`,
+    which refuses to construct one) as long as its `matrix` independently passes the checks
+    above -- `apply_perspective` does not require the 4-corner correspondence `sample_
+    perspective` needs, only a valid matrix and a matching image. Output spatial size always
+    equals `params.source_size` (this slice does not expand the canvas). Applies `improcv.
+    transforms.warp_perspective` directly (never raw `cv2.warpPerspective`); `image`'s dtype/
+    shape contract is exactly `warp_perspective`'s own (identical to `warp_affine`'s, verified
+    directly).
+
+    `interpolation` selects an OpenCV interpolation mode only -- it does not accept
+    `cv2.WARP_INVERSE_MAP` or any other warp-control flag bit, exactly as in `apply_affine`.
+
+    If `mask` is given, it must satisfy the same shape/dtype contract as `apply_affine`'s `mask`
+    (shape `(H, W)`/`(H, W, 1)`, dtype `uint8`/`uint16`/`int16`, spatial size matching `image`;
+    verified directly that `warpPerspective` has the identical mask dtype/singleton-channel
+    behavior as `warpAffine`, including silently downcasting an `int64` mask to `int32` and
+    rejecting `bool`) and is always warped with `interpolation=cv2.INTER_NEAREST`,
+    `border_mode=cv2.BORDER_CONSTANT`, and `border_value=mask_border_value` -- the caller cannot
+    change the mask's interpolation or border mode, only the fill value.
+
+    Returns
+    -------
+    Image or AugmentedImageMask
+        A new, independent array (or pair) with `image`'s original shape and dtype; never
+        aliases `image` or `mask`.
+
+    Raises
+    ------
+    TypeError
+        If `params` is not a `PerspectiveParameters`, if its fields are not the expected types,
+        if `interpolation` is not an integral value, if `mask`/`mask_border_value` is not an
+        `ndarray`/integral, or if `image`/`mask` is not dtype-compatible.
+    ValueError
+        If `image`/`mask` has an unsupported shape, `image`'s (or `mask`'s) spatial size does
+        not match `params.source_size` (or `image`'s), `interpolation` includes
+        `WARP_INVERSE_MAP` or any other non-interpolation flag bit, `mask_border_value` does not
+        fit `mask`'s dtype range, or `params.matrix` is not numerically full-rank or has a
+        projective horizon crossing `params.source_size`'s rectangle.
+    RuntimeError
+        If the underlying `cv2.error` occurs after full validation (for either the image or the
+        mask warp), or if this function's own postconditions are violated.
+    """
+    _require_perspective_parameters(params)
+    interpolation = _require_interpolation_mode(interpolation)
+    require_image_ndim(image, ndims=(2, 3))
+    _require_matches_source_size(image, params.source_size, "image")
+
+    augmented_image = _apply_perspective_to_array(
+        image, params, interpolation, border_mode, border_value
+    )
+    _check_shape_preserving_postconditions(image, augmented_image, "image")
+
+    if mask is None:
+        return augmented_image
+
+    _require_mask(mask, "mask")
+    _require_matching_spatial_shape(mask, image, "mask", "image")
+    require_integral(mask_border_value, "mask_border_value")
+    require_fits_dtype(mask_border_value, mask.dtype, "mask_border_value")
+
+    augmented_mask = _apply_perspective_to_array(
+        mask, params, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT, mask_border_value
+    )
+    _check_shape_preserving_postconditions(mask, augmented_mask, "mask")
+
+    return AugmentedImageMask(image=augmented_image, mask=augmented_mask)
+
+
 def _require_generator(rng: object) -> None:
     if not isinstance(rng, np.random.Generator):
         raise TypeError(f"rng must be a numpy.random.Generator, got {type(rng).__name__}")
@@ -913,7 +1228,7 @@ def _require_affine_parameters(params: object) -> None:
         raise TypeError(f"params.matrix must have dtype float64, got {params.matrix.dtype}")
     require_transform_matrix(params.matrix, (2, 3), "params.matrix")
 
-    _require_affine_source_size(params.source_size)
+    _require_source_size(params.source_size)
 
     require_finite(params.angle, "params.angle")
     _require_finite_pair(params.translation, "params.translation")
@@ -921,7 +1236,7 @@ def _require_affine_parameters(params: object) -> None:
     _require_finite_pair(params.shear, "params.shear")
 
 
-def _require_affine_source_size(source_size: object) -> None:
+def _require_source_size(source_size: object) -> None:
     if not isinstance(source_size, tuple):
         raise TypeError(f"params.source_size must be a tuple, got {type(source_size).__name__}")
     if len(source_size) != 2:
@@ -981,6 +1296,154 @@ def _apply_affine_to_array(
         )
     except cv2.error as exc:
         raise RuntimeError("OpenCV failed to apply affine augmentation") from exc
+    return _restore_singleton_channel(array, result)
+
+
+def _perspective_source_corners(
+    source_size: tuple[int, int],
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]:
+    """The four deterministic source corners for `source_size`, in top-left, top-right,
+    bottom-right, bottom-left order."""
+    width, height = source_size
+    return (
+        (0.0, 0.0),
+        (float(width - 1), 0.0),
+        (float(width - 1), float(height - 1)),
+        (0.0, float(height - 1)),
+    )
+
+
+def _require_convex_quadrilateral(points: tuple[tuple[float, float], ...], name: str) -> None:
+    """Raise ValueError unless `points` (in cyclic order) form a strictly convex,
+    consistently-oriented quadrilateral.
+
+    Checked on the actual points used (e.g. already quantized to `float32`), not on
+    pre-quantization values -- rounding for an extreme `source_size` could otherwise turn a
+    provably-safe real-number construction into a degenerate one. Every one of the four
+    consecutive signed turns must be strictly positive (matching this module's fixed
+    top-left/top-right/bottom-right/bottom-left orientation) -- no epsilon margin: a zero or
+    negative turn means two points coincide, three are collinear, or the quadrilateral is
+    self-intersecting or mirrored, none of which this module accepts from a sampler.
+    """
+    if len(set(points)) != 4:
+        raise ValueError(f"{name} must be four distinct points, got {points}")
+
+    turns = []
+    count = len(points)
+    for index in range(count):
+        x0, y0 = points[index]
+        x1, y1 = points[(index + 1) % count]
+        x2, y2 = points[(index + 2) % count]
+        v1x, v1y = x1 - x0, y1 - y0
+        v2x, v2y = x2 - x1, y2 - y1
+        turns.append(v1x * v2y - v1y * v2x)
+
+    if not all(turn > 0.0 for turn in turns):
+        raise ValueError(
+            f"{name} do not form a strictly convex, consistently oriented quadrilateral "
+            f"(signed turns: {turns})"
+        )
+
+
+def _require_perspective_matrix_geometry(
+    matrix: np.ndarray, source_size: tuple[int, int], name: str
+) -> None:
+    """Raise ValueError unless `matrix` is numerically full-rank and free of a projective
+    horizon crossing the `source_size` rectangle.
+
+    A homography is only defined up to a nonzero scalar multiple, so both checks below are
+    scale-invariant by construction (each normalizes by its own matrix's/row's largest absolute
+    element before testing) -- verified directly that `matrix`, `matrix * 1e200`, and
+    `matrix * 1e-200` all reach the same accept/reject decision, as long as every element stays
+    finite. `np.linalg.det(matrix) != 0` is deliberately not used: verified directly (OpenCV
+    5.0, degenerate input points) that a fully degenerate `getPerspectiveTransform` result can
+    have a nonzero-but-astronomically-small determinant (e.g. ``-1.2e-31``) that a naive
+    determinant check would accept -- `np.linalg.matrix_rank`'s own SVD-based tolerance does
+    not.
+    """
+    max_abs = float(np.max(np.abs(matrix)))
+    if max_abs == 0.0:
+        raise ValueError(f"{name} must not be the zero matrix")
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        scaled_matrix = matrix / max_abs
+    if not np.all(np.isfinite(scaled_matrix)):
+        raise ValueError(f"{name} could not be safely scaled for a numerical rank check")
+
+    try:
+        rank = int(np.linalg.matrix_rank(scaled_matrix))
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(f"{name} numerical rank could not be determined") from exc
+    if rank != 3:
+        raise ValueError(
+            f"{name} must be numerically full-rank and sufficiently separated from "
+            f"singularity, got numerical rank {rank}"
+        )
+
+    h20, h21, h22 = float(matrix[2, 0]), float(matrix[2, 1]), float(matrix[2, 2])
+    row_scale = max(abs(h20), abs(h21), abs(h22))
+    if row_scale == 0.0:
+        raise ValueError(f"{name} third row must not be entirely zero")
+    a, b, c = h20 / row_scale, h21 / row_scale, h22 / row_scale
+
+    denominators = [
+        math.fsum((a * x, b * y, c)) for x, y in _perspective_source_corners(source_size)
+    ]
+    if not (
+        all(value > 0.0 for value in denominators) or all(value < 0.0 for value in denominators)
+    ):
+        raise ValueError(
+            f"{name}'s homogeneous denominator changes sign (or reaches zero) within the "
+            f"source rectangle -- its projective horizon crosses the image"
+        )
+
+
+def _require_perspective_parameters(params: object) -> None:
+    if not isinstance(params, PerspectiveParameters):
+        raise TypeError(f"params must be a PerspectiveParameters, got {type(params).__name__}")
+
+    if not isinstance(params.matrix, np.ndarray):
+        raise TypeError(f"params.matrix must be a NumPy array, got {type(params.matrix).__name__}")
+    if params.matrix.dtype != np.float64:
+        raise TypeError(f"params.matrix must have dtype float64, got {params.matrix.dtype}")
+    require_transform_matrix(params.matrix, (3, 3), "params.matrix")
+
+    _require_source_size(params.source_size)
+
+    destination_points = params.destination_points
+    if not isinstance(destination_points, tuple):
+        raise TypeError(
+            f"params.destination_points must be a tuple, got {type(destination_points).__name__}"
+        )
+    if len(destination_points) != 4:
+        raise ValueError(
+            "params.destination_points must contain exactly 4 points, got "
+            f"{len(destination_points)}"
+        )
+    for index, point in enumerate(destination_points):
+        require_point_2d(point, f"params.destination_points[{index}]")
+
+    _require_perspective_matrix_geometry(params.matrix, params.source_size, "params.matrix")
+
+
+def _apply_perspective_to_array(
+    array: np.ndarray,
+    params: PerspectiveParameters,
+    interpolation: int,
+    border_mode: int,
+    border_value: float | tuple[float, ...],
+) -> np.ndarray:
+    try:
+        result = _warp_perspective(
+            array,
+            params.matrix,
+            params.source_size,
+            interpolation=interpolation,
+            border_mode=border_mode,
+            border_value=border_value,
+        )
+    except cv2.error as exc:
+        raise RuntimeError("OpenCV failed to apply perspective augmentation") from exc
     return _restore_singleton_channel(array, result)
 
 
