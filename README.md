@@ -1031,7 +1031,8 @@ crop_params = im.sample_crop(
 pair = im.apply_crop(image, crop_params, mask=mask)
 ```
 
-Augmentation sampling and replay -- affine (shear, rotation, translation, isotropic scale):
+Augmentation sampling and replay -- affine (shear, rotation, translation, isotropic and
+anisotropic scale):
 
 ```python
 affine_params = im.sample_affine(
@@ -1041,6 +1042,8 @@ affine_params = im.sample_affine(
     translation_x_range=(-8.0, 8.0),
     translation_y_range=(-8.0, 8.0),
     scale_range=(0.9, 1.1),
+    axis_scale_x_range=(0.9, 1.1),
+    axis_scale_y_range=(0.9, 1.1),
     shear_x_range=(-0.15, 0.15),
     shear_y_range=(-0.10, 0.10),
 )
@@ -1074,7 +1077,12 @@ full explanation).
 For `sample_affine`/`apply_affine` specifically: `angle_range` is in degrees (positive =
 counter-clockwise, matching `im.rotate`); `translation_x_range`/`translation_y_range` are in pixels
 (positive `x` moves content right, positive `y` moves it down, matching `im.translate`);
-`scale_range` is a positive, dimensionless, isotropic multiplier. `shear_x_range`/`shear_y_range`
+`scale_range` is a positive, dimensionless, isotropic multiplier applied identically to both axes.
+`axis_scale_x_range`/`axis_scale_y_range` are positive, dimensionless *axis multipliers* layered on
+top of `scale`, not final axis scales by themselves: the actual realized scale along each axis is
+`effective_scale_x = scale * axis_scale_x` and `effective_scale_y = scale * axis_scale_y`. Both
+default to `(1.0, 1.0)` (no anisotropic deformation, i.e. a purely isotropic transform, exactly as
+before this parameter existed). `shear_x_range`/`shear_y_range`
 are raw, dimensionless shear *coefficients*, not degrees: `shear_x` maps `x' = x + shear_x * y`,
 and `shear_y` (applied after `shear_x`) then maps `y' = y + shear_y * x'`, using the already-sheared
 `x'` -- documented as "shear x, then shear y", never as simultaneous, since that's exactly what the
@@ -1091,23 +1099,30 @@ longer tell `1.0 + shear_x*shear_y` apart from `shear_x*shear_y` itself, since t
 store a matrix that has lost the unit term making it invertible. Short of that, a large shear
 coefficient is still accepted even though the resulting matrix can be very poorly conditioned,
 strongly deform the image, or push its content outside the canvas entirely -- there is no automatic
-protection against that beyond the float64-representability check. Each `*_range` is a
-`(low, high)` tuple sampled independently via `Generator.uniform` -- `low` is always reachable,
-equal endpoints sample that exact constant, but hitting `high` itself is not guaranteed for a
-non-degenerate range (an ordinary property of continuous floating-point sampling). The transform is
-always shear x, then shear y, then rotation + isotropic scale (all around the image center), then
-translated -- this composition order is fixed and documented, not an implementation detail, since
-shear does not commute with rotation, and translation does not commute with the rest in general.
+protection against that beyond the float64-representability check. `improcv` similarly rejects a
+`scale`/axis-multiplier combination whose product (`effective_scale_x`/`effective_scale_y`) is not
+representable as a finite, strictly positive `float64` -- e.g. it overflows to `inf`, or underflows
+to exactly `0.0` even though `scale` and the axis multiplier are each individually finite and
+positive; both axis multipliers must themselves be strictly positive too (no reflection is ever
+sampled). Each `*_range` is a `(low, high)` tuple sampled independently via `Generator.uniform` --
+`low` is always reachable, equal endpoints sample that exact constant, but hitting `high` itself is
+not guaranteed for a non-degenerate range (an ordinary property of continuous floating-point
+sampling). The transform is always shear x, then shear y, then anisotropic axis scale, then rotation
++ isotropic scale (all around the image center), then translated -- this composition order is fixed
+and documented, not an implementation detail, since shear does not commute with axis scale or
+rotation, and translation does not commute with the rest in general.
 `AffineParameters.matrix` (the `(2, 3)` matrix actually applied) is the sole source of truth for
-replay; `angle`/`translation`/`scale`/`shear` are sampling metadata kept for debugging/logging/
-`repr` only and are never used to reconstruct or cross-check the matrix. When `shear_x_range`/
-`shear_y_range` are left at their `(0.0, 0.0)` default, no extra `rng` draw happens and the matrix
-is bit-for-bit identical to what `sample_affine` produced before shear existed -- code written
-before this feature keeps sampling `angle`/`translation`/`scale` from the exact same `rng` sequence,
-call after call. Output spatial size always equals the source size -- this slice does not expand
-the canvas the way `im.rotate_bound` does. The mask is always warped with nearest-neighbor
-interpolation and a constant border (`mask_border_value`, default `0`); the caller cannot change
-the mask's interpolation or border mode, only the fill value.
+replay; `angle`/`translation`/`scale`/`shear`/`axis_scale` are sampling metadata kept for
+debugging/logging/`repr` only and are never used to reconstruct or cross-check the matrix. When
+`shear_x_range`/`shear_y_range` are left at their `(0.0, 0.0)` default and `axis_scale_x_range`/
+`axis_scale_y_range` are left at their `(1.0, 1.0)` default, no extra `rng` draw happens for any of
+them and the matrix is bit-for-bit identical to what `sample_affine` produced before shear or
+anisotropic scale existed -- code written before these features keeps sampling
+`angle`/`translation`/`scale` from the exact same `rng` sequence, call after call. Output spatial
+size always equals the source size -- this slice does not expand the canvas the way
+`im.rotate_bound` does. The mask is always warped with nearest-neighbor interpolation and a constant
+border (`mask_border_value`, default `0`); the caller cannot change the mask's interpolation or
+border mode, only the fill value.
 
 Augmentation sampling and replay -- perspective:
 
@@ -1165,8 +1180,8 @@ code" on Windows for the exact `opencv-python-headless` version that works corre
 macOS -- a genuine, platform-specific upstream OpenCV limitation, so `int16` is excluded outright
 rather than supported unreliably depending on the caller's platform.
 
-This slice covers flip, crop, a shear+rotation+translation+isotropic-scale affine transform, and a
-single-homography perspective transform: no anisotropic scale, no canvas expansion, no photometric
+This slice covers flip, crop, a shear+rotation+translation+isotropic/anisotropic-scale affine
+transform, and a single-homography perspective transform: no canvas expansion, no photometric
 augmentation (brightness/contrast/blur/noise), no bounding box/keypoint/polygon support, no
 probability/application policy for perspective (it always samples, like `sample_affine`), and no
 `Compose`-style augmentation pipeline.

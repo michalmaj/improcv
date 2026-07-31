@@ -3366,6 +3366,699 @@ def test_sample_and_apply_perspective_no_warning_under_seterr_warn() -> None:
         np.seterr(**previous)
 
 
+# --- sample_affine: axis_scale sampling ---
+
+
+def test_sample_affine_axis_scale_defaults_to_identity() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8))
+    assert params.axis_scale == (1.0, 1.0)
+
+
+def test_sample_affine_axis_scale_singleton_x() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        params = sample_affine(rng, source_size=(10, 8), axis_scale_x_range=(2.0, 2.0))
+        assert params.axis_scale[0] == 2.0
+
+
+def test_sample_affine_axis_scale_singleton_y() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        params = sample_affine(rng, source_size=(10, 8), axis_scale_y_range=(0.5, 0.5))
+        assert params.axis_scale[1] == 0.5
+
+
+def test_sample_affine_axis_scale_both_directions_within_range() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        params = sample_affine(
+            rng,
+            source_size=(10, 8),
+            axis_scale_x_range=(0.5, 2.0),
+            axis_scale_y_range=(0.8, 1.2),
+        )
+        assert 0.5 <= params.axis_scale[0] <= 2.0
+        assert 0.8 <= params.axis_scale[1] <= 1.2
+
+
+def test_sample_affine_axis_scale_same_seed_gives_same_axis_scale() -> None:
+    a = sample_affine(
+        np.random.default_rng(7),
+        source_size=(10, 8),
+        axis_scale_x_range=(0.5, 2.0),
+        axis_scale_y_range=(0.5, 2.0),
+    )
+    b = sample_affine(
+        np.random.default_rng(7),
+        source_size=(10, 8),
+        axis_scale_x_range=(0.5, 2.0),
+        axis_scale_y_range=(0.5, 2.0),
+    )
+    assert a == b
+
+
+@pytest.mark.parametrize("bad", [[1.0, 2.0], None, "1.0"])
+def test_sample_affine_rejects_non_tuple_axis_scale_range(bad: object) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(TypeError, match="tuple"):
+        sample_affine(rng, source_size=(10, 8), axis_scale_x_range=bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad", [(1.0,), (1.0, 2.0, 3.0)])
+def test_sample_affine_rejects_wrong_length_axis_scale_range(bad: tuple) -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="exactly 2 elements"):
+        sample_affine(rng, source_size=(10, 8), axis_scale_y_range=bad)  # type: ignore[arg-type]
+
+
+def test_sample_affine_rejects_bool_in_axis_scale_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(TypeError):
+        sample_affine(rng, source_size=(10, 8), axis_scale_x_range=(True, 2.0))  # type: ignore[arg-type]
+
+
+def test_sample_affine_rejects_nan_in_axis_scale_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError):
+        sample_affine(rng, source_size=(10, 8), axis_scale_x_range=(float("nan"), 2.0))
+
+
+def test_sample_affine_rejects_inf_in_axis_scale_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError):
+        sample_affine(rng, source_size=(10, 8), axis_scale_y_range=(0.5, float("inf")))
+
+
+def test_sample_affine_rejects_low_greater_than_high_axis_scale_range() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="low"):
+        sample_affine(rng, source_size=(10, 8), axis_scale_x_range=(2.0, 0.5))
+
+
+def test_sample_affine_rejects_zero_axis_scale_x() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="positive"):
+        sample_affine(rng, source_size=(10, 8), axis_scale_x_range=(0.0, 0.0))
+
+
+def test_sample_affine_rejects_negative_axis_scale_y() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="positive"):
+        sample_affine(rng, source_size=(10, 8), axis_scale_y_range=(-2.0, -1.0))
+
+
+# --- sample_affine: axis_scale numerics (overflow/underflow/subnormal) ---
+
+
+def test_sample_affine_axis_scale_underflow_to_zero_raises_value_error() -> None:
+    # scale and axis_scale_x are each individually finite and positive, but
+    # their product underflows past float64's smallest subnormal (~5e-324)
+    # to exactly 0.0 -- still "finite" by np.isfinite, so this specifically
+    # exercises the dedicated effective-scale check, not the final
+    # whole-matrix finiteness check.
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="axis_scale_x"):
+        sample_affine(
+            rng,
+            source_size=(10, 8),
+            scale_range=(1e-200, 1e-200),
+            axis_scale_x_range=(1e-200, 1e-200),
+        )
+
+
+def test_sample_affine_axis_scale_y_underflow_to_zero_raises_value_error() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="axis_scale_y"):
+        sample_affine(
+            rng,
+            source_size=(10, 8),
+            scale_range=(1e-200, 1e-200),
+            axis_scale_y_range=(1e-200, 1e-200),
+        )
+
+
+def test_sample_affine_axis_scale_overflow_to_infinity_raises_value_error() -> None:
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="axis_scale_x"):
+        sample_affine(
+            rng,
+            source_size=(10, 8),
+            scale_range=(1e200, 1e200),
+            axis_scale_x_range=(1e200, 1e200),
+        )
+
+
+def test_sample_affine_axis_scale_underflow_raises_value_error_not_warning() -> None:
+    rng = np.random.default_rng(0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match="axis_scale"):
+            sample_affine(
+                rng,
+                source_size=(10, 8),
+                scale_range=(1e-200, 1e-200),
+                axis_scale_x_range=(1e-200, 1e-200),
+            )
+
+
+def test_sample_affine_axis_scale_legal_subnormal_effective_scale() -> None:
+    # A subnormal, but nonzero and finite, effective scale is legal -- there
+    # is no minimum-normal-float or condition-number threshold.
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng,
+        source_size=(10, 8),
+        scale_range=(1.0, 1.0),
+        axis_scale_x_range=(1e-300, 1e-300),
+    )
+    assert np.all(np.isfinite(params.matrix))
+    assert params.axis_scale[0] == 1e-300
+
+
+def test_sample_affine_axis_scale_huge_axis_difference_is_legal() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng,
+        source_size=(10, 8),
+        scale_range=(1.0, 1.0),
+        axis_scale_x_range=(1e10, 1e10),
+        axis_scale_y_range=(1e-10, 1e-10),
+    )
+    assert np.all(np.isfinite(params.matrix))
+
+
+def test_sample_affine_axis_scale_no_floating_point_error_under_seterr_raise() -> None:
+    previous = np.seterr(all="raise")
+    try:
+        rng = np.random.default_rng(0)
+        params = sample_affine(
+            rng,
+            source_size=(10, 8),
+            axis_scale_x_range=(2.0, 2.0),
+            axis_scale_y_range=(0.5, 0.5),
+        )
+        assert np.all(np.isfinite(params.matrix))
+    finally:
+        np.seterr(**previous)
+
+
+def test_sample_affine_axis_scale_no_warning_under_warnings_as_errors() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        rng = np.random.default_rng(0)
+        sample_affine(
+            rng, source_size=(10, 8), axis_scale_x_range=(2.0, 2.0), axis_scale_y_range=(0.5, 0.5)
+        )
+
+
+# --- compatibility: axis_scale must not disturb the pre-axis-scale contract ---
+
+
+def test_sample_affine_identity_axis_scale_matches_pre_axis_scale_matrix_bit_for_bit() -> None:
+    source_size = (37, 23)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+
+    rng_new = np.random.default_rng(123)
+    new_params = sample_affine(
+        rng_new,
+        source_size=source_size,
+        angle_range=(-10.0, 10.0),
+        translation_x_range=(-8.0, 8.0),
+        translation_y_range=(-8.0, 8.0),
+        scale_range=(0.9, 1.1),
+    )
+
+    rng_old = np.random.default_rng(123)
+    angle = float(rng_old.uniform(-10.0, 10.0))
+    dx = float(rng_old.uniform(-8.0, 8.0))
+    dy = float(rng_old.uniform(-8.0, 8.0))
+    scale = float(rng_old.uniform(0.9, 1.1))
+    old_matrix = cv2.getRotationMatrix2D(center, angle, scale)
+    old_matrix[0, 2] += dx
+    old_matrix[1, 2] += dy
+
+    np.testing.assert_array_equal(new_params.matrix, old_matrix)
+    assert new_params.axis_scale == (1.0, 1.0)
+    assert rng_new.bit_generator.state == rng_old.bit_generator.state
+
+
+def test_sample_affine_default_axis_scale_preserves_rng_sequence_across_calls() -> None:
+    # Manually reconstructs the pre-axis-scale draw sequence (angle, dx, dy,
+    # scale, shear_x, shear_y -- in that order, exactly as sample_affine
+    # sampled them before anisotropic scale existed), not another run of
+    # the current implementation -- a shared bug in the new code could
+    # otherwise make two runs of the same implementation agree while both
+    # silently diverge from the real, pre-feature sequence.
+    source_size = (10, 8)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+    angle_range = (-5.0, 5.0)
+
+    rng_new = np.random.default_rng(999)
+    new_results = [
+        sample_affine(rng_new, source_size=source_size, angle_range=angle_range) for _ in range(2)
+    ]
+
+    rng_old = np.random.default_rng(999)
+    for params in new_results:
+        angle = float(rng_old.uniform(*angle_range))
+        dx = float(rng_old.uniform(0.0, 0.0))
+        dy = float(rng_old.uniform(0.0, 0.0))
+        scale = float(rng_old.uniform(1.0, 1.0))
+        expected_matrix = cv2.getRotationMatrix2D(center, angle, scale)
+        expected_matrix[0, 2] += dx
+        expected_matrix[1, 2] += dy
+
+        assert params.angle == angle
+        assert params.translation == (dx, dy)
+        assert params.scale == scale
+        assert params.axis_scale == (1.0, 1.0)
+        np.testing.assert_array_equal(params.matrix, expected_matrix)
+
+    assert rng_new.bit_generator.state == rng_old.bit_generator.state
+
+
+def test_sample_affine_non_singleton_draws_happen_after_all_old_draws_in_order() -> None:
+    # Reconstructs the full new draw order (angle, dx, dy, scale, shear_x,
+    # shear_y, axis_x, axis_y) by hand, with every range non-singleton, so
+    # a wrong internal ordering (e.g. drawing axis before shear) would
+    # produce mismatched metadata/matrix/rng-state here even though each
+    # individual value is independently "legal".
+    source_size = (10, 8)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+
+    rng_new = np.random.default_rng(7)
+    new_params = sample_affine(
+        rng_new,
+        source_size=source_size,
+        angle_range=(-5.0, 5.0),
+        translation_x_range=(-3.0, 3.0),
+        translation_y_range=(-3.0, 3.0),
+        scale_range=(0.9, 1.1),
+        shear_x_range=(-0.2, 0.2),
+        shear_y_range=(-0.2, 0.2),
+        axis_scale_x_range=(0.8, 1.2),
+        axis_scale_y_range=(0.8, 1.2),
+    )
+
+    rng_old = np.random.default_rng(7)
+    angle = float(rng_old.uniform(-5.0, 5.0))
+    dx = float(rng_old.uniform(-3.0, 3.0))
+    dy = float(rng_old.uniform(-3.0, 3.0))
+    scale = float(rng_old.uniform(0.9, 1.1))
+    shear_x = float(rng_old.uniform(-0.2, 0.2))
+    shear_y = float(rng_old.uniform(-0.2, 0.2))
+    axis_x = float(rng_old.uniform(0.8, 1.2))
+    axis_y = float(rng_old.uniform(0.8, 1.2))
+
+    assert new_params.angle == angle
+    assert new_params.translation == (dx, dy)
+    assert new_params.scale == scale
+    assert new_params.shear == (shear_x, shear_y)
+    assert new_params.axis_scale == (axis_x, axis_y)
+    assert rng_new.bit_generator.state == rng_old.bit_generator.state
+
+    rs_3x3 = np.eye(3)
+    rs_3x3[:2, :] = cv2.getRotationMatrix2D(center, angle, scale)
+    cx, cy = center
+    t_neg = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+    t_pos = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+    axis_3x3 = np.diag([axis_x, axis_y, 1.0])
+    axis_centered = t_pos @ axis_3x3 @ t_neg
+    shear_product = shear_x * shear_y
+    sh_3x3 = np.array([[1, shear_x, 0], [shear_y, 1 + shear_product, 0], [0, 0, 1]])
+    shear_centered = t_pos @ sh_3x3 @ t_neg
+    expected = (rs_3x3 @ axis_centered @ shear_centered)[:2, :]
+    expected[0, 2] += dx
+    expected[1, 2] += dy
+    np.testing.assert_allclose(new_params.matrix, expected)
+
+
+# --- AffineParameters: axis_scale field compatibility ---
+
+
+def test_affine_parameters_five_positional_arguments_still_construct_with_axis_scale() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0)
+    assert params.axis_scale == (1.0, 1.0)
+
+
+def test_affine_parameters_axis_scale_is_keyword_only_seventh_positional_rejected() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    with pytest.raises(TypeError):
+        AffineParameters(
+            matrix,
+            (10, 8),
+            0.0,
+            (0.0, 0.0),
+            1.0,
+            (0.0, 0.0),  # type: ignore[misc]
+            (2.0, 1.0),
+        )
+
+
+def test_affine_parameters_axis_scale_accepted_as_keyword_alongside_shear() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(
+        matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, shear=(0.2, -0.1), axis_scale=(2.0, 0.5)
+    )
+    assert params.shear == (0.2, -0.1)
+    assert params.axis_scale == (2.0, 0.5)
+
+
+def test_affine_parameters_match_args_excludes_axis_scale() -> None:
+    assert AffineParameters.__match_args__ == (
+        "matrix",
+        "source_size",
+        "angle",
+        "translation",
+        "scale",
+    )
+
+
+def test_affine_parameters_five_positional_pattern_matching_unaffected_by_axis_scale() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(
+        matrix, (10, 8), 1.5, (2.0, 3.0), 1.1, shear=(0.1, 0.2), axis_scale=(2.0, 0.5)
+    )
+    match params:
+        case AffineParameters(m, s, a, t, sc):
+            assert m is params.matrix
+            assert s == (10, 8)
+            assert a == 1.5
+            assert t == (2.0, 3.0)
+            assert sc == 1.1
+        case _:
+            pytest.fail("pattern match failed")
+
+
+def test_affine_parameters_equality_includes_axis_scale() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    a = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, axis_scale=(2.0, 1.0))
+    b = AffineParameters(matrix.copy(), (10, 8), 0.0, (0.0, 0.0), 1.0, axis_scale=(2.0, 1.0))
+    c = AffineParameters(matrix.copy(), (10, 8), 0.0, (0.0, 0.0), 1.0, axis_scale=(2.0, 1.5))
+    assert a == b
+    assert a != c
+
+
+def test_affine_parameters_repr_and_asdict_contain_axis_scale() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, axis_scale=(2.0, 0.5))
+    assert "axis_scale" in repr(params)
+    d = dataclasses.asdict(params)
+    assert d["axis_scale"] == (2.0, 0.5)
+
+
+def test_affine_parameters_default_axis_scale_is_exactly_one_one() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0)
+    assert params.axis_scale == (1.0, 1.0)
+    assert isinstance(params.axis_scale[0], float)
+    assert isinstance(params.axis_scale[1], float)
+
+
+def test_affine_parameters_axis_scale_does_not_restore_hashability() -> None:
+    matrix = np.eye(2, 3, dtype=np.float64)
+    params = AffineParameters(matrix, (10, 8), 0.0, (0.0, 0.0), 1.0, axis_scale=(2.0, 0.5))
+    with pytest.raises(TypeError):
+        hash(params)
+
+
+# --- matrix semantics with axis_scale (manual oracles) ---
+
+
+def test_sample_affine_pure_x_stretch_matches_manual_centered_matrix() -> None:
+    source_size = (5, 5)
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng, source_size=source_size, axis_scale_x_range=(2.0, 2.0), axis_scale_y_range=(1.0, 1.0)
+    )
+    expected = np.array([[2.0, 0.0, -2.0], [0.0, 1.0, 0.0]])
+    np.testing.assert_array_equal(params.matrix, expected)
+
+    center_point = np.array([2.0, 2.0, 1.0])
+    np.testing.assert_allclose(params.matrix @ center_point, [2.0, 2.0])
+    np.testing.assert_allclose(params.matrix @ np.array([3.0, 2.0, 1.0]), [4.0, 2.0])
+    np.testing.assert_allclose(params.matrix @ np.array([2.0, 3.0, 1.0]), [2.0, 3.0])
+
+
+def test_sample_affine_pure_y_shrink_matches_manual_centered_matrix() -> None:
+    source_size = (5, 5)
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng, source_size=source_size, axis_scale_x_range=(1.0, 1.0), axis_scale_y_range=(0.5, 0.5)
+    )
+    expected = np.array([[1.0, 0.0, 0.0], [0.0, 0.5, 1.0]])
+    np.testing.assert_array_equal(params.matrix, expected)
+
+    np.testing.assert_allclose(params.matrix @ np.array([2.0, 4.0, 1.0]), [2.0, 3.0])
+    np.testing.assert_allclose(params.matrix @ np.array([2.0, 0.0, 1.0]), [2.0, 1.0])
+
+
+def test_sample_affine_rotation_and_anisotropic_scale_matches_manual_composition() -> None:
+    source_size = (5, 5)
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng,
+        source_size=source_size,
+        angle_range=(90.0, 90.0),
+        scale_range=(1.0, 1.0),
+        axis_scale_x_range=(2.0, 2.0),
+        axis_scale_y_range=(1.0, 1.0),
+    )
+
+    rs_3x3 = np.eye(3)
+    rs_3x3[:2, :] = cv2.getRotationMatrix2D((cx, cy), 90.0, 1.0)
+    t_neg = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+    t_pos = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+    axis_3x3 = np.diag([2.0, 1.0, 1.0])
+    axis_centered = t_pos @ axis_3x3 @ t_neg
+    expected = (rs_3x3 @ axis_centered)[:2, :]
+
+    np.testing.assert_allclose(params.matrix, expected, atol=1e-9)
+    # (3, 2) is stretched to (4, 2) by the axis scale, then rotated 90
+    # degrees counter-clockwise around (2, 2) to land on (2, 0).
+    np.testing.assert_allclose(params.matrix @ np.array([3.0, 2.0, 1.0]), [2.0, 0.0], atol=1e-9)
+
+
+def test_sample_affine_axis_scale_before_shear_order_matters() -> None:
+    # axis_scale @ shear != shear @ axis_scale -- the approved composition
+    # order (axis scale after shear, i.e. shear applied first to the
+    # column vector) must be the one the implementation actually uses.
+    source_size = (5, 5)
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng,
+        source_size=source_size,
+        axis_scale_x_range=(2.0, 2.0),
+        axis_scale_y_range=(1.0, 1.0),
+        shear_x_range=(0.5, 0.5),
+    )
+    expected = np.array([[2.0, 1.0, -4.0], [0.0, 1.0, 0.0]])
+    np.testing.assert_array_equal(params.matrix, expected)
+
+    point = np.array([3.0, 3.0, 1.0])
+    approved_order_result = params.matrix @ point
+    np.testing.assert_allclose(approved_order_result, [5.0, 3.0])
+
+    reversed_order_matrix = np.array([[2.0, 0.5, -3.0], [0.0, 1.0, 0.0]])
+    reversed_order_result = reversed_order_matrix @ point
+    assert not np.allclose(approved_order_result, reversed_order_result)
+
+
+def test_sample_affine_isotropic_axis_scale_matches_direct_scale_via_allclose() -> None:
+    # axis=(k, k) is mathematically equivalent to folding k into the
+    # isotropic scale directly -- but the two are computed via genuinely
+    # different float64 arithmetic paths (a separate 3x3 matrix product vs.
+    # cv2.getRotationMatrix2D's own internal scale multiplication), so only
+    # assert_allclose is required, not bit-exact equality (verified: the
+    # two differ at the ULP level, ~1.8e-15 max absolute difference, for
+    # representative angle/scale/k/center values).
+    source_size = (11, 7)
+    base_scale, k = 1.3, 1.7
+    angle = 33.0
+
+    rng_axis = np.random.default_rng(1)
+    via_axis = sample_affine(
+        rng_axis,
+        source_size=source_size,
+        angle_range=(angle, angle),
+        scale_range=(base_scale, base_scale),
+        axis_scale_x_range=(k, k),
+        axis_scale_y_range=(k, k),
+    )
+    rng_direct = np.random.default_rng(1)
+    via_direct_scale = sample_affine(
+        rng_direct,
+        source_size=source_size,
+        angle_range=(angle, angle),
+        scale_range=(base_scale * k, base_scale * k),
+    )
+
+    np.testing.assert_allclose(via_axis.matrix, via_direct_scale.matrix, atol=1e-12)
+
+
+def test_sample_affine_axis_scale_center_is_fixed_point() -> None:
+    source_size = (20, 14)
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rng = np.random.default_rng(0)
+    params = sample_affine(
+        rng, source_size=source_size, axis_scale_x_range=(3.0, 3.0), axis_scale_y_range=(0.4, 0.4)
+    )
+    center_point = np.array([cx, cy, 1.0])
+    np.testing.assert_allclose(params.matrix @ center_point, [cx, cy], atol=1e-9)
+
+
+@pytest.mark.parametrize("source_size", [(20, 20), (21, 21), (20, 21), (21, 20)])
+def test_sample_affine_axis_scale_pivot_matches_center_for_even_and_odd_sizes(
+    source_size: tuple[int, int],
+) -> None:
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=source_size, axis_scale_x_range=(1.6, 1.6))
+    center_point = np.array([cx, cy, 1.0])
+    np.testing.assert_allclose(params.matrix @ center_point, [cx, cy], atol=1e-9)
+
+
+def test_sample_affine_axis_scale_on_1x1_image() -> None:
+    rng = np.random.default_rng(0)
+    image = np.array([[7]], dtype=np.uint8)
+    params = sample_affine(rng, source_size=(1, 1), axis_scale_x_range=(5.0, 5.0))
+    result = apply_affine(image, params)
+    assert result.shape == (1, 1)
+
+
+def test_sample_affine_axis_scale_on_1xn_image() -> None:
+    # source_size=(10, 1): height is the degenerate dimension, so every
+    # pixel's y-coordinate already equals the center's y (0.0) -- scaling
+    # the y axis is a no-op regardless of the multiplier. Scaling the x
+    # axis instead would *not* be a no-op here (unlike shear_x, which is
+    # driven by y and so is a no-op for any y-degenerate image).
+    rng = np.random.default_rng(0)
+    image = np.arange(10, dtype=np.uint8).reshape(1, 10)
+    params = sample_affine(rng, source_size=(10, 1), axis_scale_y_range=(2.0, 2.0))
+    result = apply_affine(image, params)
+    np.testing.assert_array_equal(result, image)
+
+
+def test_sample_affine_axis_scale_on_nx1_image() -> None:
+    # source_size=(1, 10): width is the degenerate dimension, so scaling
+    # the x axis is the no-op here (mirrors the 1xN case above).
+    rng = np.random.default_rng(0)
+    image = np.arange(10, dtype=np.uint8).reshape(10, 1)
+    params = sample_affine(rng, source_size=(1, 10), axis_scale_x_range=(2.0, 2.0))
+    result = apply_affine(image, params)
+    np.testing.assert_array_equal(result, image)
+
+
+def test_sample_affine_axis_scale_translation_applied_last() -> None:
+    source_size = (21, 21)
+    rng = np.random.default_rng(0)
+    without_translation = sample_affine(rng, source_size=source_size, axis_scale_x_range=(1.5, 1.5))
+    rng2 = np.random.default_rng(0)
+    with_translation = sample_affine(
+        rng2,
+        source_size=source_size,
+        translation_x_range=(5.0, 5.0),
+        translation_y_range=(-3.0, -3.0),
+        axis_scale_x_range=(1.5, 1.5),
+    )
+    diff = with_translation.matrix - without_translation.matrix
+    expected_diff = np.array([[0.0, 0.0, 5.0], [0.0, 0.0, -3.0]])
+    np.testing.assert_allclose(diff, expected_diff, atol=1e-9)
+
+
+def test_sample_affine_default_path_does_not_trigger_axis_scale_arithmetic() -> None:
+    # axis_scale explicitly set to (1.0, 1.0) must take the same fast path
+    # as leaving it at its default entirely -- both are bit-for-bit
+    # identical to the pre-axis-scale matrix, proving no new axis-scale
+    # matrix multiplication runs merely because the parameter was named.
+    source_size = (17, 13)
+    center = ((source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0)
+    rng_explicit = np.random.default_rng(42)
+    explicit_identity = sample_affine(
+        rng_explicit,
+        source_size=source_size,
+        angle_range=(15.0, 15.0),
+        scale_range=(1.2, 1.2),
+        axis_scale_x_range=(1.0, 1.0),
+        axis_scale_y_range=(1.0, 1.0),
+    )
+    rng_default = np.random.default_rng(42)
+    left_at_default = sample_affine(
+        rng_default,
+        source_size=source_size,
+        angle_range=(15.0, 15.0),
+        scale_range=(1.2, 1.2),
+    )
+    expected_matrix = cv2.getRotationMatrix2D(center, 15.0, 1.2)
+    np.testing.assert_array_equal(explicit_identity.matrix, expected_matrix)
+    np.testing.assert_array_equal(left_at_default.matrix, expected_matrix)
+
+
+# --- apply_affine: axis_scale validation ---
+
+
+def test_apply_affine_accepts_hand_built_positive_axis_scale() -> None:
+    image = _make_image(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_affine(rng, source_size=(10, 8), axis_scale_x_range=(1.5, 1.5))
+    result = apply_affine(image, params)
+    assert result.shape == image.shape
+
+
+def test_apply_affine_rejects_hand_built_zero_axis_scale() -> None:
+    image = _make_image(8, 10)
+    base = sample_affine(np.random.default_rng(0), source_size=(10, 8))
+    params = dataclasses.replace(base, axis_scale=(0.0, 1.0))
+    with pytest.raises(ValueError, match="params.axis_scale"):
+        apply_affine(image, params)
+
+
+def test_apply_affine_rejects_hand_built_negative_axis_scale() -> None:
+    image = _make_image(8, 10)
+    base = sample_affine(np.random.default_rng(0), source_size=(10, 8))
+    params = dataclasses.replace(base, axis_scale=(1.0, -2.0))
+    with pytest.raises(ValueError, match="params.axis_scale"):
+        apply_affine(image, params)
+
+
+def test_apply_affine_rejects_hand_built_non_finite_axis_scale() -> None:
+    image = _make_image(8, 10)
+    base = sample_affine(np.random.default_rng(0), source_size=(10, 8))
+    params = dataclasses.replace(base, axis_scale=(float("nan"), 1.0))
+    with pytest.raises(ValueError):
+        apply_affine(image, params)
+
+
+def test_apply_affine_rejects_hand_built_wrong_length_axis_scale() -> None:
+    image = _make_image(8, 10)
+    base = sample_affine(np.random.default_rng(0), source_size=(10, 8))
+    params = dataclasses.replace(base, axis_scale=(1.0, 1.0, 1.0))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="exactly 2 elements"):
+        apply_affine(image, params)
+
+
+def test_apply_affine_does_not_cross_check_axis_scale_against_matrix() -> None:
+    # A hand-built params with axis_scale metadata that is individually
+    # valid but numerically inconsistent with matrix must still be applied
+    # using matrix alone -- apply_affine never recomputes scale *
+    # axis_scale, and never rejects it merely because that product would be
+    # non-representable.
+    image = _make_image(8, 10)
+    base = sample_affine(np.random.default_rng(0), source_size=(10, 8), scale_range=(2.0, 2.0))
+    params = dataclasses.replace(base, axis_scale=(1e200, 1e200))
+    result = apply_affine(image, params)
+    assert result.shape == image.shape
+
+
+def test_apply_affine_error_message_uses_instance_wording_not_exactly() -> None:
+    with pytest.raises(TypeError) as exc_info:
+        apply_affine(_make_image(8, 10), "not-params")  # type: ignore[arg-type]
+    assert "exactly" not in str(exc_info.value)
+
+
 # --- affine regression: renamed private helper stays invisible publicly ---
 
 
