@@ -1135,7 +1135,8 @@ expanded_params = im.expand_affine_canvas(affine_params)
 print(expanded_params.output_size)  # never smaller than (image.shape[1], image.shape[0])
 
 pair = im.apply_affine(image, expanded_params, mask=mask, mask_border_value=255)
-print(pair.image.shape[:2], pair.mask.shape[:2])  # both equal expanded_params.output_size
+print(pair.image.shape[:2], pair.mask.shape[:2])  # both are (height, width), the reverse of
+                                                   # output_size's (width, height)
 ```
 
 `expand_affine_canvas` is a separate, purely deterministic conversion -- it never touches any RNG
@@ -1154,7 +1155,7 @@ absorbed by a shift in the new canvas origin: the full transform (including tran
 applied exactly once and content is never cropped, but the on-canvas offset of that content relative
 to the new origin is not guaranteed to equal `params.translation` verbatim.
 `expand_affine_canvas`'s "never smaller than source" contract means it does **not** always match
-`im.rotate_bound`'s leaner output: for a non-square image rotated at or near 90/180/270 degrees,
+`im.rotate_bound`'s leaner output: for a non-square image rotated at or near 90/270 degrees,
 `rotate_bound`'s tight bounding box is narrower than the source in one dimension, while
 `expand_affine_canvas` keeps that dimension at least as large as the source -- a deliberate,
 documented departure, not a bug. `output_size`, once set, is part of the full source of truth
