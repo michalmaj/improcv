@@ -62,7 +62,8 @@ version decided at the time each is actually published, rather than mechanically
   [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-and-anisotropic-scale sampling/replay implemented;
-  perspective sampling/replay implemented; canvas expansion remains planned, not started), and
+  affine canvas expansion (`expand_affine_canvas`) implemented; perspective sampling/replay
+  implemented; perspective canvas expansion remains planned, not started), and
   dataset discovery (deterministic,
   extension-based image discovery implemented; deterministic image/mask pairing implemented;
   manifests, dataset splits, and batching/loading remain planned, not started). Bounding boxes/

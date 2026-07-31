@@ -1119,10 +1119,49 @@ debugging/logging/`repr` only and are never used to reconstruct or cross-check t
 them and the matrix is bit-for-bit identical to what `sample_affine` produced before shear or
 anisotropic scale existed -- code written before these features keeps sampling
 `angle`/`translation`/`scale` from the exact same `rng` sequence, call after call. Output spatial
-size always equals the source size -- this slice does not expand the canvas the way
-`im.rotate_bound` does. The mask is always warped with nearest-neighbor interpolation and a constant
-border (`mask_border_value`, default `0`); the caller cannot change the mask's interpolation or
-border mode, only the fill value.
+size equals the source size by default (`AffineParameters.output_size` is `None`) -- use
+`expand_affine_canvas` (below) to grow it instead.
+
+Affine canvas expansion:
+
+```python
+affine_params = im.sample_affine(
+    rng,
+    source_size=(image.shape[1], image.shape[0]),
+    angle_range=(-10.0, 10.0),
+    translation_x_range=(-8.0, 8.0),
+)
+expanded_params = im.expand_affine_canvas(affine_params)
+print(expanded_params.output_size)  # never smaller than (image.shape[1], image.shape[0])
+
+pair = im.apply_affine(image, expanded_params, mask=mask, mask_border_value=255)
+print(pair.image.shape[:2], pair.mask.shape[:2])  # both equal expanded_params.output_size
+```
+
+`expand_affine_canvas` is a separate, purely deterministic conversion -- it never touches any RNG
+(not even indirectly) and never calls `sample_affine` itself; it works identically on sampled and
+hand-constructed `AffineParameters`. It grows `params`' stored `output_size` (and returns an
+adjusted `matrix` reflecting the new canvas) so that `apply_affine` no longer crops any of the
+transformed content: it transforms the source's full *pixel-cell footprint* --
+`[-0.5, width - 0.5] x [-0.5, height - 0.5]`, the continuous area the pixel grid actually covers, not
+just the rectangle of pixel centers -- through `params.matrix` itself (never through
+`params.translation`/`.angle`/`.scale`/`.shear`/`.axis_scale`, which remain sampling metadata that a
+hand-built `params` need not agree with `matrix` on), and unions that transformed footprint with the
+original, untransformed source footprint. The result is never smaller than `source_size` in either
+dimension, and no transformed content is cropped -- but because the *whole* source footprint (not a
+translated copy of it) is unioned in, content pushed up/left can have part of its translation
+absorbed by a shift in the new canvas origin: the full transform (including translation) is always
+applied exactly once and content is never cropped, but the on-canvas offset of that content relative
+to the new origin is not guaranteed to equal `params.translation` verbatim.
+`expand_affine_canvas`'s "never smaller than source" contract means it does **not** always match
+`im.rotate_bound`'s leaner output: for a non-square image rotated at or near 90/180/270 degrees,
+`rotate_bound`'s tight bounding box is narrower than the source in one dimension, while
+`expand_affine_canvas` keeps that dimension at least as large as the source -- a deliberate,
+documented departure, not a bug. `output_size`, once set, is part of the full source of truth
+`apply_affine` replays (together with `matrix`) -- calling `expand_affine_canvas` again on an
+already-expanded `params` raises `ValueError` rather than silently expanding twice.
+`expand_affine_canvas` does not support `PerspectiveParameters`, resize, crop-to-fit, or any
+per-side margin -- it only grows an affine canvas to avoid cropping.
 
 Augmentation sampling and replay -- perspective:
 
@@ -1181,9 +1220,10 @@ macOS -- a genuine, platform-specific upstream OpenCV limitation, so `int16` is 
 rather than supported unreliably depending on the caller's platform.
 
 This slice covers flip, crop, a shear+rotation+translation+isotropic/anisotropic-scale affine
-transform, and a single-homography perspective transform: no canvas expansion, no photometric
-augmentation (brightness/contrast/blur/noise), no bounding box/keypoint/polygon support, no
-probability/application policy for perspective (it always samples, like `sample_affine`), and no
+transform (with optional canvas expansion via `expand_affine_canvas`), and a single-homography
+perspective transform: no perspective canvas expansion, no resize/crop-to-fit after expansion, no
+photometric augmentation (brightness/contrast/blur/noise), no bounding box/keypoint/polygon support,
+no probability/application policy for perspective (it always samples, like `sample_affine`), and no
 `Compose`-style augmentation pipeline.
 
 Dataset image discovery:

@@ -16,11 +16,13 @@ shear, anisotropic axis scale, rotation with isotropic scale, and
 translation, all composed around the image center. Perspective coverage is
 a single, replayable homography sampled by displacing each of the source
 rectangle's four corners inward, independently, within a bound controlled by
-`distortion_scale`; both affine and perspective always produce output the
-same size as the source (no canvas expansion). Canvas expansion (a
-`rotate_bound`-style growing output), resize, photometric augmentation,
-bounding boxes/keypoints/polygons, and any `Compose`-style pipeline are
-deliberately out of scope for this slice.
+`distortion_scale`. Both `apply_affine` and `apply_perspective` render to
+the source size by default (no canvas expansion); `expand_affine_canvas` is
+a separate, deterministic, RNG-free conversion that grows an
+`AffineParameters`' stored output size (and adjusts its matrix accordingly)
+so no transformed content is cropped -- perspective canvas expansion,
+resize, photometric augmentation, bounding boxes/keypoints/polygons, and any
+`Compose`-style pipeline remain out of scope for this slice.
 """
 
 from __future__ import annotations
@@ -64,6 +66,7 @@ __all__ = [
     "apply_crop",
     "apply_flip",
     "apply_perspective",
+    "expand_affine_canvas",
     "sample_affine",
     "sample_crop",
     "sample_flip",
@@ -101,6 +104,14 @@ _PERSPECTIVE_MASK_DTYPES = (np.uint8, np.uint16)
 _IMAGE_DTYPES = (np.uint8, np.uint16, np.int16, np.float32, np.float64)
 
 _INTP_MAX = int(np.iinfo(np.intp).max)
+
+# cv2.warpAffine's dsize is parsed as a cv::Size, whose standard OpenCV
+# specialization uses `int` fields -- verified directly, identically, against
+# both OpenCV 4.9.0 (this project's floor) and 5.0.0: a dsize width/height of
+# 2**31-1 is accepted, 2**31 raises cv2.error ("Overload resolution failed").
+# _INTP_MAX (the platform's signed intp max, 2**63-1 on 64-bit) is far looser
+# than this and is not the right bound for output_size specifically.
+_OPENCV_SIZE_MAX = int(np.iinfo(np.int32).max)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +178,17 @@ class AffineParameters:
     `scale * axis_scale[1]` (y). `axis_scale` is never used to derive those
     effective scales for validation or replay; it exists purely as sampling
     metadata, exactly like `shear`.
+
+    `output_size` is `(width, height)` or `None` (the default), also
+    keyword-only for the same compatibility reason. `None` means `apply_affine`
+    renders to `source_size`, exactly as before this field existed. A
+    non-`None` value -- set by `expand_affine_canvas`, never by `sample_affine`
+    -- is the explicit warp destination size; unlike `angle`/`translation`/
+    `scale`/`shear`/`axis_scale`, `output_size` is *not* mere sampling
+    metadata kept only for debugging/logging/`repr`: together with `matrix`
+    it is part of the full source of truth `apply_affine` replays, since
+    `matrix` alone no longer determines the destination canvas size once it
+    can differ from `source_size`.
     """
 
     matrix: npt.NDArray[np.float64]
@@ -176,6 +198,7 @@ class AffineParameters:
     scale: float
     shear: tuple[float, float] = field(default=(0.0, 0.0), kw_only=True)
     axis_scale: tuple[float, float] = field(default=(1.0, 1.0), kw_only=True)
+    output_size: tuple[int, int] | None = field(default=None, kw_only=True)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, AffineParameters):
@@ -188,6 +211,7 @@ class AffineParameters:
             and self.scale == other.scale
             and self.shear == other.shear
             and self.axis_scale == other.axis_scale
+            and self.output_size == other.output_size
         )
 
     __hash__ = None  # type: ignore[assignment]
@@ -886,9 +910,15 @@ def apply_affine(
     `params.matrix` itself must be finite.
 
     `image`'s spatial size (`(width, height)`) must equal `params.source_size`
-    *exactly* -- the same replay guard as `apply_crop`. Output spatial size
-    always equals `params.source_size` (this slice does not expand the
-    canvas). Applies `improcv.transforms.warp_affine` directly (never raw
+    *exactly* -- the same replay guard as `apply_crop`; this guard is about
+    the *input*, not the output, so it is unaffected by `params.output_size`.
+    Output spatial size equals `params.source_size` when `params.output_size`
+    is `None` (the default, unchanged from before canvas expansion existed),
+    or `params.output_size` itself when set -- typically by
+    `expand_affine_canvas`, though any manually constructed, valid
+    `output_size` is accepted identically; `apply_affine` never computes or
+    adjusts bounds itself, it only reads whichever size is already stored.
+    Applies `improcv.transforms.warp_affine` directly (never raw
     `cv2.warpAffine`); `image`'s dtype/shape contract is exactly
     `warp_affine`'s own.
 
@@ -918,8 +948,9 @@ def apply_affine(
     Returns
     -------
     Image or AugmentedImageMask
-        A new, independent array (or pair) with `image`'s original shape
-        and dtype; never aliases `image` or `mask`.
+        A new, independent array (or pair) with `image`'s dtype and, unless
+        `params.output_size` is set, `image`'s original spatial shape; never
+        aliases `image` or `mask`.
 
     Raises
     ------
@@ -931,9 +962,10 @@ def apply_affine(
     ValueError
         If `image`/`mask` has an unsupported shape, `image`'s (or `mask`'s)
         spatial size does not match `params.source_size` (or `image`'s),
-        `interpolation` includes `WARP_INVERSE_MAP` or any other
-        non-interpolation flag bit, or `mask_border_value` does not fit
-        `mask`'s dtype range.
+        `params.output_size` is set but not a 2-tuple of positive ints each
+        representable as an OpenCV `int` destination size, `interpolation`
+        includes `WARP_INVERSE_MAP` or any other non-interpolation flag bit,
+        or `mask_border_value` does not fit `mask`'s dtype range.
     RuntimeError
         If the underlying `cv2.error` occurs after full validation (for
         either the image or the mask warp), or if this function's own
@@ -944,10 +976,12 @@ def apply_affine(
     require_image_ndim(image, ndims=(2, 3))
     _require_matches_source_size(image, params.source_size, "image")
 
+    output_size = params.source_size if params.output_size is None else params.output_size
+
     augmented_image = _apply_affine_to_array(
-        image, params, interpolation, border_mode, border_value
+        image, params, output_size, interpolation, border_mode, border_value
     )
-    _check_shape_preserving_postconditions(image, augmented_image, "image")
+    _check_warp_postconditions(image, augmented_image, output_size, "image")
 
     if mask is None:
         return augmented_image
@@ -958,11 +992,188 @@ def apply_affine(
     require_fits_dtype(mask_border_value, mask.dtype, "mask_border_value")
 
     augmented_mask = _apply_affine_to_array(
-        mask, params, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT, mask_border_value
+        mask, params, output_size, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT, mask_border_value
     )
-    _check_shape_preserving_postconditions(mask, augmented_mask, "mask")
+    _check_warp_postconditions(mask, augmented_mask, output_size, "mask")
 
     return AugmentedImageMask(image=augmented_image, mask=augmented_mask)
+
+
+def expand_affine_canvas(params: AffineParameters) -> AffineParameters:
+    """Grow `params`' output canvas so `apply_affine` no longer crops any transformed content.
+
+    A purely deterministic conversion -- it never touches any RNG, and never
+    calls `sample_affine` internally. It transforms `params`' full
+    ``(width, height)`` source *pixel-cell footprint* (the continuous region
+    ``[-0.5, width - 0.5] x [-0.5, height - 0.5]``, not just the rectangle of
+    pixel centers) through `params.matrix` directly -- never through
+    `params.translation`/`.angle`/`.scale`/`.shear`/`.axis_scale`, which are
+    sampling metadata that a hand-constructed `params` need not agree with
+    `matrix` on (exactly as everywhere else in this module, `matrix` is the
+    only source of geometric truth). The new output canvas is the smallest
+    axis-aligned, integer-pixel region that contains the *union* of that
+    transformed footprint and the original, untransformed source footprint:
+    the result is never smaller than `source_size` in either dimension, and
+    no part of the transformed content is cropped.
+
+    This union-with-source contract means `expand_affine_canvas` does **not**
+    promise the leaner, tight output `improcv.transforms.rotate_bound`
+    produces: for a non-square `source_size` rotated by an angle at or near
+    90/270 degrees, the tight rotated bounding box is narrower than the
+    source in one dimension (verified directly: a ``(3, 2)`` source rotated
+    exactly 90 degrees has a tight rotated footprint of ``(2, 3)`, narrower
+    than the original width of 3) -- `expand_affine_canvas`'s grow-only
+    contract instead keeps the original width, giving `(3, 3)` there. The two
+    contracts (`rotate_bound`'s "no larger than strictly necessary" and this
+    function's "never smaller than source") cannot both hold for every
+    input; this function always honors the "never smaller than source" one.
+
+    Because the whole source footprint (not merely a translated copy of the
+    transformed one) is unioned in, a transform that pushes content up/left
+    can have its translation partially absorbed by the resulting shift in
+    the destination coordinate origin -- the full transform (translation
+    included) is still applied exactly once, and content is never cropped,
+    but the *visible offset of content relative to the new canvas origin* is
+    not guaranteed to equal `params.translation` verbatim.
+
+    Bounds/shift computation is done in `float64` and snapped to the nearest
+    integer only within a few ULPs of floating-point noise (never a fixed
+    decimal-place rounding like `rotate_bound`'s own `round(value, 6)`,
+    which is far coarser than the noise this actually needs to absorb, and
+    would risk erasing a deliberately sampled, sub-1e-6 translation) --
+    verified directly that a 1e-6-degree angle perturbation away from a
+    right angle changes the required output size for a large-enough source,
+    and that this function does not treat `89.999999`, `90.0`, and
+    `90.000001` degrees as equivalent.
+
+    Returns
+    -------
+    AffineParameters
+        A new instance with an adjusted, independent, read-only `matrix`
+        (`params.matrix` itself is never modified) and `output_size` set to
+        the computed ``(width, height)``; `source_size`/`angle`/
+        `translation`/`scale`/`shear`/`axis_scale` are copied unchanged from
+        `params` and are not cross-checked against the new matrix, exactly
+        as `apply_affine` never cross-checks them against `matrix` today.
+
+    Raises
+    ------
+    TypeError
+        If `params` is not an `AffineParameters`, or if its fields are not
+        the expected types (same validation as `apply_affine`).
+    ValueError
+        If `params.output_size` is already set (this function requires
+        unexpanded parameters -- it is not idempotent, and a hand-set
+        `output_size` is not guaranteed to be this function's own prior
+        output), if transforming the source footprint produces a
+        non-finite coordinate, bound, span, or shift (e.g. from an
+        astronomically large but individually finite `matrix`), or if the
+        computed output size is not representable as a positive OpenCV
+        ``int`` destination size (``<= 2**31 - 1`` per dimension --
+        verified directly against both OpenCV 4.9 and 5.0).
+    RuntimeError
+        If this function's own postconditions are violated.
+    """
+    _require_affine_parameters(params)
+    if params.output_size is not None:
+        raise ValueError(
+            "params already define an output_size; expand_affine_canvas requires "
+            "unexpanded parameters (it is not idempotent)"
+        )
+
+    width, height = params.source_size
+    matrix_3x3 = np.eye(3, dtype=np.float64)
+    matrix_3x3[:2, :] = params.matrix
+
+    corners = np.array(
+        [
+            [-0.5, -0.5, 1.0],
+            [width - 0.5, -0.5, 1.0],
+            [width - 0.5, height - 0.5, 1.0],
+            [-0.5, height - 0.5, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+    # matrix_3x3's bottom row is exactly [0, 0, 1] by construction (affine,
+    # never perspective), so the transformed third coordinate is exactly
+    # 1.0 for every corner with no floating-point risk -- no perspective
+    # divide is needed or performed.
+    with np.errstate(over="ignore", invalid="ignore"):
+        transformed = corners @ matrix_3x3.T
+
+    if not np.all(np.isfinite(transformed[:, :2])):
+        raise ValueError(
+            "expand_affine_canvas: transforming the source footprint through params.matrix "
+            "does not produce finite coordinates"
+        )
+
+    source_left, source_top = -0.5, -0.5
+    source_right, source_bottom = width - 0.5, height - 0.5
+    transformed_left = float(np.min(transformed[:, 0]))
+    transformed_top = float(np.min(transformed[:, 1]))
+    transformed_right = float(np.max(transformed[:, 0]))
+    transformed_bottom = float(np.max(transformed[:, 1]))
+
+    left = min(source_left, transformed_left)
+    top = min(source_top, transformed_top)
+    right = max(source_right, transformed_right)
+    bottom = max(source_bottom, transformed_bottom)
+    if not all(math.isfinite(value) for value in (left, top, right, bottom)):
+        raise ValueError("expand_affine_canvas: computed canvas bounds are not finite")
+
+    magnitude_x = max(1.0, abs(left), abs(right), float(width))
+    magnitude_y = max(1.0, abs(top), abs(bottom), float(height))
+
+    span_x = _snap_near_integer(right - left, magnitude=magnitude_x)
+    span_y = _snap_near_integer(bottom - top, magnitude=magnitude_y)
+    if not (math.isfinite(span_x) and math.isfinite(span_y)):
+        raise ValueError("expand_affine_canvas: computed canvas spans are not finite")
+    if span_x <= 0.0 or span_y <= 0.0:
+        raise RuntimeError(
+            f"internal error: expand_affine_canvas computed a non-positive span "
+            f"({span_x}, {span_y})"
+        )
+
+    output_width = math.ceil(span_x)
+    output_height = math.ceil(span_y)
+    if output_width > _OPENCV_SIZE_MAX or output_height > _OPENCV_SIZE_MAX:
+        raise ValueError(
+            "expand_affine_canvas: computed output_size exceeds OpenCV's int32 dsize "
+            f"limit ({_OPENCV_SIZE_MAX} per dimension), got ({output_width}, {output_height})"
+        )
+
+    shift_x = _snap_near_integer(-0.5 - left, magnitude=magnitude_x)
+    shift_y = _snap_near_integer(-0.5 - top, magnitude=magnitude_y)
+    if not (math.isfinite(shift_x) and math.isfinite(shift_y)):
+        raise ValueError("expand_affine_canvas: computed canvas shift is not finite")
+
+    shift_matrix = np.array(
+        [[1.0, 0.0, shift_x], [0.0, 1.0, shift_y], [0.0, 0.0, 1.0]], dtype=np.float64
+    )
+    with np.errstate(over="ignore", invalid="ignore"):
+        expanded_3x3 = shift_matrix @ matrix_3x3
+    expanded_matrix = np.array(expanded_3x3[:2, :], dtype=np.float64, order="C", copy=True)
+
+    if expanded_matrix.shape != (2, 3) or expanded_matrix.dtype != np.float64:
+        raise RuntimeError(
+            f"internal error: expanded affine matrix has shape {expanded_matrix.shape} and "
+            f"dtype {expanded_matrix.dtype}, expected (2, 3) float64"
+        )
+    if not np.all(np.isfinite(expanded_matrix)):
+        raise ValueError("expand_affine_canvas: adjusted matrix is not finite")
+    expanded_matrix.setflags(write=False)
+
+    return AffineParameters(
+        matrix=expanded_matrix,
+        source_size=params.source_size,
+        angle=params.angle,
+        translation=params.translation,
+        scale=params.scale,
+        shear=params.shear,
+        axis_scale=params.axis_scale,
+        output_size=(output_width, output_height),
+    )
 
 
 def sample_perspective(
@@ -1284,18 +1495,44 @@ def _sample_singleton_aware_range(rng: np.random.Generator, bounds: tuple[float,
     return float(rng.uniform(low, high))
 
 
-def _restore_singleton_channel(source: np.ndarray, result: np.ndarray) -> np.ndarray:
-    # cv2.flip and cv2.warpAffine both drop a trailing singleton channel
-    # dimension (verified directly for (H, W, 1) input, on both) -- restore
-    # it so the output shape always matches the input shape exactly, per
-    # this module's own shape-preservation postcondition. Restricted to
-    # exactly this known squeeze (a singleton channel dim disappearing), not
-    # merely "same total element count" -- a wrong-shaped result with a
-    # coincidentally matching size (e.g. a (H, W*C) result for a (H, W, C)
-    # input) must still be left for _check_shape_preserving_postconditions
-    # to reject with a clear RuntimeError, not silently reshaped into
+def _snap_near_integer(value: float, *, magnitude: float) -> float:
+    # Only meant to absorb a few ULPs of floating-point noise from the
+    # handful of matrix multiplications used to build expand_affine_canvas's
+    # bounds (e.g. cos(90 degrees) landing at ~6.12e-17 instead of exactly
+    # 0.0) -- never a fixed decimal-place round like rotate_bound's own
+    # round(value, 6), which is far coarser than float64 noise at realistic
+    # image magnitudes and would risk silently destroying a genuinely
+    # sampled, deliberate subpixel translation (verified directly: a
+    # translation as small as 1e-7 must survive untouched, and round(x, 6)
+    # would not preserve it). magnitude scales the tolerance to the actual
+    # coordinates involved, not a single global constant.
+    nearest = float(round(value))
+    tolerance = 16.0 * math.ulp(max(1.0, magnitude))
+    if abs(value - nearest) <= tolerance:
+        return nearest
+    return value
+
+
+def _restore_singleton_channel(
+    source: np.ndarray, result: np.ndarray, expected_spatial_shape: tuple[int, int]
+) -> np.ndarray:
+    # cv2.flip and cv2.warpAffine/warpPerspective all drop a trailing
+    # singleton channel dimension (verified directly for (H, W, 1) input, on
+    # all three) -- restore it so the output shape always matches the
+    # expected (H, W, 1) shape exactly, per this module's own
+    # shape-preservation postcondition. expected_spatial_shape is passed in
+    # explicitly (rather than derived from source.shape[:2]) because affine
+    # canvas expansion can make the output's spatial size differ from the
+    # source's -- for flip/crop and for fixed-canvas affine/perspective,
+    # callers pass exactly source.shape[:2], so behavior there is unchanged.
+    # Restricted to exactly this known squeeze (a singleton channel dim
+    # disappearing to precisely the expected spatial shape), not merely
+    # "same total element count" or "any 2-D result" -- a wrong-shaped
+    # result (e.g. a transposed (W, H) array, or a (H, W*C) result for a
+    # (H, W, C) input) must still be left for the postcondition check to
+    # reject with a clear RuntimeError, not silently reshaped into
     # something plausible-looking.
-    if source.ndim == 3 and source.shape[2] == 1 and result.shape == source.shape[:2]:
+    if source.ndim == 3 and source.shape[2] == 1 and result.shape == expected_spatial_shape:
         return result[:, :, None]
     return result
 
@@ -1307,7 +1544,7 @@ def _apply_flip_preserving_shape(array: np.ndarray, direction: FlipDirection | N
         result = _flip(array, direction)
     except cv2.error as exc:
         raise RuntimeError("OpenCV failed to apply flip augmentation") from exc
-    return _restore_singleton_channel(array, result)
+    return _restore_singleton_channel(array, result, array.shape[:2])
 
 
 def _flip_direction(params: FlipParameters) -> FlipDirection | None:
@@ -1386,6 +1623,31 @@ def _require_affine_parameters(params: object) -> None:
     _require_finite_pair(params.axis_scale, "params.axis_scale")
     require_positive(params.axis_scale[0], "params.axis_scale[0]")
     require_positive(params.axis_scale[1], "params.axis_scale[1]")
+    _require_optional_output_size(params.output_size)
+
+
+def _require_optional_output_size(output_size: object) -> None:
+    if output_size is None:
+        return
+    if not isinstance(output_size, tuple):
+        raise TypeError(
+            f"params.output_size must be None or a tuple, got {type(output_size).__name__}"
+        )
+    if len(output_size) != 2:
+        raise ValueError(
+            f"params.output_size must contain exactly 2 elements, got {len(output_size)}"
+        )
+    for value in output_size:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"params.output_size elements must be int, got {type(value).__name__}")
+    width, height = output_size
+    if width <= 0 or height <= 0:
+        raise ValueError(f"params.output_size must be positive, got {output_size}")
+    if width > _OPENCV_SIZE_MAX or height > _OPENCV_SIZE_MAX:
+        raise ValueError(
+            f"params.output_size must fit in an OpenCV int32 dsize (<= {_OPENCV_SIZE_MAX}), "
+            f"got {output_size}"
+        )
 
 
 def _require_source_size(source_size: object) -> None:
@@ -1433,6 +1695,7 @@ def _require_interpolation_mode(value: object) -> int:
 def _apply_affine_to_array(
     array: np.ndarray,
     params: AffineParameters,
+    output_size: tuple[int, int],
     interpolation: int,
     border_mode: int,
     border_value: float | tuple[float, ...],
@@ -1441,14 +1704,15 @@ def _apply_affine_to_array(
         result = _warp_affine(
             array,
             params.matrix,
-            params.source_size,
+            output_size,
             interpolation=interpolation,
             border_mode=border_mode,
             border_value=border_value,
         )
     except cv2.error as exc:
         raise RuntimeError("OpenCV failed to apply affine augmentation") from exc
-    return _restore_singleton_channel(array, result)
+    output_width, output_height = output_size
+    return _restore_singleton_channel(array, result, (output_height, output_width))
 
 
 def _perspective_source_corners(
@@ -1596,7 +1860,7 @@ def _apply_perspective_to_array(
         )
     except cv2.error as exc:
         raise RuntimeError("OpenCV failed to apply perspective augmentation") from exc
-    return _restore_singleton_channel(array, result)
+    return _restore_singleton_channel(array, result, array.shape[:2])
 
 
 def _require_matches_source_size(
@@ -1643,6 +1907,31 @@ def _check_shape_preserving_postconditions(
             f"internal error: {name} dtype changed from {original.dtype} to {result.dtype}"
         )
     if np.shares_memory(result, original):
+        raise RuntimeError(f"internal error: {name} output aliases input")
+
+
+def _check_warp_postconditions(
+    source: np.ndarray, result: np.ndarray, output_size: tuple[int, int], name: str
+) -> None:
+    # Generalizes _check_shape_preserving_postconditions for a warp whose
+    # spatial output size may legitimately differ from the input's (affine
+    # canvas expansion) -- dtype and channel shape must still be unchanged,
+    # and the output must still be independent, but the spatial dimensions
+    # are checked against the caller-supplied output_size instead of
+    # source.shape. When output_size == source's own spatial size (the
+    # fixed-canvas case, i.e. params.output_size is None), this reduces to
+    # exactly the same check as _check_shape_preserving_postconditions.
+    width, height = output_size
+    expected_shape = (height, width) + source.shape[2:]
+    if result.shape != expected_shape:
+        raise RuntimeError(
+            f"internal error: {name} shape is {result.shape}, expected {expected_shape}"
+        )
+    if result.dtype != source.dtype:
+        raise RuntimeError(
+            f"internal error: {name} dtype changed from {source.dtype} to {result.dtype}"
+        )
+    if np.shares_memory(result, source):
         raise RuntimeError(f"internal error: {name} output aliases input")
 
 
