@@ -1053,16 +1053,23 @@ pair = im.apply_affine(
 )
 ```
 
-`sample_flip`/`sample_crop`/`sample_affine` take an explicit `rng: np.random.Generator` and return
-a small, independent result (`FlipParameters`/`CropParameters`/`AffineParameters`) -- there is no
-global/implicit RNG anywhere in `improcv`. That result can be stored and replayed any number of
-times through `apply_flip`/`apply_crop`/`apply_affine`, always producing the same output for the
-same input. `CropParameters`/`AffineParameters` carry the `source_size` they were sampled for;
-`apply_crop`/`apply_affine` require the image (and mask, if given) to match that size exactly, so
-parameters sampled for one image can't be silently misapplied to a differently-sized one. Passing
-`mask=` applies the identical transform to the mask, returning both as an `AugmentedImageMask`
-instead of a bare array; a segmentation mask is restricted to `uint8`/`uint16`/`int16` in this
-slice (not `bool`/`int32`/`int64`/floating-point, and not one-hot/multi-channel encodings).
+`sample_flip`/`sample_crop`/`sample_affine`/`sample_perspective` each take an explicit
+`rng: np.random.Generator` and return a small, independent result (`FlipParameters`/
+`CropParameters`/`AffineParameters`/`PerspectiveParameters`) -- there is no global/implicit RNG
+anywhere in `improcv`. That result can be stored and replayed any number of times through
+`apply_flip`/`apply_crop`/`apply_affine`/`apply_perspective`, always producing the same output for
+the same input; none of these `apply_*` functions ever touch `rng` themselves. `CropParameters`/
+`AffineParameters`/`PerspectiveParameters` carry the `source_size` they were sampled for (`Flip
+Parameters` does not, since a flip has no notion of source size); the corresponding `apply_crop`/
+`apply_affine`/`apply_perspective` require the image (and mask, if given) to match that size
+exactly, so parameters sampled for one image can't be silently misapplied to a differently-sized
+one. Passing `mask=` applies the identical transform to the mask, returning both as an
+`AugmentedImageMask` instead of a bare array. The accepted mask dtype differs by function:
+`apply_flip`/`apply_crop`/`apply_affine` accept `uint8`/`uint16`/`int16` masks (not `bool`/
+`int32`/`int64`/floating-point, and not one-hot/multi-channel encodings); `apply_perspective`
+accepts only `uint8`/`uint16` -- `int16` is deliberately excluded there due to a confirmed,
+platform-specific `cv2.warpPerspective` inconsistency (see the perspective section below for the
+full explanation).
 
 For `sample_affine`/`apply_affine` specifically: `angle_range` is in degrees (positive =
 counter-clockwise, matching `im.rotate`); `translation_x_range`/`translation_y_range` are in pixels
