@@ -11,16 +11,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Pairing diagnostics demo (`demos/pairing_diagnostics.py`), the second entry in `demos/`. Renders
+  a real, deterministic `discover_image_mask_pairs` success case next to a silent naive
+  `zip(sorted(images), sorted(masks))` mispair, plus the real `ValueError`s the public API raises
+  for an unmatched image/mask and a duplicate pairing key -- every result and message shown comes
+  from an actual call, never hand-typed. Headless, tested as a real subprocess in
+  `tests/test_demos.py`. No new public API.
 - Reproducible, headless augmentation demo gallery (`demos/augmentation_gallery.py`), the first
-  entry in a new `demos/` directory of generators for the visual assets committed under
-  `docs/assets/`. The generated plansza (`docs/assets/augmentation-gallery.png`, embedded in the
+  entry in `demos/`, a new directory of generators for the visual assets committed under
+  `docs/assets/`. The generated image (`docs/assets/augmentation-gallery.png`, embedded in the
   main README) shows a synthetic image/mask pair carried through `sample_affine`/`apply_affine`
-  (both a fixed and an `expand_affine_canvas`-expanded canvas) and `sample_perspective`/
-  `apply_perspective`, demonstrating that one sampled parameter object is applied identically to
-  an image and its mask, that a warped mask keeps only its original discrete labels plus one
-  explicit border value, and the difference between a fixed-size and an expanded affine canvas.
-  The generator asserts this contract against `improcv`'s public API before rendering and is
-  exercised as a real subprocess in `tests/test_demos.py`. No new public API.
+  (fixed and `expand_affine_canvas`-expanded canvas) and `sample_perspective`/`apply_perspective`,
+  asserted against `improcv`'s public API before rendering and exercised as a real subprocess in
+  `tests/test_demos.py`. No new public API.
 - Two runnable, self-contained first-use recipes under `examples/` (`discovery_and_augmentation.py`,
   `classification_evaluation.py`), an `examples/README.md` index, and a "Start here" section in the
   main README pointing to both -- the first chains `discover_image_mask_pairs` into a replayable

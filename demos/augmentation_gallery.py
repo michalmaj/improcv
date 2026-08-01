@@ -2,8 +2,8 @@
 
 Builds a small synthetic BGR image and matching integer-label segmentation
 mask, applies `improcv`'s replayable affine (fixed and expanded canvas) and
-perspective transforms identically to both, and renders a 2x4 plansza
-comparing them -- one parameter object per transform, always applied to the
+perspective transforms identically to both, and renders a 2x4 comparison
+layout -- one parameter object per transform, always applied to the
 image and mask together, with the mask always warped using nearest-neighbor
 interpolation so its discrete labels stay legal.
 
@@ -40,7 +40,7 @@ _FIGURE_DPI = 150
 
 
 class GalleryResults(NamedTuple):
-    """Everything `render_gallery` needs to draw the plansza."""
+    """Everything `render_gallery` needs to draw the gallery figure."""
 
     source_image: np.ndarray
     source_mask: np.ndarray
@@ -178,7 +178,7 @@ def _mask_indices(mask: np.ndarray) -> np.ndarray:
 
 
 def render_gallery(results: GalleryResults, output: Path) -> tuple[int, int]:
-    """Render the 2x4 augmentation gallery plansza to `output` as a PNG.
+    """Render the 2x4 augmentation gallery image to `output` as a PNG.
 
     Matplotlib is imported and configured here, inside the render path, not
     at module import time -- importing this module never selects a backend,
