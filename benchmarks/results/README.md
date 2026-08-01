@@ -48,12 +48,14 @@ longer be an unedited tool output, breaking the guarantee every committed result
 ## Filename format
 
 ```text
-YYYY-MM-DD-augmentation-baseline.json
+YYYY-MM-DD-<family>-baseline.json
 ```
 
-An optional, hand-written narrative Markdown file with the same date/topic prefix may accompany a
-result to explain something not obvious from the raw numbers alone (mirroring this project's C++
-sibling's own dated result notes) -- not required for every result.
+`<family>` is the benchmark family the file belongs to (e.g. `augmentation`, `discovery`) -- one
+result file and one accompanying report per family per dated capture, never a mix of families in
+a single file. An optional, hand-written narrative Markdown file with the same date/topic prefix
+may accompany a result to explain something not obvious from the raw numbers alone (mirroring
+this project's C++ sibling's own dated result notes) -- not required for every result.
 
 ## Current contents
 
@@ -67,9 +69,21 @@ sibling's own dated result notes) -- not required for every result.
 - [`2026-08-01-augmentation-baseline.md`](2026-08-01-augmentation-baseline.md) -- the reviewed
   narrative interpretation of that JSON: environment, integrity checks, per-case tables,
   observations, measurement spread, and limitations.
+- [`2026-08-01-discovery-baseline.json`](2026-08-01-discovery-baseline.json) -- a **compact,
+  stats-only native saved run** (produced with `--benchmark-save`/`--benchmark-storage`, no
+  `--benchmark-save-data`; `stats.data` confirmed absent from every entry), covering
+  `discover_images` and `discover_image_mask_pairs` at 100/1,000/10,000 entries, at commit
+  `50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce`. This is the default format described above, not an
+  exception.
+- [`2026-08-01-discovery-baseline.md`](2026-08-01-discovery-baseline.md) -- the reviewed narrative
+  interpretation of that JSON: environment, integrity checks, per-case tables, scaling
+  observations, measurement spread, and limitations.
 
-Both files describe the same capture, at commit `55ed9b6d92942b35319b13faf95938c51bc4cbc9`, with
-`commit_info.dirty: false`. Per the immutable-results policy above, this pair is never overwritten
-by a future result -- a later baseline gets its own new dated filename. Going forward, new
-baselines are expected to use the compact, stats-only saved-run format described above unless a
-specific diagnostic need calls for a full-data capture again.
+Both the augmentation pair and the discovery pair describe their own single capture, each at its
+own commit (`55ed9b6d92942b35319b13faf95938c51bc4cbc9` for augmentation,
+`50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` for discovery), both with `commit_info.dirty: false`.
+Per the immutable-results policy above, neither pair is ever overwritten by a future result -- a
+later baseline for either family gets its own new dated filename. The augmentation full-data
+capture remains a historical exception specific to that first-ever run; the discovery baseline
+uses -- and future baselines are expected to keep using -- the compact, stats-only saved-run
+format, reserving a full-data capture for a specific, reviewed diagnostic need.

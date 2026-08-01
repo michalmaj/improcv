@@ -11,6 +11,15 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- First reviewed dataset discovery benchmark baseline
+  (`benchmarks/results/2026-08-01-discovery-baseline.json` and its accompanying `.md` report),
+  captured from the finalized harness at commit `50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` with a
+  clean working tree. Covers `discover_images` and `discover_image_mask_pairs` at
+  100/1,000/10,000 entries over deterministic, sharded, warm-filesystem-cache datasets. The raw
+  JSON is a compact, stats-only native `pytest-benchmark` saved run (no `stats.data`); the
+  Markdown report documents the environment, integrity checks, and scaling observations for this
+  one machine and run -- not a general performance guarantee. `benchmarks/README.md` and
+  `benchmarks/results/README.md` now link to both.
 - Opt-in dataset discovery scaling benchmarks (`benchmarks/benchmark_discovery.py`), covering
   `discover_images` and `discover_image_mask_pairs` at 100/1,000/10,000 entries over
   deterministic, sharded temporary trees (10 shard directories per root). Every entry is a

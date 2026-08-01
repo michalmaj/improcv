@@ -1,0 +1,365 @@
+{
+    "machine_info": {
+        "node": "Michas-MacBook-Pro.local",
+        "processor": "arm",
+        "machine": "arm64",
+        "python_compiler": "Clang 14.0.6 ",
+        "python_implementation": "CPython",
+        "python_implementation_version": "3.12.7",
+        "python_version": "3.12.7",
+        "python_build": [
+            "main",
+            "Oct  4 2024 08:22:19"
+        ],
+        "release": "25.5.0",
+        "system": "Darwin",
+        "cpu": {
+            "python_version": "3.12.7.final.0 (64 bit)",
+            "cpuinfo_version": [
+                9,
+                0,
+                0
+            ],
+            "cpuinfo_version_string": "9.0.0",
+            "arch": "ARM_8",
+            "bits": 64,
+            "count": 12,
+            "arch_string_raw": "arm64",
+            "brand_raw": "Apple M4 Pro"
+        },
+        "numpy_version": "2.5.1",
+        "opencv_version": "5.0.0",
+        "improcv_version": "0.2.0a3.dev0",
+        "opencv_requested_num_threads": 1,
+        "opencv_num_threads": 12,
+        "opencv_requested_opencl_enabled": false,
+        "opencv_opencl_enabled": false,
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+    },
+    "commit_info": {
+        "id": "50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce",
+        "time": "2026-08-01T19:24:24+02:00",
+        "author_time": "2026-08-01T19:24:24+02:00",
+        "dirty": false,
+        "project": "improcv",
+        "branch": "perf/discovery-baseline"
+    },
+    "benchmarks": [
+        {
+            "group": "discovery-images",
+            "name": "test_discover_images[100-entries]",
+            "fullname": "benchmarks/benchmark_discovery.py::test_discover_images[100-entries]",
+            "params": {
+                "discovery_dataset": 100
+            },
+            "param": "100-entries",
+            "extra_info": {
+                "operation": "discover_images",
+                "implementation": "improcv",
+                "file_count": 100,
+                "pair_count": null,
+                "root_count": 1,
+                "shard_count": 10,
+                "directory_depth": 1,
+                "recursive": true,
+                "include_hidden": false,
+                "extensions": "default",
+                "file_content_policy": "zero-byte-extension-only",
+                "filesystem_cache": "warm",
+                "file_contents_opened": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.0020622501615434885,
+                "max": 0.0027060420252382755,
+                "mean": 0.002230710317878965,
+                "stddev": 6.135795196237095e-05,
+                "rounds": 486,
+                "median": 0.0022376455599442124,
+                "iqr": 5.4291216656565666e-05,
+                "q1": 0.0022054999135434628,
+                "q3": 0.0022597911302000284,
+                "iqr_outliers": 36,
+                "stddev_outliers": 118,
+                "outliers": "118;36",
+                "ld15iqr": 0.002125374972820282,
+                "hd15iqr": 0.0023426669649779797,
+                "ops": 448.28770100047507,
+                "total": 1.0841252144891769,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "discovery-pairs",
+            "name": "test_discover_image_mask_pairs[100-entries]",
+            "fullname": "benchmarks/benchmark_discovery.py::test_discover_image_mask_pairs[100-entries]",
+            "params": {
+                "discovery_dataset": 100
+            },
+            "param": "100-entries",
+            "extra_info": {
+                "operation": "discover_image_mask_pairs",
+                "implementation": "improcv",
+                "file_count": 200,
+                "files_per_root": 100,
+                "pair_count": 100,
+                "root_count": 2,
+                "shard_count_per_root": 10,
+                "directory_depth": 1,
+                "recursive": true,
+                "include_hidden": false,
+                "image_extensions": "default",
+                "mask_extensions": "default",
+                "file_content_policy": "zero-byte-extension-only",
+                "filesystem_cache": "warm",
+                "file_contents_opened": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.007859125034883618,
+                "max": 0.011728957993909717,
+                "mean": 0.008192495468195326,
+                "stddev": 0.00034813655737072014,
+                "rounds": 129,
+                "median": 0.008181249955669045,
+                "iqr": 0.00024135492276400328,
+                "q1": 0.00803021847968921,
+                "q3": 0.008271573402453214,
+                "iqr_outliers": 1,
+                "stddev_outliers": 3,
+                "outliers": "3;1",
+                "ld15iqr": 0.007859125034883618,
+                "hd15iqr": 0.011728957993909717,
+                "ops": 122.06292989506943,
+                "total": 1.056831915397197,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "discovery-images",
+            "name": "test_discover_images[1000-entries]",
+            "fullname": "benchmarks/benchmark_discovery.py::test_discover_images[1000-entries]",
+            "params": {
+                "discovery_dataset": 1000
+            },
+            "param": "1000-entries",
+            "extra_info": {
+                "operation": "discover_images",
+                "implementation": "improcv",
+                "file_count": 1000,
+                "pair_count": null,
+                "root_count": 1,
+                "shard_count": 10,
+                "directory_depth": 1,
+                "recursive": true,
+                "include_hidden": false,
+                "extensions": "default",
+                "file_content_policy": "zero-byte-extension-only",
+                "filesystem_cache": "warm",
+                "file_contents_opened": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.020752666983753443,
+                "max": 0.02597187482751906,
+                "mean": 0.021623245687806047,
+                "stddev": 0.000752219441305689,
+                "rounds": 48,
+                "median": 0.021528979414142668,
+                "iqr": 0.0006614789599552751,
+                "q1": 0.021191229112446308,
+                "q3": 0.021852708072401583,
+                "iqr_outliers": 1,
+                "stddev_outliers": 2,
+                "outliers": "2;1",
+                "ld15iqr": 0.020752666983753443,
+                "hd15iqr": 0.02597187482751906,
+                "ops": 46.24652628184898,
+                "total": 1.0379157930146903,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "discovery-pairs",
+            "name": "test_discover_image_mask_pairs[1000-entries]",
+            "fullname": "benchmarks/benchmark_discovery.py::test_discover_image_mask_pairs[1000-entries]",
+            "params": {
+                "discovery_dataset": 1000
+            },
+            "param": "1000-entries",
+            "extra_info": {
+                "operation": "discover_image_mask_pairs",
+                "implementation": "improcv",
+                "file_count": 2000,
+                "files_per_root": 1000,
+                "pair_count": 1000,
+                "root_count": 2,
+                "shard_count_per_root": 10,
+                "directory_depth": 1,
+                "recursive": true,
+                "include_hidden": false,
+                "image_extensions": "default",
+                "mask_extensions": "default",
+                "file_content_policy": "zero-byte-extension-only",
+                "filesystem_cache": "warm",
+                "file_contents_opened": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.07946158293634653,
+                "max": 0.08486216608434916,
+                "mean": 0.08095344583271072,
+                "stddev": 0.0013796626563551116,
+                "rounds": 20,
+                "median": 0.08063764602411538,
+                "iqr": 0.0007307083578780293,
+                "q1": 0.08030429156497121,
+                "q3": 0.08103499992284924,
+                "iqr_outliers": 2,
+                "stddev_outliers": 3,
+                "outliers": "3;2",
+                "ld15iqr": 0.07946158293634653,
+                "hd15iqr": 0.08466274989768863,
+                "ops": 12.352778683028362,
+                "total": 1.6190689166542143,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "discovery-images",
+            "name": "test_discover_images[10000-entries]",
+            "fullname": "benchmarks/benchmark_discovery.py::test_discover_images[10000-entries]",
+            "params": {
+                "discovery_dataset": 10000
+            },
+            "param": "10000-entries",
+            "extra_info": {
+                "operation": "discover_images",
+                "implementation": "improcv",
+                "file_count": 10000,
+                "pair_count": null,
+                "root_count": 1,
+                "shard_count": 10,
+                "directory_depth": 1,
+                "recursive": true,
+                "include_hidden": false,
+                "extensions": "default",
+                "file_content_policy": "zero-byte-extension-only",
+                "filesystem_cache": "warm",
+                "file_contents_opened": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.21735183405689895,
+                "max": 0.24679695791564882,
+                "mean": 0.2243042271817103,
+                "stddev": 0.007919469285931553,
+                "rounds": 20,
+                "median": 0.2207001254428178,
+                "iqr": 0.00896941649261862,
+                "q1": 0.21893158345483243,
+                "q3": 0.22790099994745106,
+                "iqr_outliers": 2,
+                "stddev_outliers": 2,
+                "outliers": "2;2",
+                "ld15iqr": 0.21735183405689895,
+                "hd15iqr": 0.24169337493367493,
+                "ops": 4.458230736730135,
+                "total": 4.486084543634206,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "discovery-pairs",
+            "name": "test_discover_image_mask_pairs[10000-entries]",
+            "fullname": "benchmarks/benchmark_discovery.py::test_discover_image_mask_pairs[10000-entries]",
+            "params": {
+                "discovery_dataset": 10000
+            },
+            "param": "10000-entries",
+            "extra_info": {
+                "operation": "discover_image_mask_pairs",
+                "implementation": "improcv",
+                "file_count": 20000,
+                "files_per_root": 10000,
+                "pair_count": 10000,
+                "root_count": 2,
+                "shard_count_per_root": 10,
+                "directory_depth": 1,
+                "recursive": true,
+                "include_hidden": false,
+                "image_extensions": "default",
+                "mask_extensions": "default",
+                "file_content_policy": "zero-byte-extension-only",
+                "filesystem_cache": "warm",
+                "file_contents_opened": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.8247793749906123,
+                "max": 0.8677895830478519,
+                "mean": 0.8391877418383956,
+                "stddev": 0.010401730283266356,
+                "rounds": 20,
+                "median": 0.8404884369811043,
+                "iqr": 0.015180708025582135,
+                "q1": 0.8304332090774551,
+                "q3": 0.8456139171030372,
+                "iqr_outliers": 0,
+                "stddev_outliers": 5,
+                "outliers": "5;0",
+                "ld15iqr": 0.8247793749906123,
+                "hd15iqr": 0.8677895830478519,
+                "ops": 1.1916284642210282,
+                "total": 16.783754836767912,
+                "iterations": 1
+            }
+        }
+    ],
+    "datetime": "2026-08-01T18:21:57.772026+00:00",
+    "version": "5.2.3"
+}
