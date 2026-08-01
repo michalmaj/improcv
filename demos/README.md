@@ -34,14 +34,18 @@ pip install "improcv[cv-headless,viz]==0.2.0a2"
 
 ```bash
 uv run python demos/augmentation_gallery.py
+uv run python demos/pairing_diagnostics.py
 ```
 
-writes `docs/assets/augmentation-gallery.png`, overwriting it in place. To write elsewhere
-instead (e.g. to inspect a candidate render before committing it):
+Each writes its own asset under `docs/assets/`, overwriting it in place. To write elsewhere
+instead (e.g. to inspect a candidate render before committing it), pass `--output`:
 
 ```bash
 uv run python demos/augmentation_gallery.py \
   --output /tmp/augmentation-gallery.png
+
+uv run python demos/pairing_diagnostics.py \
+  --output /tmp/pairing-diagnostics.png
 ```
 
 ## What each demo shows
@@ -50,7 +54,7 @@ uv run python demos/augmentation_gallery.py \
 
 Builds a small synthetic BGR image and its matching integer-label segmentation mask, then applies
 `improcv`'s replayable affine (both fixed and expanded canvas) and perspective transforms
-identically to the image and the mask. The rendered plansza shows:
+identically to the image and the mask. The rendered gallery shows:
 
 - the same sampled parameter object applied to an image and its mask;
 - that a mask keeps only its original discrete labels plus one explicit border value after a
@@ -61,6 +65,30 @@ identically to the image and the mask. The rendered plansza shows:
 
 For a copyable, executable version of the same underlying contract (dataset discovery + one
 affine replay, without any rendering), see
+[`examples/discovery_and_augmentation.py`](../examples/discovery_and_augmentation.py).
+
+### `pairing_diagnostics.py`
+
+<img
+  src="https://raw.githubusercontent.com/michalmaj/improcv/main/docs/assets/pairing-diagnostics.png"
+  alt="improcv pairing diagnostics showing deterministic successful image-mask pairing, a silent mismatch produced by positional zip, and precise errors for unmatched files and duplicate pairing keys"
+  width="880"
+>
+
+Builds three tiny synthetic datasets and pairs each with `improcv.discover_image_mask_pairs`,
+comparing the real result against a naive positional `zip(sorted(images), sorted(masks))`. Shows:
+
+- a successful, deterministic key-based pairing;
+- the same dataset paired naively by position -- silently correct only by coincidence;
+- an unmatched image and an unmatched mask, and the real `ValueError`
+  `discover_image_mask_pairs` raises identifying both;
+- a duplicate pairing key (two image files reducing to the same key), and the real `ValueError`
+  identifying the colliding key and both competing paths.
+
+Every directory tree, naive-zip result, and exception message shown is computed from a real
+filesystem and a real call to the public API -- none of it is a hand-typed example message.
+
+For a copyable, executable version of the underlying discovery contract, see
 [`examples/discovery_and_augmentation.py`](../examples/discovery_and_augmentation.py).
 
 ## Guarantees and non-guarantees
