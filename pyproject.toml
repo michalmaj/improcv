@@ -71,7 +71,7 @@ src = ["src"]
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pyright]
-include = ["src", "tests", "scripts", "examples"]
+include = ["src", "tests", "scripts", "examples", "demos"]
 typeCheckingMode = "basic"
 pythonVersion = "3.11"
 

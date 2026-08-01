@@ -66,6 +66,21 @@ NumPy shapes are (height, width[, channels]); improcv/OpenCV size tuples are
 (width, height).
 ```
 
+### See it in action
+
+<img
+  src="https://raw.githubusercontent.com/michalmaj/improcv/main/docs/assets/augmentation-gallery.png"
+  alt="improcv augmentation gallery showing a source image and segmentation mask, affine transforms with fixed and expanded canvases, and a perspective transform applied with identical geometry to the image and mask"
+  width="880"
+>
+
+One sampled transform is applied to both the image and its mask, and the mask always keeps its
+original discrete labels (never an interpolated, illegal one). Affine transforms can render to a
+fixed canvas (content may be cropped) or an expanded one that grows to keep everything.
+
+Regenerate this image and see other demos in
+[`demos/README.md`](https://github.com/michalmaj/improcv/blob/main/demos/README.md).
+
 ## Usage
 
 ```python
