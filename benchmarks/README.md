@@ -236,6 +236,8 @@ scales with entry count.
 
 ## Results
 
+### Affine augmentation
+
 The first reviewed baseline is captured:
 
 - Raw JSON: [`results/2026-08-01-augmentation-baseline.json`](results/2026-08-01-augmentation-baseline.json)
@@ -264,11 +266,30 @@ Three observations from that specific machine and run, elaborated on in the repo
 
 ### Dataset discovery
 
-No result is committed for the discovery family yet -- this PR adds only the cases, data,
-grouping, and this documentation. A first discovery baseline will follow in a separate PR, from
-a clean, final harness SHA, using the same compact, stats-only saved-run format described above
-(`--benchmark-save`/`--benchmark-storage`, no `stats.data`); a full-data capture would only be
-used again for a specific, reviewed diagnostic need, exactly as for the affine family.
+The first reviewed baseline is captured:
+
+- Compact JSON: [`results/2026-08-01-discovery-baseline.json`](results/2026-08-01-discovery-baseline.json)
+- Reviewed report: [`results/2026-08-01-discovery-baseline.md`](results/2026-08-01-discovery-baseline.md)
+
+Captured at the exact harness commit `50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce`, with a clean
+working tree (`commit_info.dirty: false`). This is a **stats-only saved run**
+(`--benchmark-save`/`--benchmark-storage`, no `--benchmark-save-data`) -- `stats.data` (the full
+per-round timing array) is confirmed absent from every entry; the reviewed Markdown report
+contains the per-case tables and scaling interpretation, the JSON remains the raw source of
+truth. See `benchmarks/results/README.md` for the policy governing committed results.
+
+Three observations from that specific machine and run, elaborated on in the report itself:
+
+- Both `discovery-images` and `discovery-pairs` medians increased monotonically across all three
+  measured sizes (100/1,000/10,000).
+- Each 10x increase in entry count produced an observed median growth close to 10x for both
+  groups (`discover_images`: 9.62x then 10.3x; `discover_image_mask_pairs`: 9.86x then 10.4x) --
+  approximately proportional over the measured range, not a proven asymptotic complexity claim
+  from three data points.
+- `discover_image_mask_pairs` traverses two roots and additionally builds/validates/sorts strict
+  pairing keys; its median was consistently a few times higher than `discover_images`'s median at
+  the matching per-root count on this run, but that is not treated as an isolated "pairing
+  overhead" figure (see the report's "Interpretation" section for why).
 
 ## Future engineering stories
 
