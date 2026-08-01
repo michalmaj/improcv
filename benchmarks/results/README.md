@@ -34,5 +34,13 @@ sibling's own dated result notes) -- not required for every result.
 
 ## Current contents
 
-No baseline JSON has been committed yet. The first one will be added in a follow-up PR, after
-this benchmark harness itself has been reviewed -- see `benchmarks/README.md`'s "Results" section.
+- [`2026-08-01-augmentation-baseline.json`](2026-08-01-augmentation-baseline.json) -- the raw,
+  unedited `pytest-benchmark` output. Source of truth for every number; not meant to be read
+  directly.
+- [`2026-08-01-augmentation-baseline.md`](2026-08-01-augmentation-baseline.md) -- the reviewed
+  narrative interpretation of that JSON: environment, integrity checks, per-case tables,
+  observations, measurement spread, and limitations.
+
+Both files describe the same capture, at commit `55ed9b6d92942b35319b13faf95938c51bc4cbc9`, with
+`commit_info.dirty: false`. Per the immutable-results policy above, this pair is never overwritten
+by a future result -- a later baseline gets its own new dated filename.

@@ -130,10 +130,23 @@ as a small, separate extension once this baseline has been reviewed.
 
 ## Results
 
-No committed performance baseline yet. The first reviewed baseline (raw JSON under
-`benchmarks/results/`, named `YYYY-MM-DD-augmentation-baseline.json`) will be added in a
-follow-up PR, after this harness itself has been reviewed. See `benchmarks/results/README.md`
-for the policy that will govern it.
+The first reviewed baseline is captured:
+
+- Raw JSON: [`results/2026-08-01-augmentation-baseline.json`](results/2026-08-01-augmentation-baseline.json)
+- Reviewed report: [`results/2026-08-01-augmentation-baseline.md`](results/2026-08-01-augmentation-baseline.md)
+
+The reviewed narrative report contains the interpretation and tables; the JSON remains the raw
+source of truth. See `benchmarks/results/README.md` for the policy governing committed results.
+
+Three observations from that specific machine and run, elaborated on in the report itself:
+
+- The observed wrapper/raw ratio was largest at `64x64` (where the raw kernel itself is only a
+  few microseconds) and close to 1.0 at `640x480`/`1920x1080` (where the kernel dominates).
+- The image+mask cases, which perform two warps instead of one, had correspondingly higher raw
+  and `improcv` medians than the matching image-only case at every size.
+- One case (`apply_affine_image_mask[raw-64x64]`) had a much higher coefficient of variation than
+  the rest, traced to a small fraction (~0.1%) of rounds affected by ordinary OS scheduling
+  jitter -- its median/IQR (this project's primary statistics) were unremarkable.
 
 ## Future engineering stories
 
