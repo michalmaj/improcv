@@ -31,6 +31,41 @@ pip install "improcv[cv-headless,viz]"
 `import improcv` never imports matplotlib — only `import improcv.visualization` does, and it
 raises a clear error if the `viz` extra isn't installed.
 
+## Start here
+
+Three workflows cover most first uses of `improcv`:
+
+1. **Deterministic image/mask pairing** for a dataset laid out as `images/`/`masks/` directories --
+   `discover_image_mask_pairs` (see "Dataset image/mask pairing" below).
+2. **Replayable image/mask augmentation** -- sample a transform once with `sample_affine`/
+   `sample_perspective`, apply it identically to an image and its segmentation mask, and replay it
+   later (see "Augmentation sampling and replay" below).
+3. **Classification evaluation** -- confusion matrices and per-class metrics
+   (`confusion_matrix`/`classification_metrics`), plus multiclass one-vs-rest ranking evaluation
+   (`multiclass_roc_auc_score`/`multiclass_average_precision_score`) (see "Classification
+   evaluation" below).
+
+Two runnable, self-contained recipes cover all three end to end -- no extra data, no network, no
+GUI:
+
+- [`examples/discovery_and_augmentation.py`](https://github.com/michalmaj/improcv/blob/main/examples/discovery_and_augmentation.py)
+  -- workflows 1 and 2 together: pair a tiny synthetic dataset, then sample, apply, and replay an
+  affine transform on an image and its mask, including canvas expansion.
+- [`examples/classification_evaluation.py`](https://github.com/michalmaj/improcv/blob/main/examples/classification_evaluation.py)
+  -- workflow 3: confusion matrix, per-class metrics, and multiclass ranking evaluation across
+  every supported `average` mode.
+
+See [`examples/README.md`](https://github.com/michalmaj/improcv/blob/main/examples/README.md) for
+how to run them and how DNN preprocessing/ONNX loading fit in as a supporting layer feeding
+workflow 3, not a workflow of their own.
+
+One convention worth keeping visible from the start:
+
+```text
+NumPy shapes are (height, width[, channels]); improcv/OpenCV size tuples are
+(width, height).
+```
+
 ## Usage
 
 ```python

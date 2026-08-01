@@ -10,6 +10,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- Two runnable, self-contained first-use recipes under `examples/` (`discovery_and_augmentation.py`,
+  `classification_evaluation.py`), an `examples/README.md` index, and a "Start here" section in the
+  main README pointing to both -- the first chains `discover_image_mask_pairs` into a replayable
+  `sample_affine`/`apply_affine` transform (including canvas expansion) applied identically to an
+  image and its segmentation mask; the second covers `confusion_matrix`/`classification_metrics`
+  and multiclass one-vs-rest ranking (`multiclass_roc_auc_score`/`multiclass_average_precision_score`)
+  across every `average` mode, with DNN preprocessing/ONNX loading documented as a supporting layer
+  feeding the second recipe, not a workflow of its own. Both scripts are exercised as real
+  subprocesses in `tests/test_examples.py`, so they double as tested documentation. No new public
+  API; `discover_image_mask_pairs`' docstring additionally now states its default extensions
+  explicitly instead of only by reference to `discover_images`.
+
 ## [0.2.0a2] - 2026-07-31
 
 ### Added
