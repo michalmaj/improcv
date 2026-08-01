@@ -11,6 +11,13 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- First reviewed affine augmentation benchmark baseline (`benchmarks/results/2026-08-01-augmentation-baseline.json`
+  and its accompanying `.md` report), captured from the finalized harness at commit
+  `55ed9b6d92942b35319b13faf95938c51bc4cbc9` with a clean working tree. The raw JSON is an
+  unedited `pytest-benchmark` capture; the Markdown report documents the environment, integrity
+  checks, and measurement spread alongside the raw/wrapper comparisons, for this one machine and
+  run -- not a general performance guarantee. `benchmarks/README.md` and
+  `benchmarks/results/README.md` now link to both.
 - Opt-in `pytest-benchmark` harness (`benchmarks/`, new dev-only `benchmark` dependency group)
   covering `sample_affine`, `expand_affine_canvas`, and `apply_affine` (image-only and
   image+mask) against raw `cv2.warpAffine` baselines that share the same matrix, `dsize`,
