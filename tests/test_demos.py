@@ -29,8 +29,9 @@ import improcv as im
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEMOS_DIR = _REPO_ROOT / "demos"
 _AUGMENTATION_SCRIPT = _DEMOS_DIR / "augmentation_gallery.py"
+_CLASSIFICATION_SCRIPT = _DEMOS_DIR / "classification_report.py"
 _PAIRING_SCRIPT = _DEMOS_DIR / "pairing_diagnostics.py"
-_DEMO_SCRIPTS = (_AUGMENTATION_SCRIPT, _PAIRING_SCRIPT)
+_DEMO_SCRIPTS = (_AUGMENTATION_SCRIPT, _CLASSIFICATION_SCRIPT, _PAIRING_SCRIPT)
 
 
 def _run_demo(
@@ -64,10 +65,16 @@ def pairing_module() -> types.ModuleType:
     return _load_module(_PAIRING_SCRIPT)
 
 
+@pytest.fixture(scope="module")
+def classification_module() -> types.ModuleType:
+    return _load_module(_CLASSIFICATION_SCRIPT)
+
+
 def test_demos_directory_has_the_expected_generators() -> None:
     scripts = sorted(_DEMOS_DIR.glob("*.py"))
     assert [script.name for script in scripts] == [
         "augmentation_gallery.py",
+        "classification_report.py",
         "pairing_diagnostics.py",
     ]
 
@@ -219,6 +226,218 @@ def test_affine_replay_is_bit_for_bit_identical_via_the_public_api() -> None:
 
     assert np.array_equal(first.image, second.image)
     assert np.array_equal(first.mask, second.mask)
+
+
+# --- classification_report.py -----------------------------------------------------------
+
+
+def test_classification_report_generates_the_expected_png_via_subprocess(tmp_path: Path) -> None:
+    output = tmp_path / "report.png"
+    before = set(tmp_path.iterdir())
+
+    result = _run_demo(
+        _CLASSIFICATION_SCRIPT,
+        ["--output", str(output)],
+        env={**os.environ, "MPLBACKEND": "Agg"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout == f"wrote {output} (1920x1080)\n"
+
+    after = set(tmp_path.iterdir())
+    assert after - before == {output}, f"expected exactly one new file, got {after - before}"
+
+    image = cv2.imread(str(output), cv2.IMREAD_UNCHANGED)
+    assert image is not None, "the written PNG must be readable by OpenCV"
+    assert image.shape[0] == 1080
+    assert image.shape[1] == 1920
+    assert image.shape[2] in (3, 4)
+    assert output.stat().st_size > 0
+    assert image.std() > 1.0, "the written PNG must not be a uniform, blank image"
+
+
+def test_build_classification_inputs_returns_the_documented_contract(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+
+    assert inputs.labels == (20, 10, 30)
+    assert inputs.y_score.shape == (9, 3)
+    assert not np.allclose(inputs.y_score.sum(axis=1), 1.0)
+
+
+def test_compute_classification_report_confusion_matrix(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+
+    # compute_classification_report asserts the exact confusion matrix and known classification
+    # values internally -- a successful call is itself part of the contract under test.
+    report = classification_module.compute_classification_report(inputs)
+
+    assert report.confusion.labels == (20, 10, 30)
+    assert report.confusion.matrix.shape == (3, 3)
+    assert np.array_equal(
+        report.confusion.matrix,
+        np.array([[3, 0, 0], [0, 2, 1], [0, 1, 2]], dtype=np.int64),
+    )
+
+
+def test_compute_classification_report_classification_metrics(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+    report = classification_module.compute_classification_report(inputs)
+
+    per_class = report.per_class
+    assert per_class.labels == (20, 10, 30)
+    assert per_class.average is None
+    assert isinstance(per_class.precision, np.ndarray)
+    assert isinstance(per_class.recall, np.ndarray)
+    assert isinstance(per_class.f1, np.ndarray)
+    assert per_class.precision.shape == (3,)
+    assert per_class.recall.shape == (3,)
+    assert per_class.f1.shape == (3,)
+    assert per_class.support.tolist() == [3, 3, 3]
+
+    assert per_class.precision.tolist() == pytest.approx([1.0, 2 / 3, 2 / 3])
+    assert per_class.recall.tolist() == pytest.approx([1.0, 2 / 3, 2 / 3])
+    assert per_class.f1.tolist() == pytest.approx([1.0, 2 / 3, 2 / 3])
+
+    assert report.macro.accuracy == pytest.approx(7 / 9)
+    assert report.macro.f1 == pytest.approx(7 / 9)
+
+
+def test_compute_classification_report_ranking_metrics(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+    report = classification_module.compute_classification_report(inputs)
+
+    assert isinstance(report.auc_per_class, np.ndarray)
+    assert isinstance(report.ap_per_class, np.ndarray)
+    assert report.auc_per_class.shape == (3,)
+    assert report.ap_per_class.shape == (3,)
+    assert all(np.isfinite(report.auc_per_class))
+    assert all(np.isfinite(report.ap_per_class))
+    for scalar in (
+        report.auc_macro,
+        report.auc_weighted,
+        report.auc_micro,
+        report.ap_macro,
+        report.ap_weighted,
+        report.ap_micro,
+    ):
+        assert np.isfinite(scalar)
+
+    # Matches examples/classification_evaluation.py's printed output for this exact fixed
+    # example, with a reasonable tolerance -- not hand-copied into the generator itself.
+    assert report.auc_per_class.tolist() == pytest.approx([1.0, 0.9444444, 1.0], abs=1e-6)
+    assert report.auc_macro == pytest.approx(0.9814815, abs=1e-6)
+    assert report.auc_weighted == pytest.approx(0.9814815, abs=1e-6)
+    assert report.auc_micro == pytest.approx(0.9783951, abs=1e-6)
+    assert report.ap_per_class.tolist() == pytest.approx([1.0, 0.9166667, 1.0], abs=1e-6)
+    assert report.ap_macro == pytest.approx(0.9722222, abs=1e-6)
+    assert report.ap_weighted == pytest.approx(0.9722222, abs=1e-6)
+    assert report.ap_micro == pytest.approx(0.9658120, abs=1e-6)
+
+
+def test_score_column_mapping_comes_from_a_real_enumeration_of_labels(
+    classification_module: types.ModuleType,
+) -> None:
+    labels = (20, 10, 30)
+
+    lines = classification_module._score_column_lines(labels)
+
+    assert lines == [
+        "column 0 -> label 20",
+        "column 1 -> label 10",
+        "column 2 -> label 30",
+    ]
+    # Built from a real enumerate(labels), not three independently hand-typed lines: reordering
+    # labels must reorder the rendered lines identically, not just their label numbers.
+    reordered = classification_module._score_column_lines((10, 30, 20))
+    assert reordered == [
+        "column 0 -> label 10",
+        "column 1 -> label 30",
+        "column 2 -> label 20",
+    ]
+
+
+def test_classification_report_text_contains_the_required_terms(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+    report = classification_module.compute_classification_report(inputs)
+
+    contract_text = classification_module._report_contract_text(inputs.labels)
+    classification_text = classification_module._classification_table_text(
+        inputs.labels, report.per_class, report.macro
+    )
+    ranking_table_text = classification_module._ranking_table_text(
+        inputs.labels, report.auc_per_class, report.ap_per_class
+    )
+    ranking_summary_text = classification_module._ranking_summary_text(
+        report.auc_macro,
+        report.auc_weighted,
+        report.auc_micro,
+        report.ap_macro,
+        report.ap_weighted,
+        report.ap_micro,
+    )
+    combined = "\n".join(
+        [
+            classification_module._CONFUSION_MATRIX_CAPTION,
+            contract_text,
+            classification_text,
+            ranking_table_text,
+            ranking_summary_text,
+        ]
+    )
+
+    for expected in (
+        "rows",
+        "true",
+        "columns",
+        "predicted",
+        "accuracy",
+        "macro F1",
+        "ROC AUC",
+        "average precision",
+        "macro",
+        "weighted",
+        "micro",
+    ):
+        assert expected in combined, expected
+
+
+def test_classification_report_panel_text_never_overflows_its_axes(
+    classification_module: types.ModuleType,
+) -> None:
+    # Regression-style check inspired by the same bug class fixed in PR #113 for
+    # pairing_diagnostics.py: builds the actual figure, forces a draw so Matplotlib finalizes
+    # every artist's on-screen position, and compares each panel's text bounding box against its
+    # own axes' bounding box directly via find_text_overflow. No OCR, no PNG involved.
+    inputs = classification_module.build_classification_inputs()
+    report = classification_module.compute_classification_report(inputs)
+
+    fig, panel_texts = classification_module.build_classification_figure(inputs, report)
+    try:
+        assert len(panel_texts) == 6, (
+            "expected the top contract strip, the report column's four sections, and the "
+            "bottom caption"
+        )
+
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        overflow = classification_module.find_text_overflow(panel_texts, renderer)
+
+        assert overflow == [], "\n".join(overflow)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
 
 
 # --- pairing_diagnostics.py --------------------------------------------------------------

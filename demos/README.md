@@ -34,6 +34,7 @@ pip install "improcv[cv-headless,viz]==0.2.0a2"
 
 ```bash
 uv run python demos/augmentation_gallery.py
+uv run python demos/classification_report.py
 uv run python demos/pairing_diagnostics.py
 ```
 
@@ -43,6 +44,9 @@ instead (e.g. to inspect a candidate render before committing it), pass `--outpu
 ```bash
 uv run python demos/augmentation_gallery.py \
   --output /tmp/augmentation-gallery.png
+
+uv run python demos/classification_report.py \
+  --output /tmp/classification-report.png
 
 uv run python demos/pairing_diagnostics.py \
   --output /tmp/pairing-diagnostics.png
@@ -66,6 +70,36 @@ identically to the image and the mask. The rendered gallery shows:
 For a copyable, executable version of the same underlying contract (dataset discovery + one
 affine replay, without any rendering), see
 [`examples/discovery_and_augmentation.py`](../examples/discovery_and_augmentation.py).
+
+### `classification_report.py`
+
+<img
+  src="https://raw.githubusercontent.com/michalmaj/improcv/main/docs/assets/classification-report.png"
+  alt="improcv multiclass classification report showing an explicitly ordered confusion matrix, per-class precision recall F1 support, and per-class plus macro weighted and micro ROC AUC and average precision scores"
+  width="880"
+>
+
+Runs the existing public evaluation workflow -- `confusion_matrix` -> `classification_metrics` ->
+`multiclass_roc_auc_score` -> `multiclass_average_precision_score` -- on a small, explicit,
+hand-written multiclass example (the same one used by
+[`examples/classification_evaluation.py`](../examples/classification_evaluation.py), duplicated
+here so this generator stays self-contained). Shows:
+
+- `labels = [20, 10, 30]`, deliberately unsorted: it fixes both the confusion matrix's row/column
+  order and which `y_score` column belongs to which class -- `y_score[:, i]` corresponds to
+  `labels[i]`, never a sorted order;
+- the confusion matrix (rows are true labels, columns are predicted labels);
+- per-class precision, recall, F1, and support, plus accuracy and macro F1;
+- per-class ROC AUC and average precision, plus macro/weighted/micro summaries for both;
+- that `y_score`'s rows do not need to sum to `1.0` -- `improcv`'s multiclass ranking functions
+  never require a probability simplex.
+
+This demo does not call `roc_curve`/`precision_recall_curve` and does not render any curve --
+`improcv` does not yet have a public multiclass curve result type, so this shows the stable
+score-based API only, not a design for API that does not exist yet.
+
+For a copyable, executable version of the same workflow, see
+[`examples/classification_evaluation.py`](../examples/classification_evaluation.py).
 
 ### `pairing_diagnostics.py`
 

@@ -11,6 +11,13 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Classification report demo (`demos/classification_report.py`), the third and final entry in
+  `demos/`'s first gallery. Runs the real `confusion_matrix` -> `classification_metrics` ->
+  `multiclass_roc_auc_score` -> `multiclass_average_precision_score` workflow on a small, explicit
+  multiclass example, rendering the confusion matrix, per-class precision/recall/F1/support, and
+  per-class plus macro/weighted/micro ROC AUC and average precision -- with an explicit,
+  deliberately unsorted `labels` order controlling both the matrix and the `y_score` column
+  mapping. Headless, tested as a real subprocess in `tests/test_demos.py`. No new public API.
 - Pairing diagnostics demo (`demos/pairing_diagnostics.py`), the second entry in `demos/`. Renders
   a real, deterministic `discover_image_mask_pairs` success case next to a silent naive
   `zip(sorted(images), sorted(masks))` mispair, plus the real `ValueError`s the public API raises
