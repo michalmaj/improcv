@@ -407,6 +407,11 @@ def discover_image_mask_pairs(
     traversal (or after this function returns) is not detected, the same
     caveat `discover_images` itself already carries; no extra `stat` is
     performed here beyond what each `discover_images` call already does.
+    `image_extensions=None` and `mask_extensions=None` (the defaults) each
+    independently fall back to `discover_images`' own fixed default set --
+    `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tif`, `.tiff`, `.webp` -- not a
+    pairing-specific default; pass both explicitly when images and masks
+    use different formats (e.g. JPEG images with PNG masks).
 
     Each discovered path is turned into a *pairing key*: its POSIX-style
     path relative to its own root, with exactly one matched extension
