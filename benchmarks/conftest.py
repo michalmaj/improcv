@@ -16,15 +16,22 @@ import numpy as np
 
 import improcv
 
-# Single-threaded, no-OpenCL baseline: eliminates variance from the number of cores available
-# on whichever machine runs the benchmark. Read back immediately below rather than assumed --
-# a build without OpenCL support, for example, would otherwise silently report a request that
-# was never actually honored.
-cv2.setNumThreads(1)
-cv2.ocl.setUseOpenCL(False)
+# Request one OpenCV thread and disable OpenCL, then record the values actually reported by the
+# active OpenCV backend -- not every OpenCV backend honors a thread-count request (some parallel
+# frameworks manage their own thread pool outside this API), so "requested" and "observed" are
+# tracked as two separate facts, never conflated into a single "single-threaded baseline" claim.
+# Raw and improcv calls within one run still share the same process and the same actual active
+# configuration, whatever it turns out to be -- that comparability holds regardless of whether
+# the request was actually honored. Both requested and observed values are recorded in
+# machine_info below so a committed result is always interpretable on its own terms.
+_OPENCV_REQUESTED_NUM_THREADS = 1
+_OPENCV_REQUESTED_OPENCL_ENABLED = False
 
-_OPENCV_NUM_THREADS = cv2.getNumThreads()
-_OPENCV_OPENCL_ENABLED = cv2.ocl.useOpenCL()
+cv2.setNumThreads(_OPENCV_REQUESTED_NUM_THREADS)
+cv2.ocl.setUseOpenCL(_OPENCV_REQUESTED_OPENCL_ENABLED)
+
+_OPENCV_OBSERVED_NUM_THREADS = cv2.getNumThreads()
+_OPENCV_OBSERVED_OPENCL_ENABLED = cv2.ocl.useOpenCL()
 
 
 def pytest_benchmark_update_machine_info(config: object, machine_info: dict[str, object]) -> None:
@@ -34,13 +41,17 @@ def pytest_benchmark_update_machine_info(config: object, machine_info: dict[str,
     (via `py-cpuinfo`) in `machine_info`, and commit/dirty state separately in `commit_info` --
     none of that is duplicated here. `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS`/`MKL_NUM_THREADS`
     are recorded as the values actually found in the environment (`None` if unset), documenting
-    intent -- not a claim that any particular NumPy/OpenCV build actually honors them.
+    intent -- not a claim that any particular NumPy/OpenCV build actually honors them. Likewise,
+    `opencv_requested_*`/`opencv_*` record what was asked for and what the backend actually did
+    with it -- they are not guaranteed to match.
     """
     machine_info["numpy_version"] = np.__version__
     machine_info["opencv_version"] = cv2.__version__
     machine_info["improcv_version"] = improcv.__version__
-    machine_info["opencv_num_threads"] = _OPENCV_NUM_THREADS
-    machine_info["opencv_opencl_enabled"] = _OPENCV_OPENCL_ENABLED
+    machine_info["opencv_requested_num_threads"] = _OPENCV_REQUESTED_NUM_THREADS
+    machine_info["opencv_num_threads"] = _OPENCV_OBSERVED_NUM_THREADS
+    machine_info["opencv_requested_opencl_enabled"] = _OPENCV_REQUESTED_OPENCL_ENABLED
+    machine_info["opencv_opencl_enabled"] = _OPENCV_OBSERVED_OPENCL_ENABLED
     machine_info["OMP_NUM_THREADS"] = os.environ.get("OMP_NUM_THREADS")
     machine_info["OPENBLAS_NUM_THREADS"] = os.environ.get("OPENBLAS_NUM_THREADS")
     machine_info["MKL_NUM_THREADS"] = os.environ.get("MKL_NUM_THREADS")

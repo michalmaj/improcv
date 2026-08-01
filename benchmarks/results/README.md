@@ -6,18 +6,21 @@ deliberately reviewed baselines.
 ## Policy
 
 - Only consciously reviewed baseline JSON files are committed here, produced with the "Stable
-  local run" command in `benchmarks/README.md` (single-threaded OpenCV, explicit warm-up, at
-  least 20 rounds).
+  local run" command in `benchmarks/README.md` -- a run produced after requesting one OpenCV
+  thread and disabling OpenCL, with both the requested and the observed state recorded in
+  `machine_info`, plus an explicit warm-up phase and at least 20 rounds.
 - A new run creates a **new** file. Existing result files are never overwritten.
 - A run later found to be flawed is either replaced by a new file (with a note in this directory,
   or in an accompanying Markdown file, explaining why) or superseded by a newer dated file --
   never silently amended or deleted.
 - Every committed result must be traceable to an environment: the JSON itself carries
-  `machine_info` (including the `improcv`/NumPy/OpenCV versions and the actual observed OpenCV
-  thread count and OpenCL state, added by `benchmarks/conftest.py`) and `commit_info` (including
-  the commit SHA and whether the working tree was dirty at capture time).
+  `machine_info` (including the `improcv`/NumPy/OpenCV versions, and both the requested and the
+  actually observed OpenCV thread count and OpenCL state, added by `benchmarks/conftest.py`) and
+  `commit_info` (including the commit SHA and whether the working tree was dirty at capture time).
+- A result whose observed thread/OpenCL state differs from the requested state is still valid,
+  but it must be interpreted and compared using the *observed* state, not the requested one.
 - Results captured on different machines are not directly comparable to each other -- only to
-  other results captured on the *same* machine.
+  other results captured on the *same* machine under a matching observed configuration.
 
 ## Filename format
 
