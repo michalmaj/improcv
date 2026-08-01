@@ -129,8 +129,10 @@ For a copyable, executable version of the underlying discovery contract, see
 
 - **Headless.** No GUI, no `cv2.imshow`, no `cv2.waitKey`. Every demo runs to completion under
   `MPLBACKEND=Agg` with no display attached.
-- **No external data.** Every input is generated in-process from a synthetic scene and a fixed
-  `numpy.random.Generator` seed; nothing is downloaded or read from disk.
+- **No external data or network access.** Inputs are generated locally:
+  `augmentation_gallery.py` uses a seeded synthetic scene, `classification_report.py` uses small
+  explicit values, and `pairing_diagnostics.py` uses an automatically cleaned temporary directory
+  so it can exercise the real filesystem discovery API.
 - **Semantics, not bytes.** Regenerating an asset on a different OS, Python, NumPy, OpenCV, or
   Matplotlib version is guaranteed to reproduce the same geometry, labels, and shapes (checked by
   `tests/test_demos.py`), but **not** a bitwise-identical PNG -- font rasterization and layout
