@@ -1,7 +1,8 @@
 # Benchmarks
 
-Opt-in, developer-only performance measurements for `improcv`'s affine augmentation API. Never
-part of the normal test suite, never a runtime dependency, never a gate on ordinary PRs.
+Opt-in, developer-only performance measurements for `improcv`. Currently covers two families --
+affine augmentation and dataset discovery -- never part of the normal test suite, never a
+runtime dependency, never a gate on ordinary PRs.
 
 ## Purpose
 
@@ -12,6 +13,12 @@ These benchmarks answer:
 - What does the second, label-safe warp of a segmentation mask cost on top of the image warp?
 - What does the pure-Python geometry (`sample_affine`, `expand_affine_canvas`) cost, independent
   of any OpenCV kernel?
+- How does `discover_images`'s full recursive traversal (fresh stat, extension filter, global
+  sort) scale with file count?
+- What does `discover_image_mask_pairs`'s additional pairing work (extension stripping,
+  grouping, duplicate/key-set checks) cost on top of two plain traversals?
+- How should a warm-filesystem-cache measurement be interpreted, given that it deliberately
+  excludes cold-start cost?
 
 ## Non-goals
 
@@ -22,7 +29,12 @@ These benchmarks are **not**:
 - a comparison against scikit-learn (not a dependency of this project, and its contracts differ);
 - a timing gate on ordinary pull requests;
 - a measurement of inference or DNN workloads;
-- an end-to-end dataset-workflow benchmark (discover -> load -> augment).
+- an end-to-end dataset-workflow benchmark (discover -> load -> augment);
+- a cold filesystem-cache measurement;
+- a filesystem comparison between APFS/ext4/NTFS or any other pair of filesystems;
+- a measurement of image decoding or dataset loading;
+- a raw comparison against `os.walk`/`Path.rglob`/`glob` (see "Current scope" below for why
+  discovery has no raw baseline).
 
 ## Installation and smoke
 
@@ -42,6 +54,26 @@ uv run --group benchmark pytest benchmarks/ --benchmark-disable
 
 This is also what CI runs (see "CI" below) -- it is a correctness/collection smoke check, not a
 timing run.
+
+## Running one family
+
+Either family can be pointed at directly instead of all of `benchmarks/`. For discovery:
+
+```bash
+uv run --group benchmark pytest benchmarks/benchmark_discovery.py --benchmark-disable
+```
+
+A short, non-baseline functional run (a handful of rounds, useful for a quick local sanity
+check that timings scale sensibly, never for recording or comparing numbers):
+
+```bash
+uv run --group benchmark pytest benchmarks/benchmark_discovery.py \
+  --benchmark-warmup=on --benchmark-min-rounds=2 --benchmark-max-time=0.05
+```
+
+Numbers from this short command are **not** a baseline -- too few rounds, no thread/OpenCL
+pinning, no storage. Use the "Stable local run" commands below (pointed at the specific file)
+for anything worth recording.
 
 ## Stable local run
 
@@ -158,6 +190,8 @@ ratio = median(improcv) / median(raw)
 
 ## Current scope
 
+### Affine augmentation
+
 Three groups, all affine, at three sizes (`64x64`, `640x480`, `1920x1080`) unless noted:
 
 - `affine-python-geometry` -- `sample_affine` (non-degenerate ranges) and
@@ -169,10 +203,36 @@ Three groups, all affine, at three sizes (`64x64`, `640x480`, `1920x1080`) unles
   mask call forced to `INTER_NEAREST`, matching `apply_affine`'s own contract), at all three
   sizes.
 
-Perspective (`sample_perspective`/`apply_perspective`/`cv2.warpPerspective`) is deliberately out
-of scope for this first slice -- affine already exercises the tool, the parameter contract, the
-raw/wrapper grouping, scaling, and both image-only and image+mask cases. It is expected to follow
-as a small, separate extension once this baseline has been reviewed.
+Perspective (`sample_perspective`/`apply_perspective`/`cv2.warpPerspective`) remains a possible
+later extension, but the next added family was discovery scaling (below) instead -- it exercises
+filesystem traversal, sorting, and pairing behavior not represented by the affine baseline at
+all, which perspective would not have added.
+
+### Dataset discovery
+
+Two groups, at three entry counts (`100`, `1,000`, `10,000`), defined in
+`benchmark_discovery.py`:
+
+- `discovery-images` -- `discover_images` over a single root of zero-byte, extension-only
+  discovery entries, split across 10 shard directories.
+- `discovery-pairs` -- `discover_image_mask_pairs` over a matching pair of image/mask roots
+  (each with the same shard layout), producing the same entry count in pairs.
+
+Every entry is a zero-byte file created with `Path.touch()`, split across exactly 10 shard
+directories per root (`shard_00` .. `shard_09`) with `sample_NNNNNN.jpg`/`.png` filenames --
+never a valid encoded image, since `discover_images` finds files by extension only and never
+opens, decodes, or otherwise inspects their content. Both benchmarks perform one untimed,
+asserted preflight call before the timed one, to validate the dataset and warm the filesystem
+metadata cache -- these are **warm filesystem-cache** measurements only, never cold-start ones
+(see "Non-goals" above).
+
+There is no raw `os.walk`/`Path.rglob`/`glob` baseline for either group: `discover_images`'s
+contract (fresh per-entry `os.stat(..., follow_symlinks=False)`, symlink/reparse-point
+skipping, a hidden-file policy, a deterministic global POSIX-relative sort, extension
+normalization) and `discover_image_mask_pairs`'s additional strict-bijection pairing have no
+raw equivalent of matching strength -- a ratio against a semantically weaker iterator would not
+be a meaningful comparison. This first discovery slice measures how the public API itself
+scales with entry count.
 
 ## Results
 
@@ -202,6 +262,14 @@ Three observations from that specific machine and run, elaborated on in the repo
   the rest, traced to a small fraction (~0.1%) of rounds affected by ordinary OS scheduling
   jitter -- its median/IQR (this project's primary statistics) were unremarkable.
 
+### Dataset discovery
+
+No result is committed for the discovery family yet -- this PR adds only the cases, data,
+grouping, and this documentation. A first discovery baseline will follow in a separate PR, from
+a clean, final harness SHA, using the same compact, stats-only saved-run format described above
+(`--benchmark-save`/`--benchmark-storage`, no `stats.data`); a full-data capture would only be
+used again for a specific, reviewed diagnostic need, exactly as for the affine family.
+
 ## Future engineering stories
 
 Once a real optimization is made based on these benchmarks, it will be documented here in the
@@ -218,5 +286,5 @@ No examples or numbers are invented ahead of an actual case.
 CI runs exactly one non-timing smoke job: `uv run --group benchmark pytest benchmarks/
 --benchmark-disable` on a single platform/Python/OpenCV combination. It checks that the harness
 imports, collects, and its fixtures and correctness assertions still pass -- it asserts nothing
-about timing, and produces no JSON. The normal `uv run pytest` used everywhere else never touches
-`benchmarks/` at all.
+about timing, and produces no JSON. This collects both families (20 affine cases + 6 discovery
+cases). The normal `uv run pytest` used everywhere else never touches `benchmarks/` at all.

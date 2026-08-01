@@ -11,6 +11,17 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Opt-in dataset discovery scaling benchmarks (`benchmarks/benchmark_discovery.py`), covering
+  `discover_images` and `discover_image_mask_pairs` at 100/1,000/10,000 entries over
+  deterministic, sharded temporary trees (10 shard directories per root). Every entry is a
+  zero-byte file created with `Path.touch()`, matching `discover_images`'s documented
+  extension-only contract exactly -- content is never opened, decoded, or inspected either by
+  the library or by this measurement. Each benchmarked call is preceded by an untimed, asserted
+  preflight call that validates the dataset and warms the filesystem metadata cache, so both
+  groups (`discovery-images`, `discovery-pairs`) measure warm-filesystem-cache traversal only.
+  No runtime dependency, no timing gate, and no new baseline committed by this change --
+  `benchmarks/README.md` documents scope and how to run this family; a first stats-only baseline
+  will follow in a separate PR.
 - First reviewed affine augmentation benchmark baseline (`benchmarks/results/2026-08-01-augmentation-baseline.json`
   and its accompanying `.md` report), captured from the finalized harness at commit
   `55ed9b6d92942b35319b13faf95938c51bc4cbc9` with a clean working tree. The raw JSON is an
