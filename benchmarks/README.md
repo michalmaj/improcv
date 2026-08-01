@@ -45,8 +45,43 @@ timing run.
 
 ## Stable local run
 
-A baseline worth recording uses an explicit warm-up phase and at least 20 rounds per case, with
-the JSON written outside the repository:
+A baseline worth recording uses an explicit warm-up phase and at least 20 rounds per case, run on
+a laptop plugged into power, without heavy background load, and ideally without other CPU-bound
+processes competing for the same cores -- none of this can be enforced by the harness itself.
+
+There are two distinct native `pytest-benchmark` output modes for this, and they are not
+interchangeable.
+
+### Reviewed baseline candidate (default)
+
+```bash
+rm -rf /tmp/improcv-benchmark-storage
+
+OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 \
+uv run --group benchmark pytest benchmarks/ \
+  --benchmark-warmup=on \
+  --benchmark-min-rounds=20 \
+  --benchmark-storage=file:///tmp/improcv-benchmark-storage \
+  --benchmark-save=augmentation-baseline
+```
+
+This writes a **saved run** under
+`/tmp/improcv-benchmark-storage/<platform-tag>/NNNN_augmentation-baseline.json` (the exact
+subdirectory name depends on platform/Python; find it with `find /tmp/improcv-benchmark-storage
+-type f`). It is a native, unedited `pytest-benchmark` output -- not something this project
+post-processes or reduces -- that, by default, contains `machine_info`, `commit_info`, per-case
+`group`/`params`/`extra_info`, and summary statistics (`median`/`mean`/`stddev`/`iqr`/`rounds`/
+etc.) for every case, but **not** the full array of every individual round's timing
+(`stats.data` is absent from a plain `--benchmark-save`, confirmed directly against this
+project's `pytest-benchmark` version). This is the default candidate for committing after review:
+copy the generated file byte-for-byte into `benchmarks/results/` (never edited, never manually
+stripped of anything) once its exact commit SHA is clean (`dirty: false`), its machine metadata is
+captured, and it has an accompanying reviewed Markdown report -- the same immutable-results policy
+already in effect (see `benchmarks/results/README.md`).
+
+### Full-data diagnostic capture (optional)
 
 ```bash
 OMP_NUM_THREADS=1 \
@@ -55,15 +90,30 @@ MKL_NUM_THREADS=1 \
 uv run --group benchmark pytest benchmarks/ \
   --benchmark-warmup=on \
   --benchmark-min-rounds=20 \
-  --benchmark-json=/tmp/improcv-augmentation-benchmark.json
+  --benchmark-json=/tmp/improcv-augmentation-full-data.json
 ```
+
+`--benchmark-json` writes the *complete* per-round timing array (`stats.data`) for every case,
+alongside the same machine/commit/per-case metadata as the saved run above. For a fast case run
+tens of thousands of times, this can be tens of megabytes -- `results/2026-08-01-augmentation-
+baseline.json` (the first-ever baseline, kept as a historical exception; see "Results" below) is
+one such file, at ~20.9 MB. It is genuinely useful for diagnosing outliers and the shape of the
+per-round distribution, but it stays **outside the repository by default**, and is only committed
+when there is a specific, reviewed diagnostic reason to keep the full distribution rather than its
+summary statistics.
+
+Passing `--benchmark-save-data` alongside `--benchmark-save`/`--benchmark-storage` produces the
+same full-data effect *inside* a saved run -- confirmed directly: a saved run captured with
+`--benchmark-save-data` is the same size class as a plain `--benchmark-json` capture, not the
+compact saved run above. For that reason, `--benchmark-save-data` is deliberately absent from the
+default baseline command.
 
 The three thread-count environment variables, together with `benchmarks/conftest.py`'s own
 `cv2.setNumThreads(1)`/`cv2.ocl.setUseOpenCL(False)` calls at session start, document *intent* --
 they are not a guarantee that this environment's active OpenCV backend actually honors them. The
 harness requests one OpenCV thread and disables OpenCL, then records the state *actually*
 reported by the active backend afterward (`cv2.getNumThreads()`/`cv2.ocl.useOpenCL()`), and writes
-both the request and the observation into the JSON's `machine_info`
+both the request and the observation into `machine_info`
 (`opencv_requested_num_threads` vs. `opencv_num_threads`,
 `opencv_requested_opencl_enabled` vs. `opencv_opencl_enabled`) -- never only one of the two.
 
@@ -79,10 +129,6 @@ succeeded. Raw and `improcv` calls within the *same* run remain both semanticall
 environmentally comparable to each other regardless -- they run in the same process against
 whatever the actual active OpenCV configuration turns out to be.
 `NUMEXPR_NUM_THREADS` is deliberately not set: this project does not depend on NumExpr.
-
-Run on a laptop, this also means: plugged into power, without heavy background load, and ideally
-without other CPU-bound processes competing for the same cores -- none of this can be enforced by
-the harness itself.
 
 ## Interpretation
 
@@ -137,6 +183,14 @@ The first reviewed baseline is captured:
 
 The reviewed narrative report contains the interpretation and tables; the JSON remains the raw
 source of truth. See `benchmarks/results/README.md` for the policy governing committed results.
+
+That first JSON is a **full-data capture** (~20.9 MB, generated with `--benchmark-json`,
+including the complete per-round timing array for all 14 cases) -- kept exactly as it is, as a
+historical exception documenting the very first run in maximum detail and enabling per-round
+outlier analysis (see the report's own "Measurement spread" section). It is not a mistake and
+will not be replaced or trimmed. It is also not the default going forward: subsequent baselines
+are expected to use the compact, stats-only saved-run format described in "Stable local run"
+above, reserving a full-data capture for cases with a specific, reviewed diagnostic need.
 
 Three observations from that specific machine and run, elaborated on in the report itself:
 
