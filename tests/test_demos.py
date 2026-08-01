@@ -284,9 +284,32 @@ def test_build_missing_pair_scenario_raises_and_identifies_both_keys(
         assert "orphan" in scenario.raw_diagnostic
         assert str(root) not in scenario.raw_diagnostic
 
-    assert "REJECTED" in scenario.result_text
-    assert "lonely" in scenario.result_text
-    assert "orphan" in scenario.result_text
+    for expected in (
+        "WRONG BUT SILENT",
+        "discover_image_mask_pairs",
+        "REJECTED",
+        "image keys without a matching mask",
+        "train/lonely",
+        "mask keys without a matching image",
+        "train/orphan",
+    ):
+        assert expected in scenario.result_text, expected
+
+    # The final line naming the unmatched mask key must survive intact, not be replaced by a
+    # "... (N more lines)" truncation summary.
+    assert scenario.result_text.rstrip().endswith("'train/orphan'")
+    assert "..." not in scenario.result_text
+
+    # The rendered fragment naming both keys must be an exact, contiguous slice of the real
+    # captured exception text, not a paraphrase or hand-typed replacement.
+    assert scenario.raw_diagnostic is not None
+    real_fragment = scenario.raw_diagnostic[
+        scenario.raw_diagnostic.index("image keys without a matching mask:") :
+    ]
+    assert real_fragment in scenario.result_text
+
+    assert str(root) not in scenario.result_text
+    assert "\\" not in scenario.result_text
 
 
 def test_build_duplicate_key_scenario_raises_and_identifies_both_paths(
@@ -336,3 +359,34 @@ def test_render_directory_tree_is_sorted_relative_and_posix_style(
     assert tree == (
         "dataset/\n  images/\n    train/\n      a.jpg\n      b.jpg\n  masks/\n    train/"
     )
+
+
+def test_pairing_diagnostics_panel_text_never_overflows_its_axes(
+    pairing_module: types.ModuleType,
+) -> None:
+    # Regression test for a real bug: the missing-pair scenario's result panel used to render
+    # its final lines below its own axes' bottom edge. No OCR, no reading pixels back from a
+    # PNG -- this builds the actual figure, forces a draw so Matplotlib finalizes every
+    # artist's on-screen position, and compares each panel's text bounding box against its own
+    # axes' bounding box directly via find_text_overflow.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        scenarios = (
+            pairing_module.build_success_scenario(root),
+            pairing_module.build_missing_pair_scenario(root),
+            pairing_module.build_duplicate_key_scenario(root),
+        )
+
+    fig, panel_texts = pairing_module.build_diagnostics_figure(scenarios)
+    try:
+        assert len(panel_texts) == 6, "expected one tree panel and one result panel per row"
+
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        overflow = pairing_module.find_text_overflow(panel_texts, renderer)
+
+        assert overflow == [], "\n".join(overflow)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
