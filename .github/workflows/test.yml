@@ -131,6 +131,33 @@ jobs:
       - name: Test
         run: uv run --no-sync pytest
 
+  benchmark-smoke:
+    # Non-timing correctness/collection check for benchmarks/ -- one platform, no matrix.
+    # `benchmarks/` sits outside `testpaths` above, so the `test` job's plain `pytest` never
+    # touches it; this job exists solely to catch a benchmark file that stopped importing,
+    # collecting, or passing its own correctness assertions. --benchmark-disable runs every
+    # case exactly once with no statistics, no JSON, and no timing assertions of any kind.
+    name: Benchmark smoke (ubuntu-latest, Python 3.14, OpenCV headless)
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          python-version: "3.14"
+
+      - name: Install dependencies (default groups + benchmark)
+        run: uv sync --locked --group benchmark
+
+      - name: Benchmark smoke -- collection and correctness only, no timing
+        run: uv run --no-sync pytest benchmarks/ --benchmark-disable
+
   lowest-deps:
     # Everything above always resolves via uv.lock, which picks the
     # newest version satisfying each constraint — so numpy>=1.24,
@@ -255,6 +282,7 @@ jobs:
       - build
       - test-windows
       - test-macos
+      - benchmark-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Check all release-critical jobs succeeded
@@ -267,7 +295,8 @@ jobs:
             "lowest-deps=${{ needs.lowest-deps.result }}" \
             "build=${{ needs.build.result }}" \
             "test-windows=${{ needs.test-windows.result }}" \
-            "test-macos=${{ needs.test-macos.result }}"
+            "test-macos=${{ needs.test-macos.result }}" \
+            "benchmark-smoke=${{ needs.benchmark-smoke.result }}"
           do
             name="${entry%%=*}"
             result="${entry#*=}"

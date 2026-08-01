@@ -11,6 +11,15 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Opt-in `pytest-benchmark` harness (`benchmarks/`, new dev-only `benchmark` dependency group)
+  covering `sample_affine`, `expand_affine_canvas`, and `apply_affine` (image-only and
+  image+mask) against raw `cv2.warpAffine` baselines that share the same matrix, `dsize`,
+  interpolation, and border handling -- asserted equal via dedicated correctness tests, at three
+  image sizes (`64x64`/`640x480`/`1920x1080`) on deterministic, seeded synthetic inputs. Records
+  machine/environment metadata (Python/NumPy/OpenCV/`improcv` versions, observed OpenCV thread
+  count and OpenCL state) alongside each run. No runtime dependency, no public extra, and no
+  timing gate: benchmarks are excluded from the normal test suite; CI only executes a one-shot
+  non-timing smoke run with `pytest-benchmark` disabled.
 - Classification report demo (`demos/classification_report.py`), the third and final entry in
   `demos/`'s first gallery. Runs the real `confusion_matrix` -> `classification_metrics` ->
   `multiclass_roc_auc_score` -> `multiclass_average_precision_score` workflow on a small, explicit
