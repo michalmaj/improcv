@@ -1,8 +1,8 @@
 # Benchmarks
 
-Opt-in, developer-only performance measurements for `improcv`. Currently covers two families --
-affine augmentation and dataset discovery -- never part of the normal test suite, never a
-runtime dependency, never a gate on ordinary PRs.
+Opt-in, developer-only performance measurements for `improcv`. Currently covers three families --
+affine augmentation, dataset discovery, and multiclass evaluation -- never part of the normal
+test suite, never a runtime dependency, never a gate on ordinary PRs.
 
 ## Purpose
 
@@ -19,6 +19,14 @@ These benchmarks answer:
   grouping, duplicate/key-set checks) cost on top of two plain traversals?
 - How should a warm-filesystem-cache measurement be interpreted, given that it deliberately
   excludes cold-start cost?
+- How does label-based evaluation (`confusion_matrix`, `classification_metrics`) scale with
+  sample count?
+- How does one-vs-rest ranking (`multiclass_roc_auc_score`, `multiclass_average_precision_score`)
+  scale with sample count?
+- How does that same ranking scale with class count, independent of sample count?
+- What cost does each function's full public contract (explicit unsorted labels, type/value
+  validation, no probability-simplex requirement, canonical order-independent reductions,
+  read-only results) add, and does that cost remain part of every timed call?
 
 ## Non-goals
 
@@ -34,7 +42,14 @@ These benchmarks are **not**:
 - a filesystem comparison between APFS/ext4/NTFS or any other pair of filesystems;
 - a measurement of image decoding or dataset loading;
 - a raw comparison against `os.walk`/`Path.rglob`/`glob` (see "Current scope" below for why
-  discovery has no raw baseline).
+  discovery has no raw baseline);
+- coverage of every `average` mode (`micro`/`weighted`/`None`) -- only `average="macro"` is
+  measured in this first evaluation slice;
+- a measurement with `sample_weight`;
+- a measurement of binary curves (`roc_curve`/`precision_recall_curve`) or binary
+  `roc_auc_score`/`average_precision_score`;
+- a model-inference or end-to-end model-evaluation benchmark;
+- a claim of proven asymptotic complexity from a handful of measured points.
 
 ## Installation and smoke
 
@@ -57,18 +72,32 @@ timing run.
 
 ## Running one family
 
-Either family can be pointed at directly instead of all of `benchmarks/`. For discovery:
+Any family can be pointed at directly instead of all of `benchmarks/`. For discovery:
 
 ```bash
 uv run --group benchmark pytest benchmarks/benchmark_discovery.py --benchmark-disable
 ```
 
-A short, non-baseline functional run (a handful of rounds, useful for a quick local sanity
-check that timings scale sensibly, never for recording or comparing numbers):
+For evaluation:
 
 ```bash
-uv run --group benchmark pytest benchmarks/benchmark_discovery.py \
-  --benchmark-warmup=on --benchmark-min-rounds=2 --benchmark-max-time=0.05
+uv run --group benchmark pytest \
+  benchmarks/benchmark_evaluation.py \
+  --benchmark-disable
+```
+
+A short, non-baseline functional run (a handful of rounds, useful for a quick local sanity
+check that timings scale sensibly, never for recording or comparing numbers) -- for evaluation:
+
+```bash
+OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 \
+uv run --group benchmark pytest \
+  benchmarks/benchmark_evaluation.py \
+  --benchmark-warmup=on \
+  --benchmark-min-rounds=2 \
+  --benchmark-max-time=0.05
 ```
 
 Numbers from this short command are **not** a baseline -- too few rounds, no thread/OpenCL
@@ -234,6 +263,38 @@ raw equivalent of matching strength -- a ratio against a semantically weaker ite
 be a meaningful comparison. This first discovery slice measures how the public API itself
 scales with entry count.
 
+### Multiclass evaluation
+
+Four groups, defined in `benchmark_evaluation.py`, along two independent scaling axes:
+
+- `evaluation-confusion-matrix` -- `confusion_matrix`, at 1,000/10,000/100,000 samples, fixed 10
+  classes.
+- `evaluation-classification-metrics` -- `classification_metrics(..., average="macro")`, the
+  same sample-count axis, sharing its dataset with `evaluation-confusion-matrix`.
+- `evaluation-roc-auc-macro` -- `multiclass_roc_auc_score(..., average="macro")`, at the same
+  three sample counts (fixed 10 classes) plus 3/10/100 classes (fixed 10,000 samples) -- five
+  scenarios total, `(10_000, 10)` shared between the two axes rather than duplicated.
+- `evaluation-average-precision-macro` -- `multiclass_average_precision_score(...,
+  average="macro")`, the same five scenarios, sharing its dataset with `evaluation-roc-auc-macro`.
+
+Every dataset uses an explicit, deliberately **unsorted** `labels` tuple
+(`(1, 2, ..., n_classes - 1, 0)`) -- this exercises the real explicit-label contract, not a
+sorted-by-coincidence shortcut. `y_true`/`y_pred` are `int64` ndarrays from a balanced-by-
+construction class assignment with a deterministic every-fifth-sample error policy (no
+randomness). `y_score` (ranking scenarios only) is a seeded, `float64`, C-contiguous
+`(n_samples, n_classes)` matrix with a `+0.75` boost on each row's true-class column -- rows are
+deliberately **not** probability-normalized, since neither ranking function requires a
+probability simplex.
+
+There is no raw NumPy or scikit-learn baseline: no single reference implementation shares this
+API's full contract (explicit unsorted `labels`, full validation, no probability-simplex
+requirement, canonical order-independent reductions, read-only results) -- `sklearn.metrics.
+roc_auc_score`'s multiclass mode, for comparison, requires row-normalized probabilities and a
+pre-sorted explicit `labels`, two real contract differences that would make any ratio compare
+different semantics rather than the same workflow. This first evaluation slice measures how the
+public API itself scales with sample and class count. Only `average="macro"` is measured; no
+`sample_weight`.
+
 ## Results
 
 ### Affine augmentation
@@ -291,6 +352,14 @@ Three observations from that specific machine and run, elaborated on in the repo
   the matching per-root count on this run, but that is not treated as an isolated "pairing
   overhead" figure (see the report's "Interpretation" section for why).
 
+### Multiclass evaluation
+
+No committed evaluation baseline yet -- this PR adds only the harness, data, grouping, and this
+documentation. A first evaluation baseline will follow in a separate PR, using the same compact,
+stats-only saved-run format described above (`--benchmark-save`/`--benchmark-storage`, no
+`stats.data`); a full-data capture would only be used again for a specific, reviewed diagnostic
+need, exactly as for the affine and discovery families.
+
 ## Future engineering stories
 
 Once a real optimization is made based on these benchmarks, it will be documented here in the
@@ -307,5 +376,6 @@ No examples or numbers are invented ahead of an actual case.
 CI runs exactly one non-timing smoke job: `uv run --group benchmark pytest benchmarks/
 --benchmark-disable` on a single platform/Python/OpenCV combination. It checks that the harness
 imports, collects, and its fixtures and correctness assertions still pass -- it asserts nothing
-about timing, and produces no JSON. This collects both families (20 affine cases + 6 discovery
-cases). The normal `uv run pytest` used everywhere else never touches `benchmarks/` at all.
+about timing, and produces no JSON. This collects all three families (20 affine cases + 6
+discovery cases + 16 evaluation cases = 42). The normal `uv run pytest` used everywhere else
+never touches `benchmarks/` at all.

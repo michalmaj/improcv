@@ -11,6 +11,17 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Opt-in multiclass evaluation scaling benchmarks (`benchmarks/benchmark_evaluation.py`),
+  covering `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_score`, and
+  `multiclass_average_precision_score` (the latter three at `average="macro"`). Two independent
+  scaling axes: sample count (1,000/10,000/100,000, fixed 10 classes) for the label-based
+  functions, and class count (3/10/100, fixed 10,000 samples) for the two ranking functions, on
+  top of their own sample-count axis. Every dataset is deterministic and synthetic -- an
+  explicit, deliberately unsorted `labels` order, `int64` `y_true`/`y_pred` with a fixed
+  every-fifth-sample error policy, and (for ranking) a seeded `float64` score matrix that is
+  intentionally not row-normalized to a probability simplex. No runtime dependency, no timing
+  gate, and no new baseline committed by this change -- `benchmarks/README.md` documents scope
+  and how to run this family; a first stats-only baseline will follow in a separate PR.
 - First reviewed dataset discovery benchmark baseline
   (`benchmarks/results/2026-08-01-discovery-baseline.json` and its accompanying `.md` report),
   captured from the finalized harness at commit `50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` with a
