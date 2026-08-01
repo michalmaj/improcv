@@ -5,7 +5,8 @@ Only ever collected by an explicit `uv run --group benchmark pytest benchmarks/`
 never sees this file. See `benchmarks/README.md` for what these cases answer, how to run a
 stable local baseline, and how to read the results.
 
-Three groups:
+Three `@pytest.mark.benchmark(group=...)` groups (a real `pytest-benchmark` grouping, reflected
+in each benchmark entry's own `group` field, not just this comment):
 
 - `affine-python-geometry` -- `sample_affine`/`expand_affine_canvas`, pure Python/NumPy geometry
   with no OpenCV kernel involved.
@@ -14,6 +15,9 @@ Three groups:
 - `affine-image-mask` -- `apply_affine` on an image plus a segmentation mask vs. two raw
   `cv2.warpAffine` calls (the second forced to `INTER_NEAREST`, matching the mask's own
   label-safe contract), at three sizes.
+
+The six correctness tests (`*_matches_raw_kernel(s)`) do not use the `benchmark` fixture and
+carry no group marker -- they are plain assertions, never a benchmark entry in the JSON output.
 
 Every raw/`improcv` pair shares the same image, mask, and `AffineParameters` object, and the raw
 side always performs the same warp (same matrix, `dsize`, interpolation, and border handling) --
@@ -32,6 +36,7 @@ import improcv as im
 _SIZES: list[tuple[int, int]] = [(64, 64), (640, 480), (1920, 1080)]
 _SIZE_IDS = ["64x64", "640x480", "1920x1080"]
 
+_IMAGE_BORDER_VALUE = 0
 _MASK_BORDER_VALUE = 255
 _SEED = 20260801
 
@@ -95,6 +100,7 @@ def affine_params(size: tuple[int, int]) -> im.AffineParameters:
 # --- affine-python-geometry --------------------------------------------------------------
 
 
+@pytest.mark.benchmark(group="affine-python-geometry")
 def test_sample_affine_random_ranges(benchmark: object) -> None:
     """`sample_affine` with real, non-degenerate ranges -- not the singleton fast path used
     elsewhere in this file to build a fixed transform for the apply benchmarks below.
@@ -128,6 +134,7 @@ def test_sample_affine_random_ranges(benchmark: object) -> None:
     )
 
 
+@pytest.mark.benchmark(group="affine-python-geometry")
 def test_expand_affine_canvas(benchmark: object) -> None:
     params = _build_affine_params(640, 480)
 
@@ -166,6 +173,7 @@ def test_apply_affine_image_only_matches_raw_kernel(size: tuple[int, int]) -> No
     assert np.array_equal(raw_result, improcv_result)
 
 
+@pytest.mark.benchmark(group="affine-image-only")
 def test_apply_affine_image_only(
     benchmark: object,
     implementation: str,
@@ -183,7 +191,7 @@ def test_apply_affine_image_only(
             dsize,
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
+            borderValue=_IMAGE_BORDER_VALUE,
         )
 
     def run_improcv() -> np.ndarray:
@@ -205,6 +213,8 @@ def test_apply_affine_image_only(
             "mask_dtype": None,
             "interpolation": "INTER_LINEAR",
             "border_mode": "BORDER_CONSTANT",
+            "image_border_value": _IMAGE_BORDER_VALUE,
+            "mask_border_value": None,
         }
     )
 
@@ -246,6 +256,7 @@ def test_apply_affine_image_mask_matches_raw_kernels(size: tuple[int, int]) -> N
     assert np.array_equal(raw_mask, wrapped.mask)
 
 
+@pytest.mark.benchmark(group="affine-image-mask")
 def test_apply_affine_image_mask(
     benchmark: object,
     implementation: str,
@@ -264,7 +275,7 @@ def test_apply_affine_image_mask(
             dsize,
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
+            borderValue=_IMAGE_BORDER_VALUE,
         )
         raw_mask = cv2.warpAffine(
             mask,
@@ -302,5 +313,7 @@ def test_apply_affine_image_mask(
             "mask_dtype": "uint8",
             "interpolation": "INTER_LINEAR/INTER_NEAREST",
             "border_mode": "BORDER_CONSTANT",
+            "image_border_value": _IMAGE_BORDER_VALUE,
+            "mask_border_value": _MASK_BORDER_VALUE,
         }
     )

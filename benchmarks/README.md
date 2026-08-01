@@ -46,12 +46,7 @@ timing run.
 ## Stable local run
 
 A baseline worth recording uses an explicit warm-up phase and at least 20 rounds per case, with
-the JSON written outside the repository. `benchmarks/conftest.py` requests a single-threaded,
-OpenCL-disabled OpenCV at session start and records what was *actually* achieved, not just what
-was requested -- on at least one real development machine (macOS, OpenCV 5.0.0, `Parallel
-framework: GCD`), `cv2.setNumThreads(1)` is a documented no-op and `cv2.getNumThreads()` still
-reports the full core count afterward, while `cv2.ocl.setUseOpenCL(False)` does take effect. Both
-observed values end up in the committed JSON's `machine_info` regardless of which way they go:
+the JSON written outside the repository:
 
 ```bash
 OMP_NUM_THREADS=1 \
@@ -63,10 +58,27 @@ uv run --group benchmark pytest benchmarks/ \
   --benchmark-json=/tmp/improcv-augmentation-benchmark.json
 ```
 
-The three thread-count environment variables document *intent*, not a guarantee that every
-NumPy/OpenCV build actually honors them -- the real, observed OpenCV thread count and OpenCL
-state are recorded in the JSON regardless (see `benchmarks/conftest.py`). `NUMEXPR_NUM_THREADS`
-is deliberately not set: this project does not depend on NumExpr.
+The three thread-count environment variables, together with `benchmarks/conftest.py`'s own
+`cv2.setNumThreads(1)`/`cv2.ocl.setUseOpenCL(False)` calls at session start, document *intent* --
+they are not a guarantee that this environment's active OpenCV backend actually honors them. The
+harness requests one OpenCV thread and disables OpenCL, then records the state *actually*
+reported by the active backend afterward (`cv2.getNumThreads()`/`cv2.ocl.useOpenCL()`), and writes
+both the request and the observation into the JSON's `machine_info`
+(`opencv_requested_num_threads` vs. `opencv_num_threads`,
+`opencv_requested_opencl_enabled` vs. `opencv_opencl_enabled`) -- never only one of the two.
+
+On the documented macOS/OpenCV 5 GCD build (`Parallel framework: GCD` in
+`cv2.getBuildInformation()`), the thread request was ignored and `cv2.getNumThreads()` still
+reported 12 after the call, while the OpenCL request did take effect. This is not a bug in the
+harness -- it is a real property of that OpenCV build's parallel framework, and it is exactly why
+request and observation are tracked separately instead of asserted equal. A result like this one
+is a valid baseline **for the observed 12-thread/GCD configuration**, not for a single-threaded
+one; it should only be compared later against results captured under a matching observed
+configuration, not assumed comparable to a result from a build where the thread request actually
+succeeded. Raw and `improcv` calls within the *same* run remain both semantically and
+environmentally comparable to each other regardless -- they run in the same process against
+whatever the actual active OpenCV configuration turns out to be.
+`NUMEXPR_NUM_THREADS` is deliberately not set: this project does not depend on NumExpr.
 
 Run on a laptop, this also means: plugged into power, without heavy background load, and ideally
 without other CPU-bound processes competing for the same cores -- none of this can be enforced by
@@ -90,6 +102,13 @@ ratio = median(improcv) / median(raw)
 - Results from different machines are **not** directly comparable to each other -- CPU, OS,
   OpenCV build, and background load all differ. Compare a machine only against its own earlier
   results.
+- `machine_info` records both what was *requested* (`opencv_requested_num_threads`,
+  `opencv_requested_opencl_enabled`) and what was *observed* (`opencv_num_threads`,
+  `opencv_opencl_enabled`) -- a result is interpreted and compared using the observed values, not
+  the requested ones, since the two are not guaranteed to match (see "Stable local run" above).
+- Each benchmark entry's `group` field (`affine-python-geometry`/`affine-image-only`/
+  `affine-image-mask`) is a real `pytest-benchmark` grouping, not just a naming convention -- raw
+  and `improcv` cases for the same size and operation always share one group.
 
 ## Current scope
 
