@@ -52,6 +52,13 @@ dev = [
     "opencv-python-headless>=4.9,<6",
     "matplotlib>=3.8",
 ]
+# Opt-in only: `uv run --group benchmark pytest benchmarks/`. Never pulled in by a plain
+# `uv sync`/`uv run pytest` (which only resolve the default `dev` group), and never a runtime
+# dependency or public extra -- benchmarks/ lives outside [tool.pytest.ini_options].testpaths,
+# so this group exists solely to make pytest-benchmark available when someone asks for it.
+benchmark = [
+    "pytest-benchmark>=5.2.3",
+]
 
 [tool.uv]
 # Pins the exact Hatchling version `uv build` resolves into its isolated
@@ -71,13 +78,18 @@ src = ["src"]
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pyright]
-include = ["src", "tests", "scripts", "examples", "demos"]
+include = ["src", "tests", "scripts", "examples", "demos", "benchmarks"]
 typeCheckingMode = "basic"
 pythonVersion = "3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+# `benchmarks/benchmark_augmentation.py` doesn't match pytest's default `test_*.py`/`*_test.py`
+# file-name glob, so it would never be collected at all -- explicit `--group benchmark` or not --
+# without this. `benchmarks/` staying outside `testpaths` above is what actually keeps it out of
+# a plain `uv run pytest`; this only makes it collectible once someone points pytest at it.
+python_files = ["test_*.py", "*_test.py", "benchmark_*.py"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/improcv"]
