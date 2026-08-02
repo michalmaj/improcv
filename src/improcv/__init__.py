@@ -194,6 +194,7 @@ from improcv.regions import (
 )
 from improcv.restoration import InpaintMethod, inpaint
 from improcv.segmentation import grabcut_rect, watershed
+from improcv.similarity import SimilarImagePair, find_similar_image_pairs
 from improcv.stitching import StitchMode, stitch_images
 from improcv.transforms import (
     center_crop,
@@ -257,6 +258,7 @@ __all__ = [
     "RocCurve",
     "RotatedRect",
     "SeamlessCloneMode",
+    "SimilarImagePair",
     "SortOrder",
     "StitchMode",
     "TemplateMatchMethod",
@@ -314,6 +316,7 @@ __all__ = [
     "expand_affine_canvas",
     "find_contours",
     "find_homography",
+    "find_similar_image_pairs",
     "flip",
     "flood_fill",
     "fuse_exposures",
