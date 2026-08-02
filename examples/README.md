@@ -1,6 +1,6 @@
 # improcv examples
 
-Small, self-contained, runnable recipes for the two main first-use workflows. Each script is
+Small, self-contained, runnable recipes for the three main first-use workflows. Each script is
 deterministic, needs no network access, no GUI, no Matplotlib, and no external data files -- it
 creates whatever tiny input it needs (in a temporary directory it cleans up itself) and prints a
 short, stable summary. Both run identically on Windows, Linux, and macOS.
@@ -22,6 +22,7 @@ uv sync
 ```bash
 uv run python examples/discovery_and_augmentation.py
 uv run python examples/classification_evaluation.py
+uv run python examples/image_similarity.py
 ```
 
 (Without `uv`, `python examples/discovery_and_augmentation.py` works too, as long as `improcv` and
@@ -29,7 +30,8 @@ one of its OpenCV extras are installed in the active environment.)
 
 ## Spatial convention
 
-Both recipes rely on one convention that is easy to get backwards:
+The discovery/augmentation and DNN-related material below rely on one convention that is easy to
+get backwards:
 
 ```text
 NumPy array shape: (height, width[, channels])
@@ -49,6 +51,13 @@ helpers, are all `(width, height)` -- the reverse of `array.shape[:2]`.
   per-class metrics (`confusion_matrix`/`classification_metrics`), then multiclass one-vs-rest
   ranking evaluation (`multiclass_roc_auc_score`/`multiclass_average_precision_score`) across
   `average=None`/`"macro"`/`"weighted"`/`"micro"`.
+- [`image_similarity.py`](image_similarity.py) -- four small, deterministic synthetic images
+  discovered with `discover_images`, decoded and hashed exactly once with `average_hash`, then
+  searched for similar pairs with `find_similar_image_pairs`. The same, already-computed hash
+  mapping is re-searched at a second, wider threshold without any redecoding or rehashing, and the
+  result demonstrates that threshold similarity is not transitive: two overlapping pairs are
+  reported, never one merged group of three. This is a deliberately tiny, hand-checkable
+  demonstration of the workflow, not a benchmark or a production deduplication tool.
 
 ## DNN preprocessing as a supporting layer
 

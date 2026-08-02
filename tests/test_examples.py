@@ -32,7 +32,11 @@ def _run_example(script: Path) -> subprocess.CompletedProcess[str]:
 
 def test_examples_directory_has_the_expected_scripts() -> None:
     names = {script.name for script in _EXAMPLE_SCRIPTS}
-    assert names == {"discovery_and_augmentation.py", "classification_evaluation.py"}
+    assert names == {
+        "discovery_and_augmentation.py",
+        "classification_evaluation.py",
+        "image_similarity.py",
+    }
 
 
 def test_discovery_and_augmentation_example_runs_cleanly() -> None:
@@ -60,6 +64,28 @@ def test_classification_evaluation_example_runs_cleanly() -> None:
     assert "ROC AUC macro/weighted/micro:" in result.stdout
     assert "AP per class:" in result.stdout
     assert "AP macro/weighted/micro:" in result.stdout
+
+
+def test_image_similarity_example_runs_cleanly() -> None:
+    result = _run_example(_EXAMPLES_DIR / "image_similarity.py")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert "images discovered: 4" in result.stdout
+    assert "algorithm: average_hash" in result.stdout
+    assert "hash size: 8 (64 bits)" in result.stdout
+    assert "threshold: 2" in result.stdout
+    assert "similar pairs: 2" in result.stdout
+    assert "a_base.png" in result.stdout
+    assert "b_variant.png" in result.stdout
+    assert "c_variant_more.png" in result.stdout
+    assert "non-transitive gap:" in result.stdout
+    assert "= 4" in result.stdout
+    assert "rehash required for threshold 4: no" in result.stdout
+
+    # The unrelated image must never appear alongside a reported similar pair.
+    pair_lines = [line for line in result.stdout.splitlines() if "<->" in line]
+    assert not any("z_unrelated.png" in line for line in pair_lines), pair_lines
 
 
 def test_examples_leave_no_files_behind_in_the_repository() -> None:

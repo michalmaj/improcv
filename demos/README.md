@@ -36,6 +36,7 @@ pip install "improcv[cv-headless,viz]==0.2.0a3"
 uv run python demos/augmentation_gallery.py
 uv run python demos/classification_report.py
 uv run python demos/pairing_diagnostics.py
+uv run python demos/image_similarity_gallery.py
 ```
 
 Each writes its own asset under `docs/assets/`, overwriting it in place. To write elsewhere
@@ -50,6 +51,9 @@ uv run python demos/classification_report.py \
 
 uv run python demos/pairing_diagnostics.py \
   --output /tmp/pairing-diagnostics.png
+
+uv run python demos/image_similarity_gallery.py \
+  --output /tmp/image-similarity-gallery.png
 ```
 
 ## What each demo shows
@@ -125,14 +129,41 @@ filesystem and a real call to the public API -- none of it is a hand-typed examp
 For a copyable, executable version of the underlying discovery contract, see
 [`examples/discovery_and_augmentation.py`](../examples/discovery_and_augmentation.py).
 
+### `image_similarity_gallery.py`
+
+<img
+  src="https://raw.githubusercontent.com/michalmaj/improcv/main/docs/assets/image-similarity-gallery.png"
+  alt="improcv image similarity showing four synthetic 8x8 images with their average_hash hex values, a symmetric 4x4 Hamming distance matrix with two in-threshold pairs highlighted, and the two pairs returned by find_similar_image_pairs at max_distance=2 with a_base.png and c_variant_more.png shown as a non-transitive gap at distance 4"
+  width="880"
+>
+
+Builds four small, deterministic 8x8 grayscale images -- three close variants of one another (A,
+B, C) and one unrelated image (D) -- hashes each with `average_hash`, and computes the real
+pairwise Hamming-distance matrix and `find_similar_image_pairs` result. Shows:
+
+- each image alongside its exact `average_hash` hex value;
+- the full 4x4 distance matrix, with the two in-threshold pairs (A-B, B-C) visually highlighted
+  and A-C's distance (4) shown outside the threshold;
+- the two pairs `find_similar_image_pairs` actually returns at `max_distance=2`, and why A-C is
+  not a third pair even though A~B and B~C both match -- threshold similarity is not transitive.
+
+`average_hash` is used here (rather than `phash`, as in the main README's realistic-photo
+snippet) specifically because its bit decisions on a small checkerboard are easy to verify by
+hand; `max_distance=2` is specific to this tiny synthetic example, not a general recommendation.
+Every hash, matrix value, and pair shown is computed via the public API, never hand-typed.
+
+For a copyable, executable version of the same workflow, see
+[`examples/image_similarity.py`](../examples/image_similarity.py).
+
 ## Guarantees and non-guarantees
 
 - **Headless.** No GUI, no `cv2.imshow`, no `cv2.waitKey`. Every demo runs to completion under
   `MPLBACKEND=Agg` with no display attached.
 - **No external data or network access.** Inputs are generated locally:
   `augmentation_gallery.py` uses a seeded synthetic scene, `classification_report.py` uses small
-  explicit values, and `pairing_diagnostics.py` uses an automatically cleaned temporary directory
-  so it can exercise the real filesystem discovery API.
+  explicit values, `pairing_diagnostics.py` uses an automatically cleaned temporary directory so
+  it can exercise the real filesystem discovery API, and `image_similarity_gallery.py` builds its
+  four images in memory from fixed pixel values.
 - **Semantics, not bytes.** Regenerating an asset on a different OS, Python, NumPy, OpenCV, or
   Matplotlib version is guaranteed to reproduce the same geometry, labels, and shapes (checked by
   `tests/test_demos.py`), but **not** a bitwise-identical PNG -- font rasterization and layout

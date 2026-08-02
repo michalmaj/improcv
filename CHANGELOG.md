@@ -11,6 +11,15 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Executable documentation for the dataset image similarity workflow: a copyable example
+  (`examples/image_similarity.py`) and a visual demo generator (`demos/image_similarity_gallery.py`,
+  producing the committed `docs/assets/image-similarity-gallery.png`). Both independently build the
+  same four deterministic, hand-checkable 8x8 synthetic images and run the real
+  `discover_images` -> decode -> `average_hash` -> `find_similar_image_pairs` workflow -- every
+  hash, distance, and pair shown is computed via the public API, never hand-typed. The demo's
+  distance matrix and pair-search result demonstrate that threshold similarity is not transitive:
+  two overlapping pairs are found, never one merged group of three. No new public API, no new
+  dependency, no external data or network access, no GUI.
 - New `improcv.similarity` module: `SimilarImagePair` (a frozen, canonically-ordered
   `first`/`second`/`distance` result) and `find_similar_image_pairs`, a deterministic pairwise
   similarity search over already-computed `PerceptualHash` values. The input is a `Mapping` of

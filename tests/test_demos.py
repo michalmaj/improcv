@@ -31,7 +31,8 @@ _DEMOS_DIR = _REPO_ROOT / "demos"
 _AUGMENTATION_SCRIPT = _DEMOS_DIR / "augmentation_gallery.py"
 _CLASSIFICATION_SCRIPT = _DEMOS_DIR / "classification_report.py"
 _PAIRING_SCRIPT = _DEMOS_DIR / "pairing_diagnostics.py"
-_DEMO_SCRIPTS = (_AUGMENTATION_SCRIPT, _CLASSIFICATION_SCRIPT, _PAIRING_SCRIPT)
+_SIMILARITY_SCRIPT = _DEMOS_DIR / "image_similarity_gallery.py"
+_DEMO_SCRIPTS = (_AUGMENTATION_SCRIPT, _CLASSIFICATION_SCRIPT, _PAIRING_SCRIPT, _SIMILARITY_SCRIPT)
 
 
 def _run_demo(
@@ -70,11 +71,17 @@ def classification_module() -> types.ModuleType:
     return _load_module(_CLASSIFICATION_SCRIPT)
 
 
+@pytest.fixture(scope="module")
+def similarity_module() -> types.ModuleType:
+    return _load_module(_SIMILARITY_SCRIPT)
+
+
 def test_demos_directory_has_the_expected_generators() -> None:
     scripts = sorted(_DEMOS_DIR.glob("*.py"))
     assert [script.name for script in scripts] == [
         "augmentation_gallery.py",
         "classification_report.py",
+        "image_similarity_gallery.py",
         "pairing_diagnostics.py",
     ]
 
@@ -609,3 +616,114 @@ def test_pairing_diagnostics_panel_text_never_overflows_its_axes(
         import matplotlib.pyplot as plt
 
         plt.close(fig)
+
+
+# --- image_similarity_gallery.py ---------------------------------------------------------
+
+
+def test_image_similarity_gallery_generates_the_expected_png_via_subprocess(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "gallery.png"
+    before = set(tmp_path.iterdir())
+
+    result = _run_demo(
+        _SIMILARITY_SCRIPT, ["--output", str(output)], env={**os.environ, "MPLBACKEND": "Agg"}
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout == f"wrote {output} (1920x1080)\n"
+
+    after = set(tmp_path.iterdir())
+    assert after - before == {output}, f"expected exactly one new file, got {after - before}"
+
+    image = cv2.imread(str(output), cv2.IMREAD_UNCHANGED)
+    assert image is not None, "the written PNG must be readable by OpenCV"
+    assert image.shape[0] == 1080
+    assert image.shape[1] == 1920
+    assert image.shape[2] in (3, 4)
+    assert output.stat().st_size > 0
+    assert image.std() > 1.0, "the written PNG must not be a uniform, blank image"
+
+
+def test_build_similarity_inputs_returns_the_documented_contract(
+    similarity_module: types.ModuleType,
+) -> None:
+    inputs = similarity_module.build_similarity_inputs()
+
+    assert inputs.names == (
+        "a_base.png",
+        "b_variant.png",
+        "c_variant_more.png",
+        "z_unrelated.png",
+    )
+    assert len(inputs.images) == 4
+    for image in inputs.images:
+        assert image.shape == (8, 8)
+        assert image.dtype == np.uint8
+        assert int(np.count_nonzero(image == 255)) == 32
+
+    expected_hex = (
+        "55aa55aa55aa55aa",
+        "95aa55aa55aa55aa",
+        "956a55aa55aa55aa",
+        "0f0f0f0f0f0f0f0f",
+    )
+    for hash_value, hex_value in zip(inputs.hashes, expected_hex, strict=True):
+        assert str(hash_value) == hex_value
+        assert hash_value.algorithm == im.PerceptualHashAlgorithm.AVERAGE_HASH
+        assert hash_value.hash_size == 8
+
+
+def test_compute_similarity_report_returns_the_documented_contract(
+    similarity_module: types.ModuleType,
+) -> None:
+    inputs = similarity_module.build_similarity_inputs()
+
+    # compute_similarity_report asserts the exact distance values and pair result internally --
+    # a successful call is itself part of the contract under test.
+    report = similarity_module.compute_similarity_report(inputs, threshold=2)
+
+    assert report.threshold == 2
+    assert report.distances.shape == (4, 4)
+    assert report.distances.dtype == np.int64
+    assert np.array_equal(report.distances, report.distances.T)
+    assert np.all(np.diag(report.distances) == 0)
+
+    index = {name: position for position, name in enumerate(inputs.names)}
+    assert report.distances[index["a_base.png"], index["b_variant.png"]] == 2
+    assert report.distances[index["b_variant.png"], index["c_variant_more.png"]] == 2
+    assert report.distances[index["a_base.png"], index["c_variant_more.png"]] == 4
+    for other in ("a_base.png", "b_variant.png", "c_variant_more.png"):
+        assert report.distances[index["z_unrelated.png"], index[other]] > 2
+
+    found = tuple((pair.first.name, pair.second.name, pair.distance) for pair in report.pairs)
+    assert found == (
+        ("a_base.png", "b_variant.png", 2),
+        ("b_variant.png", "c_variant_more.png", 2),
+    ), found
+
+
+def test_image_similarity_gallery_matches_the_public_api_independently(
+    similarity_module: types.ModuleType,
+) -> None:
+    # Independent of the demo's own internals: recomputes one distance and one pair-search
+    # result directly against improcv's public API, using the same images the demo builds.
+    inputs = similarity_module.build_similarity_inputs()
+    report = similarity_module.compute_similarity_report(inputs, threshold=2)
+
+    index = {name: position for position, name in enumerate(inputs.names)}
+    a_hash = im.average_hash(inputs.images[index["a_base.png"]], hash_size=8)
+    b_hash = im.average_hash(inputs.images[index["b_variant.png"]], hash_size=8)
+    assert a_hash.distance(b_hash) == report.distances[index["a_base.png"], index["b_variant.png"]]
+
+    hashes_by_name = {
+        name: im.average_hash(image, hash_size=8)
+        for name, image in zip(inputs.names, inputs.images, strict=True)
+    }
+    pairs = im.find_similar_image_pairs(hashes_by_name, max_distance=2)
+    found = tuple((pair.first.name, pair.second.name, pair.distance) for pair in pairs)
+    assert found == tuple(
+        (pair.first.name, pair.second.name, pair.distance) for pair in report.pairs
+    )
