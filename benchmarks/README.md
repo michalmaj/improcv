@@ -115,43 +115,58 @@ interchangeable.
 
 ### Reviewed baseline candidate (default)
 
+A reviewed baseline is captured **one family at a time**, with the saved run's name matching
+that family -- `augmentation`, `discovery`, and `evaluation` are the current values. Running the
+whole `benchmarks/` directory (as in "Installation and smoke" above) is still correct for a
+quick local review across families, but it is not how a committed baseline is produced: a single
+saved run named after all of `benchmarks/` at once would be ambiguous about which family (or
+families) it actually captured, now that there is more than one.
+
 ```bash
-rm -rf /tmp/improcv-benchmark-storage
+FAMILY=evaluation
+
+rm -rf "/tmp/improcv-${FAMILY}-benchmark-storage"
 
 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
-uv run --group benchmark pytest benchmarks/ \
+uv run --group benchmark pytest \
+  "benchmarks/benchmark_${FAMILY}.py" \
   --benchmark-warmup=on \
   --benchmark-min-rounds=20 \
-  --benchmark-storage=file:///tmp/improcv-benchmark-storage \
-  --benchmark-save=augmentation-baseline
+  --benchmark-storage="file:///tmp/improcv-${FAMILY}-benchmark-storage" \
+  --benchmark-save="${FAMILY}-baseline"
 ```
 
 This writes a **saved run** under
-`/tmp/improcv-benchmark-storage/<platform-tag>/NNNN_augmentation-baseline.json` (the exact
-subdirectory name depends on platform/Python; find it with `find /tmp/improcv-benchmark-storage
--type f`). It is a native, unedited `pytest-benchmark` output -- not something this project
-post-processes or reduces -- that, by default, contains `machine_info`, `commit_info`, per-case
-`group`/`params`/`extra_info`, and summary statistics (`median`/`mean`/`stddev`/`iqr`/`rounds`/
-etc.) for every case, but **not** the full array of every individual round's timing
-(`stats.data` is absent from a plain `--benchmark-save`, confirmed directly against this
-project's `pytest-benchmark` version). This is the default candidate for committing after review:
-copy the generated file byte-for-byte into `benchmarks/results/` (never edited, never manually
-stripped of anything) once its exact commit SHA is clean (`dirty: false`), its machine metadata is
-captured, and it has an accompanying reviewed Markdown report -- the same immutable-results policy
-already in effect (see `benchmarks/results/README.md`).
+`/tmp/improcv-${FAMILY}-benchmark-storage/<platform-tag>/NNNN_${FAMILY}-baseline.json` (the exact
+subdirectory name depends on platform/Python; find it with `find /tmp/improcv-${FAMILY}-
+benchmark-storage -type f`). It is a native, unedited `pytest-benchmark` output -- not something
+this project post-processes or reduces -- that, by default, contains `machine_info`,
+`commit_info`, per-case `group`/`params`/`extra_info`, and summary statistics (`median`/`mean`/
+`stddev`/`iqr`/`rounds`/etc.) for every case, but **not** the full array of every individual
+round's timing (`stats.data` is absent from a plain `--benchmark-save`, confirmed directly
+against this project's `pytest-benchmark` version). This is the default candidate for committing
+after review: copy the generated file byte-for-byte into `benchmarks/results/` (never edited,
+never manually stripped of anything) once its exact commit SHA is clean (`dirty: false`), its
+machine metadata is captured, and it has an accompanying reviewed Markdown report -- the same
+immutable-results policy already in effect (see `benchmarks/results/README.md`).
 
 ### Full-data diagnostic capture (optional)
 
+Also family-specific, for the same reason as above:
+
 ```bash
+FAMILY=augmentation
+
 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
-uv run --group benchmark pytest benchmarks/ \
+uv run --group benchmark pytest \
+  "benchmarks/benchmark_${FAMILY}.py" \
   --benchmark-warmup=on \
   --benchmark-min-rounds=20 \
-  --benchmark-json=/tmp/improcv-augmentation-full-data.json
+  --benchmark-json="/tmp/improcv-${FAMILY}-full-data.json"
 ```
 
 `--benchmark-json` writes the *complete* per-round timing array (`stats.data`) for every case,
@@ -354,11 +369,31 @@ Three observations from that specific machine and run, elaborated on in the repo
 
 ### Multiclass evaluation
 
-No committed evaluation baseline yet -- this PR adds only the harness, data, grouping, and this
-documentation. A first evaluation baseline will follow in a separate PR, using the same compact,
-stats-only saved-run format described above (`--benchmark-save`/`--benchmark-storage`, no
-`stats.data`); a full-data capture would only be used again for a specific, reviewed diagnostic
-need, exactly as for the affine and discovery families.
+The first reviewed baseline is captured:
+
+- Compact JSON: [`results/2026-08-02-evaluation-baseline.json`](results/2026-08-02-evaluation-baseline.json)
+- Reviewed report: [`results/2026-08-02-evaluation-baseline.md`](results/2026-08-02-evaluation-baseline.md)
+
+Captured at the exact harness commit `658a6bcc6b943a1f9e232be51149b2d52d1a08d2`, with a clean
+working tree (`commit_info.dirty: false`). This is a **stats-only saved run**
+(`--benchmark-save`/`--benchmark-storage`, no `--benchmark-save-data`) -- `stats.data` (the full
+per-round timing array) is confirmed absent from every entry; the reviewed Markdown report
+contains the per-case tables and scaling interpretation, the JSON remains the raw source of
+truth. See `benchmarks/results/README.md` for the policy governing committed results.
+
+Three observations from that specific machine and run, elaborated on in the report itself:
+
+- All four operations' medians increased monotonically across the measured sample counts
+  (1,000/10,000/100,000), and both ranking operations' medians increased monotonically across
+  the measured class counts (3/10/100).
+- Each 10x increase in sample count produced an observed median growth in the 8.3x-10.7x range
+  across all four operations -- approximately proportional over the measured range, not a proven
+  asymptotic complexity claim from three data points; the class-count axis showed a similar
+  approximately-proportional pattern for both ranking functions.
+- The label-based workflows (`confusion_matrix`, `classification_metrics`) ran two to three
+  orders of magnitude faster than the ranking workflows at matching sample counts on this run --
+  expected, since the ranking functions perform one binary ranking per class plus `y_score`'s own
+  copy/validation.
 
 ## Future engineering stories
 

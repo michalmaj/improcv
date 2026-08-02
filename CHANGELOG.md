@@ -11,6 +11,16 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- First reviewed multiclass evaluation benchmark baseline
+  (`benchmarks/results/2026-08-02-evaluation-baseline.json` and its accompanying `.md` report),
+  captured from the finalized harness at commit `658a6bcc6b943a1f9e232be51149b2d52d1a08d2` with a
+  clean working tree. Covers `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_
+  score`, and `multiclass_average_precision_score` (the latter three at `average="macro"`) across
+  sample scaling (1,000/10,000/100,000, fixed 10 classes) and ranking class scaling (3/10/100,
+  fixed 10,000 samples). The raw JSON is a compact, stats-only native `pytest-benchmark` saved run
+  (no `stats.data`); the Markdown report documents the environment, integrity checks, and scaling
+  observations for this one machine and run -- not a general performance guarantee.
+  `benchmarks/README.md` and `benchmarks/results/README.md` now link to both.
 - Opt-in multiclass evaluation scaling benchmarks (`benchmarks/benchmark_evaluation.py`),
   covering `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_score`, and
   `multiclass_average_precision_score` (the latter three at `average="macro"`). Two independent

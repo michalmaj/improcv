@@ -1,0 +1,977 @@
+{
+    "machine_info": {
+        "node": "Michas-MacBook-Pro.local",
+        "processor": "arm",
+        "machine": "arm64",
+        "python_compiler": "Clang 14.0.6 ",
+        "python_implementation": "CPython",
+        "python_implementation_version": "3.12.7",
+        "python_version": "3.12.7",
+        "python_build": [
+            "main",
+            "Oct  4 2024 08:22:19"
+        ],
+        "release": "25.5.0",
+        "system": "Darwin",
+        "cpu": {
+            "python_version": "3.12.7.final.0 (64 bit)",
+            "cpuinfo_version": [
+                9,
+                0,
+                0
+            ],
+            "cpuinfo_version_string": "9.0.0",
+            "arch": "ARM_8",
+            "bits": 64,
+            "count": 12,
+            "arch_string_raw": "arm64",
+            "brand_raw": "Apple M4 Pro"
+        },
+        "numpy_version": "2.5.1",
+        "opencv_version": "5.0.0",
+        "improcv_version": "0.2.0a3.dev0",
+        "opencv_requested_num_threads": 1,
+        "opencv_num_threads": 12,
+        "opencv_requested_opencl_enabled": false,
+        "opencv_opencl_enabled": false,
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+    },
+    "commit_info": {
+        "id": "658a6bcc6b943a1f9e232be51149b2d52d1a08d2",
+        "time": "2026-08-02T05:35:29+02:00",
+        "author_time": "2026-08-02T05:35:29+02:00",
+        "dirty": false,
+        "project": "improcv",
+        "branch": "perf/evaluation-baseline"
+    },
+    "benchmarks": [
+        {
+            "group": "evaluation-confusion-matrix",
+            "name": "test_confusion_matrix[1000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_confusion_matrix[1000x10]",
+            "params": {
+                "label_dataset": 1000
+            },
+            "param": "1000x10",
+            "extra_info": {
+                "operation": "confusion_matrix",
+                "implementation": "improcv",
+                "n_samples": 1000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "y_pred_container": "ndarray",
+                "y_pred_dtype": "int64",
+                "prediction_policy": "every-fifth-next-label",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": null,
+                "score_matrix": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.00014287489466369152,
+                "max": 0.0005091661587357521,
+                "mean": 0.00016072174096862967,
+                "stddev": 1.644752403054952e-05,
+                "rounds": 7004,
+                "median": 0.00016024988144636154,
+                "iqr": 1.0354560799896717e-05,
+                "q1": 0.00015300000086426735,
+                "q3": 0.00016335456166416407,
+                "iqr_outliers": 412,
+                "stddev_outliers": 638,
+                "outliers": "638;412",
+                "ld15iqr": 0.00014287489466369152,
+                "hd15iqr": 0.00017895805649459362,
+                "ops": 6221.933597615672,
+                "total": 1.1256950737442821,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-classification-metrics",
+            "name": "test_classification_metrics_macro[1000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_classification_metrics_macro[1000x10]",
+            "params": {
+                "label_dataset": 1000
+            },
+            "param": "1000x10",
+            "extra_info": {
+                "operation": "classification_metrics",
+                "implementation": "improcv",
+                "n_samples": 1000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "y_pred_container": "ndarray",
+                "y_pred_dtype": "int64",
+                "prediction_policy": "every-fifth-next-label",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.00016249995678663254,
+                "max": 0.0011923748534172773,
+                "mean": 0.00018779417922788627,
+                "stddev": 5.394058900623968e-05,
+                "rounds": 6162,
+                "median": 0.00018254201859235764,
+                "iqr": 8.082948625087738e-06,
+                "q1": 0.00017729192040860653,
+                "q3": 0.00018537486903369427,
+                "iqr_outliers": 560,
+                "stddev_outliers": 123,
+                "outliers": "123;560",
+                "ld15iqr": 0.0001652080100029707,
+                "hd15iqr": 0.00019749999046325684,
+                "ops": 5324.978676716653,
+                "total": 1.1571877324022353,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-confusion-matrix",
+            "name": "test_confusion_matrix[10000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_confusion_matrix[10000x10]",
+            "params": {
+                "label_dataset": 10000
+            },
+            "param": "10000x10",
+            "extra_info": {
+                "operation": "confusion_matrix",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "y_pred_container": "ndarray",
+                "y_pred_dtype": "int64",
+                "prediction_policy": "every-fifth-next-label",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": null,
+                "score_matrix": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.0013741659931838512,
+                "max": 0.0016807080246508121,
+                "mean": 0.0014873702712714753,
+                "stddev": 4.264833503533996e-05,
+                "rounds": 729,
+                "median": 0.0014897091314196587,
+                "iqr": 3.651069710031152e-05,
+                "q1": 0.0014699375606141984,
+                "q3": 0.00150644825771451,
+                "iqr_outliers": 84,
+                "stddev_outliers": 168,
+                "outliers": "168;84",
+                "ld15iqr": 0.0014152920339256525,
+                "hd15iqr": 0.0015623338986188173,
+                "ops": 672.3275429897843,
+                "total": 1.0842929277569056,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-classification-metrics",
+            "name": "test_classification_metrics_macro[10000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_classification_metrics_macro[10000x10]",
+            "params": {
+                "label_dataset": 10000
+            },
+            "param": "10000x10",
+            "extra_info": {
+                "operation": "classification_metrics",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "y_pred_container": "ndarray",
+                "y_pred_dtype": "int64",
+                "prediction_policy": "every-fifth-next-label",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.0013717501424252987,
+                "max": 0.016102875117212534,
+                "mean": 0.0015423432975882592,
+                "stddev": 0.000553020155886925,
+                "rounds": 716,
+                "median": 0.0015202909708023071,
+                "iqr": 3.143749199807644e-05,
+                "q1": 0.0015021039871498942,
+                "q3": 0.0015335414791479707,
+                "iqr_outliers": 98,
+                "stddev_outliers": 3,
+                "outliers": "3;98",
+                "ld15iqr": 0.0014549579937011003,
+                "hd15iqr": 0.0015813750214874744,
+                "ops": 648.3640844186156,
+                "total": 1.1043178010731936,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-confusion-matrix",
+            "name": "test_confusion_matrix[100000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_confusion_matrix[100000x10]",
+            "params": {
+                "label_dataset": 100000
+            },
+            "param": "100000x10",
+            "extra_info": {
+                "operation": "confusion_matrix",
+                "implementation": "improcv",
+                "n_samples": 100000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "y_pred_container": "ndarray",
+                "y_pred_dtype": "int64",
+                "prediction_policy": "every-fifth-next-label",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": null,
+                "score_matrix": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.014521416975185275,
+                "max": 0.015417042188346386,
+                "mean": 0.01487604409550735,
+                "stddev": 0.00016333065406734707,
+                "rounds": 69,
+                "median": 0.0148719169665128,
+                "iqr": 0.00020287506049498916,
+                "q1": 0.014746916654985398,
+                "q3": 0.014949791715480387,
+                "iqr_outliers": 2,
+                "stddev_outliers": 19,
+                "outliers": "19;2",
+                "ld15iqr": 0.014521416975185275,
+                "hd15iqr": 0.015271166106685996,
+                "ops": 67.22217234499901,
+                "total": 1.0264470425900072,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-classification-metrics",
+            "name": "test_classification_metrics_macro[100000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_classification_metrics_macro[100000x10]",
+            "params": {
+                "label_dataset": 100000
+            },
+            "param": "100000x10",
+            "extra_info": {
+                "operation": "classification_metrics",
+                "implementation": "improcv",
+                "n_samples": 100000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "y_pred_container": "ndarray",
+                "y_pred_dtype": "int64",
+                "prediction_policy": "every-fifth-next-label",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.014493624912574887,
+                "max": 0.015475874999538064,
+                "mean": 0.014940593428244548,
+                "stddev": 0.00017350963065014685,
+                "rounds": 70,
+                "median": 0.014954229001887143,
+                "iqr": 0.00019062496721744537,
+                "q1": 0.014849625062197447,
+                "q3": 0.015040250029414892,
+                "iqr_outliers": 3,
+                "stddev_outliers": 20,
+                "outliers": "20;3",
+                "ld15iqr": 0.014588916907086968,
+                "hd15iqr": 0.015411833068355918,
+                "ops": 66.93174570359054,
+                "total": 1.0458415399771184,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-roc-auc-macro",
+            "name": "test_multiclass_roc_auc_macro[1000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_roc_auc_macro[1000x10]",
+            "params": {
+                "ranking_dataset": [
+                    1000,
+                    10
+                ]
+            },
+            "param": "1000x10",
+            "extra_info": {
+                "operation": "multiclass_roc_auc_score",
+                "implementation": "improcv",
+                "n_samples": 1000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 1000010,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.0031974581070244312,
+                "max": 0.003762542037293315,
+                "mean": 0.00338738365470768,
+                "stddev": 7.552497298393484e-05,
+                "rounds": 313,
+                "median": 0.00339225004427135,
+                "iqr": 9.803124703466892e-05,
+                "q1": 0.0033399895182810724,
+                "q3": 0.0034380207653157413,
+                "iqr_outliers": 2,
+                "stddev_outliers": 96,
+                "outliers": "96;2",
+                "ld15iqr": 0.0031974581070244312,
+                "hd15iqr": 0.0036099578719586134,
+                "ops": 295.2130912629962,
+                "total": 1.0602510839235038,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-average-precision-macro",
+            "name": "test_multiclass_average_precision_macro[1000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_average_precision_macro[1000x10]",
+            "params": {
+                "ranking_dataset": [
+                    1000,
+                    10
+                ]
+            },
+            "param": "1000x10",
+            "extra_info": {
+                "operation": "multiclass_average_precision_score",
+                "implementation": "improcv",
+                "n_samples": 1000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 1000010,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.003131665987893939,
+                "max": 0.006734292022883892,
+                "mean": 0.0033628558812779374,
+                "stddev": 0.0002921248077629209,
+                "rounds": 320,
+                "median": 0.0033356044441461563,
+                "iqr": 7.552106399089098e-05,
+                "q1": 0.0032936868956312537,
+                "q3": 0.0033692079596221447,
+                "iqr_outliers": 13,
+                "stddev_outliers": 5,
+                "outliers": "5;13",
+                "ld15iqr": 0.0031869581434875727,
+                "hd15iqr": 0.0034884579945355654,
+                "ops": 297.3662967739148,
+                "total": 1.07611388200894,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-roc-auc-macro",
+            "name": "test_multiclass_roc_auc_macro[10000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_roc_auc_macro[10000x10]",
+            "params": {
+                "ranking_dataset": [
+                    10000,
+                    10
+                ]
+            },
+            "param": "10000x10",
+            "extra_info": {
+                "operation": "multiclass_roc_auc_score",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 10000010,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.03425024985335767,
+                "max": 0.03571154200471938,
+                "mean": 0.03483848844590629,
+                "stddev": 0.00029184329354782186,
+                "rounds": 29,
+                "median": 0.034816875122487545,
+                "iqr": 0.00035420857602730393,
+                "q1": 0.03463107260176912,
+                "q3": 0.03498528117779642,
+                "iqr_outliers": 1,
+                "stddev_outliers": 7,
+                "outliers": "7;1",
+                "ld15iqr": 0.03425024985335767,
+                "hd15iqr": 0.03571154200471938,
+                "ops": 28.703885978081388,
+                "total": 1.0103161649312824,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-average-precision-macro",
+            "name": "test_multiclass_average_precision_macro[10000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_average_precision_macro[10000x10]",
+            "params": {
+                "ranking_dataset": [
+                    10000,
+                    10
+                ]
+            },
+            "param": "10000x10",
+            "extra_info": {
+                "operation": "multiclass_average_precision_score",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 10000010,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.034351791953668,
+                "max": 0.037737583043053746,
+                "mean": 0.03533591243127982,
+                "stddev": 0.0006196542499962745,
+                "rounds": 30,
+                "median": 0.03527964593376964,
+                "iqr": 0.0005479997489601374,
+                "q1": 0.03508687508292496,
+                "q3": 0.0356348748318851,
+                "iqr_outliers": 1,
+                "stddev_outliers": 5,
+                "outliers": "5;1",
+                "ld15iqr": 0.034351791953668,
+                "hd15iqr": 0.037737583043053746,
+                "ops": 28.299821094043313,
+                "total": 1.0600773729383945,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-roc-auc-macro",
+            "name": "test_multiclass_roc_auc_macro[100000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_roc_auc_macro[100000x10]",
+            "params": {
+                "ranking_dataset": [
+                    100000,
+                    10
+                ]
+            },
+            "param": "100000x10",
+            "extra_info": {
+                "operation": "multiclass_roc_auc_score",
+                "implementation": "improcv",
+                "n_samples": 100000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 100000010,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.3660224999766797,
+                "max": 0.380751249846071,
+                "mean": 0.3720863937982358,
+                "stddev": 0.003844403276924016,
+                "rounds": 20,
+                "median": 0.3719843750586733,
+                "iqr": 0.00449410337023437,
+                "q1": 0.36964558355975896,
+                "q3": 0.37413968692999333,
+                "iqr_outliers": 0,
+                "stddev_outliers": 7,
+                "outliers": "7;0",
+                "ld15iqr": 0.3660224999766797,
+                "hd15iqr": 0.380751249846071,
+                "ops": 2.687547883146329,
+                "total": 7.441727875964716,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-average-precision-macro",
+            "name": "test_multiclass_average_precision_macro[100000x10]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_average_precision_macro[100000x10]",
+            "params": {
+                "ranking_dataset": [
+                    100000,
+                    10
+                ]
+            },
+            "param": "100000x10",
+            "extra_info": {
+                "operation": "multiclass_average_precision_score",
+                "implementation": "improcv",
+                "n_samples": 100000,
+                "n_classes": 10,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 100000010,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.3679108330979943,
+                "max": 0.3771285000257194,
+                "mean": 0.37156094567617404,
+                "stddev": 0.0023907357033590756,
+                "rounds": 20,
+                "median": 0.37153743754606694,
+                "iqr": 0.002418958116322756,
+                "q1": 0.3700573749374598,
+                "q3": 0.3724763330537826,
+                "iqr_outliers": 2,
+                "stddev_outliers": 7,
+                "outliers": "7;2",
+                "ld15iqr": 0.3679108330979943,
+                "hd15iqr": 0.3762561669573188,
+                "ops": 2.6913485166751854,
+                "total": 7.43121891352348,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-roc-auc-macro",
+            "name": "test_multiclass_roc_auc_macro[10000x3]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_roc_auc_macro[10000x3]",
+            "params": {
+                "ranking_dataset": [
+                    10000,
+                    3
+                ]
+            },
+            "param": "10000x3",
+            "extra_info": {
+                "operation": "multiclass_roc_auc_score",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 3,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 10000003,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.010767542058601975,
+                "max": 0.020172040909528732,
+                "mean": 0.011351475170119963,
+                "stddev": 0.0012937674963043235,
+                "rounds": 94,
+                "median": 0.011119875009171665,
+                "iqr": 0.00036049983464181423,
+                "q1": 0.010964916087687016,
+                "q3": 0.01132541592232883,
+                "iqr_outliers": 4,
+                "stddev_outliers": 2,
+                "outliers": "2;4",
+                "ld15iqr": 0.010767542058601975,
+                "hd15iqr": 0.01196858286857605,
+                "ops": 88.09427717661404,
+                "total": 1.0670386659912765,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-average-precision-macro",
+            "name": "test_multiclass_average_precision_macro[10000x3]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_average_precision_macro[10000x3]",
+            "params": {
+                "ranking_dataset": [
+                    10000,
+                    3
+                ]
+            },
+            "param": "10000x3",
+            "extra_info": {
+                "operation": "multiclass_average_precision_score",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 3,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 10000003,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.010655791964381933,
+                "max": 0.01381079200655222,
+                "mean": 0.011020494203895647,
+                "stddev": 0.0003388672817140169,
+                "rounds": 94,
+                "median": 0.010990166454575956,
+                "iqr": 0.00023449910804629326,
+                "q1": 0.010863292030990124,
+                "q3": 0.011097791139036417,
+                "iqr_outliers": 2,
+                "stddev_outliers": 9,
+                "outliers": "9;2",
+                "ld15iqr": 0.010655791964381933,
+                "hd15iqr": 0.011453707935288548,
+                "ops": 90.74003229787179,
+                "total": 1.0359264551661909,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-roc-auc-macro",
+            "name": "test_multiclass_roc_auc_macro[10000x100]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_roc_auc_macro[10000x100]",
+            "params": {
+                "ranking_dataset": [
+                    10000,
+                    100
+                ]
+            },
+            "param": "10000x100",
+            "extra_info": {
+                "operation": "multiclass_roc_auc_score",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 100,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 10000100,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.3524307918269187,
+                "max": 0.3826563749462366,
+                "mean": 0.3610564395785332,
+                "stddev": 0.007679225052813408,
+                "rounds": 20,
+                "median": 0.35874699999112636,
+                "iqr": 0.009366561891511083,
+                "q1": 0.3568123335717246,
+                "q3": 0.3661788954632357,
+                "iqr_outliers": 1,
+                "stddev_outliers": 8,
+                "outliers": "8;1",
+                "ld15iqr": 0.3524307918269187,
+                "hd15iqr": 0.3826563749462366,
+                "ops": 2.769650088964805,
+                "total": 7.2211287915706635,
+                "iterations": 1
+            }
+        },
+        {
+            "group": "evaluation-average-precision-macro",
+            "name": "test_multiclass_average_precision_macro[10000x100]",
+            "fullname": "benchmarks/benchmark_evaluation.py::test_multiclass_average_precision_macro[10000x100]",
+            "params": {
+                "ranking_dataset": [
+                    10000,
+                    100
+                ]
+            },
+            "param": "10000x100",
+            "extra_info": {
+                "operation": "multiclass_average_precision_score",
+                "implementation": "improcv",
+                "n_samples": 10000,
+                "n_classes": 100,
+                "labels_explicit": true,
+                "labels_sorted": false,
+                "labels_order_policy": "rotated-zero-last",
+                "y_true_container": "ndarray",
+                "y_true_dtype": "int64",
+                "sample_weight": false,
+                "class_distribution": "balanced-by-construction",
+                "average": "macro",
+                "score_matrix": true,
+                "score_dtype": "float64",
+                "score_layout": "C",
+                "score_policy": "seeded-uniform-plus-true-class-boost",
+                "score_seed": 10000100,
+                "probability_simplex_required": false,
+                "rows_sum_to_one": false
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 20,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": 100000
+            },
+            "stats": {
+                "min": 0.34782262495718896,
+                "max": 0.3553604169283062,
+                "mean": 0.35100816255435346,
+                "stddev": 0.0024734630116044253,
+                "rounds": 20,
+                "median": 0.3505923334741965,
+                "iqr": 0.004023916088044643,
+                "q1": 0.3488492084434256,
+                "q3": 0.35287312453147024,
+                "iqr_outliers": 0,
+                "stddev_outliers": 7,
+                "outliers": "7;0",
+                "ld15iqr": 0.34782262495718896,
+                "hd15iqr": 0.3553604169283062,
+                "ops": 2.8489365965817117,
+                "total": 7.0201632510870695,
+                "iterations": 1
+            }
+        }
+    ],
+    "datetime": "2026-08-02T03:57:33.761483+00:00",
+    "version": "5.2.3"
+}
