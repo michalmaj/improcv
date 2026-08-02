@@ -1365,14 +1365,16 @@ referencing the same file via a hard link remain a legal, distinct pair. Both si
 
 ## Status
 
-`improcv` is in early development. `0.1.0a1` is designated as the first public release and covers
-the accumulated scope of Phases 0-3 (see [ROADMAP.md](https://github.com/michalmaj/improcv/blob/main/ROADMAP.md)
-for what that includes, and why it doesn't match the project's original one-phase-per-minor-version
-plan). See [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for the exact
-list of what's been added.
+`improcv` is in early alpha development. See
+[CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for published
+releases and the exact contents of the current development line. `0.1.0a1` was the project's
+first public release and covered the accumulated scope of Phases 0-3 (see
+[ROADMAP.md](https://github.com/michalmaj/improcv/blob/main/ROADMAP.md) for what that includes,
+and why it doesn't match the project's original one-phase-per-minor-version plan).
 
 **Compatibility policy before `1.0.0`:**
-- `0.1.0a1` is an alpha: functional, tested, but not yet declared stable.
+- All current releases are alpha releases: functional and tested, but the public API is not yet
+  declared stable.
 - Before `1.0.0`, the public API may still change, including in backwards-incompatible ways, in any
   `0.MINOR` release. While in alpha, this also applies between consecutive prereleases of the same
   version (e.g. `0.1.0a1` → `0.1.0a2`).

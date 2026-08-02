@@ -25,7 +25,7 @@ uv sync --extra cv-headless --extra viz
 Using a published release:
 
 ```bash
-pip install "improcv[cv-headless,viz]==0.2.0a2"
+pip install "improcv[cv-headless,viz]==0.2.0a3"
 ```
 
 `viz` (Matplotlib) is required to run any demo; `import improcv` itself never requires it.

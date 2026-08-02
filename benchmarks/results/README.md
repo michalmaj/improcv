@@ -81,8 +81,8 @@ this project's C++ sibling's own dated result notes) -- not required for every r
 - [`2026-08-02-evaluation-baseline.json`](2026-08-02-evaluation-baseline.json) -- a **compact,
   stats-only native saved run** (produced with `--benchmark-save`/`--benchmark-storage`, no
   `--benchmark-save-data`; `stats.data` confirmed absent from every entry), covering
-  `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_score`, and `multiclass_
-  average_precision_score` (the latter three at `average="macro"`) across sample scaling
+  `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_score`, and
+  `multiclass_average_precision_score` (the latter three at `average="macro"`) across sample scaling
   (1,000/10,000/100,000, fixed 10 classes) and ranking class scaling (3/10/100, fixed 10,000
   samples), at commit `658a6bcc6b943a1f9e232be51149b2d52d1a08d2`. This is the default format
   described above, not an exception.
