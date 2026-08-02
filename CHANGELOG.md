@@ -10,17 +10,20 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.2.0a3] - 2026-08-02
+
 ### Added
 - First reviewed multiclass evaluation benchmark baseline
   (`benchmarks/results/2026-08-02-evaluation-baseline.json` and its accompanying `.md` report),
   captured from the finalized harness at commit `658a6bcc6b943a1f9e232be51149b2d52d1a08d2` with a
-  clean working tree. Covers `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_
-  score`, and `multiclass_average_precision_score` (the latter three at `average="macro"`) across
-  sample scaling (1,000/10,000/100,000, fixed 10 classes) and ranking class scaling (3/10/100,
-  fixed 10,000 samples). The raw JSON is a compact, stats-only native `pytest-benchmark` saved run
-  (no `stats.data`); the Markdown report documents the environment, integrity checks, and scaling
-  observations for this one machine and run -- not a general performance guarantee.
-  `benchmarks/README.md` and `benchmarks/results/README.md` now link to both.
+  clean working tree. Covers `confusion_matrix`, `classification_metrics`,
+  `multiclass_roc_auc_score`, and `multiclass_average_precision_score` (the latter three at
+  `average="macro"`) across sample scaling (1,000/10,000/100,000, fixed 10 classes) and ranking
+  class scaling (3/10/100, fixed 10,000 samples). The raw JSON is a compact, stats-only native
+  `pytest-benchmark` saved run (no `stats.data`); the Markdown report documents the environment,
+  integrity checks, and scaling observations for this one machine and run -- not a general
+  performance guarantee. `benchmarks/README.md` and `benchmarks/results/README.md` now link to
+  both.
 - Opt-in multiclass evaluation scaling benchmarks (`benchmarks/benchmark_evaluation.py`),
   covering `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_score`, and
   `multiclass_average_precision_score` (the latter three at `average="macro"`). Two independent
@@ -29,9 +32,9 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   top of their own sample-count axis. Every dataset is deterministic and synthetic -- an
   explicit, deliberately unsorted `labels` order, `int64` `y_true`/`y_pred` with a fixed
   every-fifth-sample error policy, and (for ranking) a seeded `float64` score matrix that is
-  intentionally not row-normalized to a probability simplex. No runtime dependency, no timing
-  gate, and no new baseline committed by this change -- `benchmarks/README.md` documents scope
-  and how to run this family; a first stats-only baseline will follow in a separate PR.
+  intentionally not row-normalized to a probability simplex. No runtime dependency and no timing
+  gate; this harness PR itself did not commit a baseline -- a reviewed stats-only baseline is
+  listed separately in this release (see above).
 - First reviewed dataset discovery benchmark baseline
   (`benchmarks/results/2026-08-01-discovery-baseline.json` and its accompanying `.md` report),
   captured from the finalized harness at commit `50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` with a
@@ -49,9 +52,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   the library or by this measurement. Each benchmarked call is preceded by an untimed, asserted
   preflight call that validates the dataset and warms the filesystem metadata cache, so both
   groups (`discovery-images`, `discovery-pairs`) measure warm-filesystem-cache traversal only.
-  No runtime dependency, no timing gate, and no new baseline committed by this change --
-  `benchmarks/README.md` documents scope and how to run this family; a first stats-only baseline
-  will follow in a separate PR.
+  No runtime dependency and no timing gate; this harness PR itself did not commit a baseline --
+  a reviewed stats-only baseline is listed separately in this release (see above).
 - First reviewed affine augmentation benchmark baseline (`benchmarks/results/2026-08-01-augmentation-baseline.json`
   and its accompanying `.md` report), captured from the finalized harness at commit
   `55ed9b6d92942b35319b13faf95938c51bc4cbc9` with a clean working tree. The raw JSON is an
@@ -406,8 +408,9 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   image/mask key set mismatch, raises `ValueError` listing every offending key (with, for duplicates,
   every colliding relative path) -- both diagnostics truncate past 10 already-sorted entries with a
   trailing `"... and N more"` via a small shared private helper. `image_root == mask_root` is legal
-  (which physical files land on which side is governed entirely by `image_extensions`/`mask_
-  extensions`, with no special-casing based on root equality). However, a pair is rejected with
+  (which physical files land on which side is governed entirely by
+  `image_extensions`/`mask_extensions`, with no special-casing based on root equality). However,
+  a pair is rejected with
   `ValueError` when its returned `image` and `mask` `Path` values compare equal (only reachable when
   the two extension sets overlap under a shared root), since one path cannot serve as both members
   of the pair -- this does not call `resolve()`, compare inodes, or otherwise test physical file
