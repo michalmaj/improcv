@@ -11,6 +11,16 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Opt-in perceptual hashing scaling benchmarks (`benchmarks/benchmark_hashing.py`), covering the
+  complete public `average_hash` and `phash` calls (fixed `hash_size=8`) against a deterministic,
+  seeded BGR `uint8` source image at three sizes (`64x64`/`640x480`/`1920x1080`), in two
+  `pytest-benchmark` groups sharing session-scoped fixtures. The timed region is each function's
+  full public call -- validation, resize, grayscale conversion, and all algorithm-specific steps
+  through `PerceptualHash` construction -- with no image decoding or filesystem I/O, and no raw
+  or `opencv-contrib` baseline (neither function has a single raw kernel matching its full
+  contract). No timing gate; this harness PR itself does not commit a baseline -- a reviewed
+  baseline capture is planned as a separate follow-up PR. No public API, runtime dependency, or
+  version change.
 - Executable documentation for the dataset image similarity workflow: a copyable example
   (`examples/image_similarity.py`) and a visual demo generator (`demos/image_similarity_gallery.py`,
   producing the committed `docs/assets/image-similarity-gallery.png`). Both independently build the

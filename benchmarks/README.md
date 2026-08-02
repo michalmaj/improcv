@@ -1,8 +1,8 @@
 # Benchmarks
 
-Opt-in, developer-only performance measurements for `improcv`. Currently covers three families --
-affine augmentation, dataset discovery, and multiclass evaluation -- never part of the normal
-test suite, never a runtime dependency, never a gate on ordinary PRs.
+Opt-in, developer-only performance measurements for `improcv`. Currently covers four families --
+affine augmentation, perceptual hashing, dataset discovery, and multiclass evaluation -- never
+part of the normal test suite, never a runtime dependency, never a gate on ordinary PRs.
 
 ## Purpose
 
@@ -27,6 +27,15 @@ These benchmarks answer:
 - What cost does each function's full public contract (explicit unsorted labels, type/value
   validation, no probability-simplex requirement, canonical order-independent reductions,
   read-only results) add, and does that cost remain part of every timed call?
+- How does `average_hash` scale with the size of a BGR `uint8` source image, at a fixed
+  `hash_size=8`?
+- How does `phash` scale on that same source-image-size axis, at the same fixed `hash_size`?
+- What does each hashing function's full public contract cost -- resize, grayscale conversion,
+  threshold computation, bit packing, and `PerceptualHash` construction -- as one measured call,
+  not a sum of hand-isolated steps?
+- How should a fixed, small target hash grid (`8x8`, or `32x32` before pHash's DCT) be
+  interpreted against a growing source image -- does hashing cost track source pixels, or is it
+  dominated by the fixed-size resize target?
 
 ## Non-goals
 
@@ -49,7 +58,16 @@ These benchmarks are **not**:
 - a measurement of binary curves (`roc_curve`/`precision_recall_curve`) or binary
   `roc_auc_score`/`average_precision_score`;
 - a model-inference or end-to-end model-evaluation benchmark;
-- a claim of proven asymptotic complexity from a handful of measured points.
+- a claim of proven asymptotic complexity from a handful of measured points;
+- a measurement of image decoding, `find_similar_image_pairs`, or any pair-search/deduplication
+  scaling;
+- a measurement of Hamming distance (`PerceptualHash.distance`) on its own;
+- a measurement of dataset discovery combined with hashing (an end-to-end hashing workflow);
+- coverage of `hash_size` as a scaling axis -- only the default `hash_size=8` is measured;
+- a grayscale/BGRA/channel-count comparison, or a dtype comparison beyond `uint8`;
+- a comparison against `cv2.img_hash` or any other `opencv-contrib-python`-gated implementation;
+- a measurement of perceptual robustness, collision rate, or hash-quality/accuracy;
+- a recommendation of a universal similarity threshold or distance cutoff.
 
 ## Installation and smoke
 
@@ -86,6 +104,14 @@ uv run --group benchmark pytest \
   --benchmark-disable
 ```
 
+For perceptual hashing:
+
+```bash
+uv run --group benchmark pytest \
+  benchmarks/benchmark_hashing.py \
+  --benchmark-disable
+```
+
 A short, non-baseline functional run (a handful of rounds, useful for a quick local sanity
 check that timings scale sensibly, never for recording or comparing numbers) -- for evaluation:
 
@@ -116,11 +142,11 @@ interchangeable.
 ### Reviewed baseline candidate (default)
 
 A reviewed baseline is captured **one family at a time**, with the saved run's name matching
-that family -- `augmentation`, `discovery`, and `evaluation` are the current values. Running the
-whole `benchmarks/` directory (as in "Installation and smoke" above) is still correct for a
-quick local review across families, but it is not how a committed baseline is produced: a single
-saved run named after all of `benchmarks/` at once would be ambiguous about which family (or
-families) it actually captured, now that there is more than one.
+that family -- `augmentation`, `discovery`, `evaluation`, and `hashing` are the current values.
+Running the whole `benchmarks/` directory (as in "Installation and smoke" above) is still correct
+for a quick local review across families, but it is not how a committed baseline is produced: a
+single saved run named after all of `benchmarks/` at once would be ambiguous about which family
+(or families) it actually captured, now that there is more than one.
 
 ```bash
 FAMILY=evaluation
@@ -252,6 +278,38 @@ later extension, but the next added family was discovery scaling (below) instead
 filesystem traversal, sorting, and pairing behavior not represented by the affine baseline at
 all, which perspective would not have added.
 
+### Perceptual hashing
+
+Two groups, defined in `benchmark_hashing.py`, at three source image sizes (`64x64`, `640x480`,
+`1920x1080`):
+
+- `hashing-average-hash` -- the complete public `average_hash(image, hash_size=8)` call.
+- `hashing-phash` -- the complete public `phash(image, hash_size=8)` call.
+
+`hash_size` is fixed at `8` throughout -- hash-size scaling is a distinct question, out of scope
+for this first hashing slice (see "Non-goals" above). Every source image is a deterministic,
+seeded, C-contiguous `(height, width, 3)` `uint8` BGR array, built once per size in a
+session-scoped fixture shared by both groups -- never read from or written to disk, and no
+encoded image format is involved anywhere in this file. The timed region for each case is the
+complete public function call: input/`hash_size` validation, resize, BGR-to-grayscale
+conversion, every algorithm-specific step (`average_hash`'s mean/threshold; `phash`'s DCT/block
+selection/threshold), bit packing, and `PerceptualHash` construction -- nothing is extracted or
+pre-computed outside the timed call.
+
+There is no raw baseline for either group (no hand-written NumPy/OpenCV pipeline, no
+`cv2.img_hash`): no single raw kernel corresponds to either function's complete public contract,
+since both `average_hash` and `phash` are themselves multi-step pipelines -- reimplementing that
+pipeline by hand in a benchmark would just duplicate the implementation, not provide an
+independent reference. `cv2.img_hash` additionally requires `opencv-contrib-python` (not a
+dependency of this project) and returns a packed-byte result through a different API shape, not
+an `improcv.PerceptualHash` -- a ratio against it would compare two different result types under
+two different dependency footprints, not a same-contract raw/wrapper pair. This first hashing
+slice measures how the public API itself scales with source image size.
+
+There is no pair-search benchmark here: `find_similar_image_pairs` operates on already-computed
+hashes and never decodes, hashes, or reads an image itself (see `improcv/similarity.py`) -- it is
+a distinct scaling question, deliberately out of scope for this first hashing slice.
+
 ### Dataset discovery
 
 Two groups, at three entry counts (`100`, `1,000`, `10,000`), defined in
@@ -340,6 +398,13 @@ Three observations from that specific machine and run, elaborated on in the repo
   the rest, traced to a small fraction (~0.1%) of rounds affected by ordinary OS scheduling
   jitter -- its median/IQR (this project's primary statistics) were unremarkable.
 
+### Perceptual hashing
+
+No committed hashing baseline yet. This harness (`benchmark_hashing.py`) is newly added; a
+reviewed, stats-only baseline capture (committed JSON plus its accompanying Markdown report,
+following the same policy as the other families here) will follow as a separate PR once the
+harness itself has settled, not bundled into the PR that introduces it.
+
 ### Dataset discovery
 
 The first reviewed baseline is captured:
@@ -411,6 +476,6 @@ No examples or numbers are invented ahead of an actual case.
 CI runs exactly one non-timing smoke job: `uv run --group benchmark pytest benchmarks/
 --benchmark-disable` on a single platform/Python/OpenCV combination. It checks that the harness
 imports, collects, and its fixtures and correctness assertions still pass -- it asserts nothing
-about timing, and produces no JSON. This collects all three families (20 affine cases + 6
-discovery cases + 16 evaluation cases = 42). The normal `uv run pytest` used everywhere else
-never touches `benchmarks/` at all.
+about timing, and produces no JSON. This collects all four families (20 affine cases + 6 hashing
+cases + 6 discovery cases + 16 evaluation cases = 48). The normal `uv run pytest` used everywhere
+else never touches `benchmarks/` at all.
