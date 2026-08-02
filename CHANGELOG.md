@@ -11,6 +11,16 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- First reviewed perceptual hashing benchmark baseline
+  (`benchmarks/results/2026-08-02-hashing-baseline.json` and its accompanying `.md` report),
+  captured from the finalized harness at commit `c0a07a5a506b20aea15a8572c68a22d9eea641ce` with a
+  clean working tree. Covers the complete public `average_hash` and `phash` calls, fixed
+  `hash_size=8`, in two groups across three BGR `uint8` source image sizes
+  (`64x64`/`640x480`/`1920x1080`). The raw JSON is a compact, stats-only native
+  `pytest-benchmark` saved run (no `stats.data`); the Markdown report documents the environment,
+  integrity checks, and scaling observations for this one machine and run -- not a general
+  performance guarantee. `benchmarks/README.md` and `benchmarks/results/README.md` now link to
+  both.
 - Opt-in perceptual hashing scaling benchmarks (`benchmarks/benchmark_hashing.py`), covering the
   complete public `average_hash` and `phash` calls (fixed `hash_size=8`) against a deterministic,
   seeded BGR `uint8` source image at three sizes (`64x64`/`640x480`/`1920x1080`), in two

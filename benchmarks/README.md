@@ -400,10 +400,30 @@ Three observations from that specific machine and run, elaborated on in the repo
 
 ### Perceptual hashing
 
-No committed hashing baseline yet. This harness (`benchmark_hashing.py`) is newly added; a
-reviewed, stats-only baseline capture (committed JSON plus its accompanying Markdown report,
-following the same policy as the other families here) will follow as a separate PR once the
-harness itself has settled, not bundled into the PR that introduces it.
+The first reviewed baseline is captured:
+
+- Compact JSON: [`results/2026-08-02-hashing-baseline.json`](results/2026-08-02-hashing-baseline.json)
+- Reviewed report: [`results/2026-08-02-hashing-baseline.md`](results/2026-08-02-hashing-baseline.md)
+
+Captured at the exact harness commit `c0a07a5a506b20aea15a8572c68a22d9eea641ce`, with a clean
+working tree (`commit_info.dirty: false`). This is a **stats-only saved run**
+(`--benchmark-save`/`--benchmark-storage`, no `--benchmark-save-data`) -- `stats.data` (the full
+per-round timing array) is confirmed absent from every entry; the reviewed Markdown report
+contains the per-case tables and scaling interpretation, the JSON remains the raw source of
+truth. See `benchmarks/results/README.md` for the policy governing committed results.
+
+Three observations from that specific machine and run, elaborated on in the report itself:
+
+- Both `average_hash` and `phash` medians increased monotonically across the three measured
+  source sizes, but far from proportionally to source pixel count: `average_hash`'s median grew
+  only ~1.01x-1.05x and `phash`'s only ~1.06x-1.37x across two pixel-growth steps of 75x and
+  6.75x, respectively.
+- `median/pixel` fell steeply for both functions as source size grew, consistent with each
+  function reducing its input to a small, fixed target grid (`8x8` for `average_hash`, `32x32`
+  for `phash`) before doing its algorithm-specific work.
+- `phash`'s median was consistently 2.0x-2.7x `average_hash`'s median across all three sizes --
+  reported only as an observed ratio between two complete, different workflows, not as an
+  isolated DCT cost or a claim that either algorithm is generally faster or better.
 
 ### Dataset discovery
 

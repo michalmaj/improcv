@@ -89,14 +89,26 @@ this project's C++ sibling's own dated result notes) -- not required for every r
 - [`2026-08-02-evaluation-baseline.md`](2026-08-02-evaluation-baseline.md) -- the reviewed
   narrative interpretation of that JSON: environment, integrity checks, per-case tables, scaling
   observations, measurement spread, and limitations.
+- [`2026-08-02-hashing-baseline.json`](2026-08-02-hashing-baseline.json) -- a **compact,
+  stats-only native saved run** (produced with `--benchmark-save`/`--benchmark-storage`, no
+  `--benchmark-save-data`; `stats.data` confirmed absent from every entry), covering the complete
+  public `average_hash` and `phash` calls (fixed `hash_size=8`) at three BGR `uint8` source image
+  sizes (`64x64`/`640x480`/`1920x1080`), at the exact harness commit
+  `c0a07a5a506b20aea15a8572c68a22d9eea641ce`. This is the default format described above, not an
+  exception.
+- [`2026-08-02-hashing-baseline.md`](2026-08-02-hashing-baseline.md) -- the reviewed narrative
+  interpretation of that JSON: environment, integrity checks, per-case tables, scaling
+  observations, measurement spread, and limitations.
 
-The augmentation pair, the discovery pair, and the evaluation pair each describe their own
-single capture, at their own commit (`55ed9b6d92942b35319b13faf95938c51bc4cbc9` for augmentation,
+The augmentation pair, the discovery pair, the evaluation pair, and the hashing pair each
+describe their own single capture, at their own commit
+(`55ed9b6d92942b35319b13faf95938c51bc4cbc9` for augmentation,
 `50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` for discovery,
-`658a6bcc6b943a1f9e232be51149b2d52d1a08d2` for evaluation), all three with
-`commit_info.dirty: false`. Per the immutable-results policy above, none of the three pairs is
+`658a6bcc6b943a1f9e232be51149b2d52d1a08d2` for evaluation,
+`c0a07a5a506b20aea15a8572c68a22d9eea641ce` for hashing), all four with
+`commit_info.dirty: false`. Per the immutable-results policy above, none of the four pairs is
 ever overwritten by a future result -- a later baseline for any family gets its own new dated
 filename. The augmentation full-data capture remains a historical exception specific to that
-first-ever run; the discovery and evaluation baselines use -- and future baselines are expected
-to keep using -- the compact, stats-only saved-run format, reserving a full-data capture for a
-specific, reviewed diagnostic need.
+first-ever run; the discovery, evaluation, and hashing baselines use -- and future baselines are
+expected to keep using -- the compact, stats-only saved-run format, reserving a full-data capture
+for a specific, reviewed diagnostic need.
