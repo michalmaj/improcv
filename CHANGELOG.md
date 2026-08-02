@@ -11,6 +11,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- Opt-in pair-search scaling benchmarks (`benchmarks/benchmark_similarity.py`), covering the
+  complete public `find_similar_image_pairs` call against precomputed `PHASH` values
+  (`hash_size=8`) at `30`/`100`/`300` inputs, in two result-cardinality regimes: a zero-matches
+  threshold (`max_distance=0`, all hashes unique) and an all-matches threshold
+  (`max_distance=64`, every unordered pair materialized). Both regimes at a given input count
+  share one deterministic, session-scoped hash mapping, inserted in reverse canonical order so
+  the timed call must actually normalize and sort it. The timed region is the complete public
+  call -- validation, path normalization, duplicate-key detection, hash/threshold validation,
+  input sorting, every pairwise Hamming comparison, result construction, and final sorting --
+  with no filesystem access, image decoding, or hash computation anywhere in the harness, and no
+  raw baseline (no single raw kernel matches the full public contract). No timing gate; this
+  harness PR itself does not commit a baseline -- a reviewed capture is planned as a separate
+  follow-up PR. No public API, runtime dependency, or version change.
 - First reviewed perceptual hashing benchmark baseline
   (`benchmarks/results/2026-08-02-hashing-baseline.json` and its accompanying `.md` report),
   captured from the finalized harness at commit `c0a07a5a506b20aea15a8572c68a22d9eea641ce` with a
