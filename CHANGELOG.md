@@ -10,6 +10,22 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- New `improcv.similarity` module: `SimilarImagePair` (a frozen, canonically-ordered
+  `first`/`second`/`distance` result) and `find_similar_image_pairs`, a deterministic pairwise
+  similarity search over already-computed `PerceptualHash` values. The input is a `Mapping` of
+  path-like identifiers to `PerceptualHash` -- the function never reads, decodes, or hashes an
+  image itself, and never touches the filesystem; every value must share the same `algorithm`
+  and `hash_size`, checked once up front rather than surfacing incidentally from the first
+  incompatible comparison. `max_distance` is a required, keyword-only, inclusive Hamming-distance
+  threshold, capped at `hash_size ** 2`. Every unordered pair is compared exactly once
+  (`O(n**2)` comparisons); the result is a tuple sorted deterministically by
+  `(distance, first.as_posix(), second.as_posix())`, independent of the input mapping's own
+  iteration order or concrete type. This is a pairwise search only: it does not group results
+  into duplicate clusters, since threshold similarity is not transitive -- a dedicated regression
+  test locks in that a chain of pairwise-similar hashes is reported as separate overlapping
+  pairs, never merged into one group. No new runtime dependency.
+
 ## [0.2.0a3] - 2026-08-02
 
 ### Added

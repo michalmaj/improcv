@@ -318,6 +318,41 @@ for `hash_size=8` -- but not its packed-byte serialization, and not other
 libraries' (e.g. `ImageHash`) genuinely different, incompatible variants of
 the same algorithm names.
 
+Dataset image similarity:
+
+```python
+from pathlib import Path
+
+import cv2
+import improcv as im
+
+hashes: dict[Path, im.PerceptualHash] = {}
+
+for path in im.discover_images("images"):
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError(f"could not decode {path}")
+    hashes[path] = im.phash(image)
+
+pairs = im.find_similar_image_pairs(hashes, max_distance=8)
+
+for pair in pairs:
+    print(pair.distance, pair.first, pair.second)
+```
+
+`find_similar_image_pairs` never touches the filesystem, decodes an image, or
+computes a hash itself -- it only compares the `PerceptualHash` values you
+already have, once per unordered pair. That separation means hashes are
+computed exactly once, and the same collection can be re-searched at a
+different `max_distance` without redecoding or rehashing anything. The
+threshold has no library-provided default and must be chosen for your own
+application and algorithm. The result is a tuple of matching *pairs*, not
+duplicate groups: threshold similarity is not transitive (`A` close to `B`
+and `B` close to `C` does not imply `A` close to `C`), so pairs are reported
+independently rather than merged into clusters. Comparing every pair costs
+`O(n**2)` -- this first slice is a simple, deterministic building block, not
+a promise to scale to millions of images.
+
 Photo/creative single-image effects:
 
 ```python
