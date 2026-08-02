@@ -11,6 +11,16 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
+- First reviewed pairwise image similarity benchmark baseline
+  (`benchmarks/results/2026-08-02-similarity-baseline.json` and its accompanying `.md` report),
+  captured from the finalized harness at commit `72a2e01594f0ad1e2c569a74a2a2600992d0fef6` with a
+  clean working tree. Covers the complete public `find_similar_image_pairs` call against
+  precomputed `PHASH` values (`hash_size=8`) at `30`/`100`/`300` inputs, in two extreme
+  result-cardinality regimes (no matches and all matches). The raw JSON is a compact, stats-only
+  native `pytest-benchmark` saved run (no `stats.data`); the Markdown report documents the
+  environment, integrity checks, and scaling observations for this one machine and run -- not a
+  general performance guarantee. `benchmarks/README.md` and `benchmarks/results/README.md` now
+  link to both.
 - Opt-in pair-search scaling benchmarks (`benchmarks/benchmark_similarity.py`), covering the
   complete public `find_similar_image_pairs` call against precomputed `PHASH` values
   (`hash_size=8`) at `30`/`100`/`300` inputs, in two result-cardinality regimes: a zero-matches

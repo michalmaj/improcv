@@ -497,12 +497,31 @@ Three observations from that specific machine and run, elaborated on in the repo
 
 ### Pairwise image similarity
 
-No committed similarity baseline yet. This harness (`benchmark_similarity.py`) is newly added; a
-short local smoke run was used only to confirm the harness collects, runs, and produces the
-expected stats-only shape -- that smoke capture is not a reviewed baseline and is not committed.
-A reviewed, stats-only baseline capture (committed JSON plus its accompanying Markdown report,
-from a clean, finalized harness commit, following the same policy as the other families here)
-will follow as a separate PR once this harness has been merged.
+The first reviewed baseline is captured:
+
+- Compact JSON: [`results/2026-08-02-similarity-baseline.json`](results/2026-08-02-similarity-baseline.json)
+- Reviewed report: [`results/2026-08-02-similarity-baseline.md`](results/2026-08-02-similarity-baseline.md)
+
+Captured at the exact harness commit `72a2e01594f0ad1e2c569a74a2a2600992d0fef6`, with a clean
+working tree (`commit_info.dirty: false`). This is a **stats-only saved run**
+(`--benchmark-save`/`--benchmark-storage`, no `--benchmark-save-data`) -- `stats.data` (the full
+per-round timing array) is confirmed absent from every entry; the reviewed Markdown report
+contains the per-case tables and scaling interpretation, the JSON remains the raw source of
+truth. See `benchmarks/results/README.md` for the policy governing committed results.
+
+Three observations from that specific machine and run, elaborated on in the report itself:
+
+- Both regimes' medians increased monotonically across the three measured item counts, but not
+  proportionally to the unordered-pair-count growth: `no-matches`'s median grew ~6.6x-7.4x while
+  pairs grew ~9.1x-11.4x, and `all-matches`'s median grew ~10.9x-11.5x over the same steps.
+- The observed median normalized by unordered-pair count fell for `no-matches` as `n` grew
+  (206 ns -> 120 ns -> 98 ns per pair) but stayed roughly flat, with a slight upward drift, for
+  `all-matches` (~1,075-1,310 ns per pair) -- consistent with `no-matches`'s fixed
+  validation/sorting overhead amortizing over more pairs, while `all-matches` also grows its
+  constructed-and-sorted result list.
+- The all-matches/no-matches median ratio itself grew with `n` (5.2x -> 9.1x -> 13.4x) -- reported
+  only as an observed ratio between two complete workflows with different result cardinalities,
+  not as an isolated `SimilarImagePair`-construction or sorting cost.
 
 ### Dataset discovery
 
