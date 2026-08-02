@@ -1,8 +1,9 @@
 # Benchmarks
 
-Opt-in, developer-only performance measurements for `improcv`. Currently covers four families --
-affine augmentation, perceptual hashing, dataset discovery, and multiclass evaluation -- never
-part of the normal test suite, never a runtime dependency, never a gate on ordinary PRs.
+Opt-in, developer-only performance measurements for `improcv`. Currently covers five families --
+affine augmentation, perceptual hashing, pairwise image similarity, dataset discovery, and
+multiclass evaluation -- never part of the normal test suite, never a runtime dependency, never a
+gate on ordinary PRs.
 
 ## Purpose
 
@@ -36,6 +37,17 @@ These benchmarks answer:
 - How should a fixed, small target hash grid (`8x8`, or `32x32` before pHash's DCT) be
   interpreted against a growing source image -- does hashing cost track source pixels, or is it
   dominated by the fixed-size resize target?
+- How does the complete public `find_similar_image_pairs` call scale with the number of
+  precomputed hashes it searches?
+- How does the number of unordered comparisons (`n(n-1)/2`) drive that cost?
+- How does the workflow behave when the search result is empty (no pair within threshold)?
+- How does the workflow behave when every unordered pair is materialized into the result?
+- What cost remains in the complete public call -- path normalization, `algorithm`/`hash_size`
+  compatibility validation, input sorting, every Hamming comparison, and result
+  construction/sorting -- as one measured call, not a sum of hand-isolated steps?
+
+This does not measure how a perceptual hash is computed (see "Perceptual hashing" above) --
+`find_similar_image_pairs` only ever consumes already-computed `PerceptualHash` values.
 
 ## Non-goals
 
@@ -59,15 +71,29 @@ These benchmarks are **not**:
   `roc_auc_score`/`average_precision_score`;
 - a model-inference or end-to-end model-evaluation benchmark;
 - a claim of proven asymptotic complexity from a handful of measured points;
-- a measurement of image decoding, `find_similar_image_pairs`, or any pair-search/deduplication
-  scaling;
-- a measurement of Hamming distance (`PerceptualHash.distance`) on its own;
+- a measurement of image decoding;
+- a measurement of Hamming distance (`PerceptualHash.distance`) on its own, as a standalone
+  microbenchmark;
 - a measurement of dataset discovery combined with hashing (an end-to-end hashing workflow);
 - coverage of `hash_size` as a scaling axis -- only the default `hash_size=8` is measured;
 - a grayscale/BGRA/channel-count comparison, or a dtype comparison beyond `uint8`;
 - a comparison against `cv2.img_hash` or any other `opencv-contrib-python`-gated implementation;
 - a measurement of perceptual robustness, collision rate, or hash-quality/accuracy;
-- a recommendation of a universal similarity threshold or distance cutoff.
+- a recommendation of a universal similarity threshold or distance cutoff;
+- an end-to-end discovery/decode/hash/search workflow benchmark;
+- a measurement of perceptual hash computation (`average_hash`/`phash`) as part of the
+  similarity-search cases -- `find_similar_image_pairs` only ever consumes already-computed
+  hashes;
+- any match-density scenario between the two measured extremes (`0%` and `100%`);
+- coverage of any `max_distance` other than `0` and `64` (the maximum legal threshold for
+  `hash_size=8`);
+- coverage of any hashing algorithm other than `PHASH`, or any `hash_size` other than `8`, in the
+  similarity-search cases;
+- a comparison of concrete `Mapping` types, or a `str`-vs-`Path` key-type axis;
+- duplicate grouping, clustering, or connected-component analysis;
+- a BK-tree, approximate-nearest-neighbor, or any other subquadratic/indexed search structure;
+- parallelism of any kind;
+- a measurement of real-world duplicate-detection accuracy.
 
 ## Installation and smoke
 
@@ -112,6 +138,14 @@ uv run --group benchmark pytest \
   --benchmark-disable
 ```
 
+For pairwise image similarity:
+
+```bash
+uv run --group benchmark pytest \
+  benchmarks/benchmark_similarity.py \
+  --benchmark-disable
+```
+
 A short, non-baseline functional run (a handful of rounds, useful for a quick local sanity
 check that timings scale sensibly, never for recording or comparing numbers) -- for evaluation:
 
@@ -142,8 +176,9 @@ interchangeable.
 ### Reviewed baseline candidate (default)
 
 A reviewed baseline is captured **one family at a time**, with the saved run's name matching
-that family -- `augmentation`, `discovery`, `evaluation`, and `hashing` are the current values.
-Running the whole `benchmarks/` directory (as in "Installation and smoke" above) is still correct
+that family -- `augmentation`, `discovery`, `evaluation`, `hashing`, and `similarity` are the
+current values. Running the whole `benchmarks/` directory (as in "Installation and smoke" above)
+is still correct
 for a quick local review across families, but it is not how a committed baseline is produced: a
 single saved run named after all of `benchmarks/` at once would be ambiguous about which family
 (or families) it actually captured, now that there is more than one.
@@ -306,9 +341,44 @@ an `improcv.PerceptualHash` -- a ratio against it would compare two different re
 two different dependency footprints, not a same-contract raw/wrapper pair. This first hashing
 slice measures how the public API itself scales with source image size.
 
-There is no pair-search benchmark here: `find_similar_image_pairs` operates on already-computed
-hashes and never decodes, hashes, or reads an image itself (see `improcv/similarity.py`) -- it is
-a distinct scaling question, deliberately out of scope for this first hashing slice.
+`find_similar_image_pairs` -- the pair-search step that consumes already-computed hashes -- is a
+distinct scaling question, benchmarked separately below.
+
+### Pairwise image similarity
+
+Two groups, defined in `benchmark_similarity.py`, at three item counts (`30`, `100`, `300`
+precomputed hashes, i.e. `435`/`4,950`/`44,850` unordered pairs):
+
+- `similarity-no-matches` -- the complete public `find_similar_image_pairs(hashes,
+  max_distance=0)` call, where every hash is unique and the result is always empty.
+- `similarity-all-matches` -- the complete public `find_similar_image_pairs(hashes,
+  max_distance=64)` call (`64 == hash_size**2`, the maximum legal threshold for `hash_size=8`),
+  where every unordered pair is materialized into the result.
+
+Both regimes at a given item count share exactly the same input mapping, built once per session
+and inserted in reverse canonical (`path.as_posix()`) order, so the timed call must actually
+normalize and sort the input rather than benefit from an already-sorted mapping. Every hash value
+is a synthetic, legal `PHASH` object built from a deterministic, guaranteed-unique integer
+transform (see the module docstring) -- `average_hash`/`phash` are never called, no image or
+NumPy array exists anywhere in this file, and `discover_images` is never called. Path identifiers
+(`images/image_NNNNN.png`) are synthetic and never opened, created, or otherwise touched --
+`find_similar_image_pairs` performs no filesystem access at all. The timed region for each case
+is the complete public function call: `max_distance` validation, `Mapping` validation, path
+normalization, duplicate-key detection, per-hash validation, the shared `algorithm`/`hash_size`
+check, the threshold upper-bound check, input sorting, every unordered-pair enumeration, every
+`PerceptualHash.distance` call, the threshold branch, `SimilarImagePair` construction where it
+matches, the final result sort, and the tuple conversion -- nothing is extracted or pre-computed
+outside the timed call except the hash mapping itself (unavoidable, since the public API's
+contract starts from already-computed hashes).
+
+There is no raw baseline here (no hand-written `itertools.combinations` loop, no private access
+to `PerceptualHash._value`): such a version would duplicate a fragment of `find_similar_image_
+pairs`'s own implementation, skip its path normalization and compatibility validation, and return
+raw tuples instead of `SimilarImagePair` -- not the same public workflow. **The all-matches/
+no-matches contrast compares two complete public workflows with different result cardinalities
+and branch outcomes. It does not isolate an exact per-object materialization cost.** There is no
+grouping/clustering, and no intermediate match-density scenario between the two measured
+extremes -- see "Non-goals" above.
 
 ### Dataset discovery
 
@@ -425,6 +495,15 @@ Three observations from that specific machine and run, elaborated on in the repo
   reported only as an observed ratio between two complete, different workflows, not as an
   isolated DCT cost or a claim that either algorithm is generally faster or better.
 
+### Pairwise image similarity
+
+No committed similarity baseline yet. This harness (`benchmark_similarity.py`) is newly added; a
+short local smoke run was used only to confirm the harness collects, runs, and produces the
+expected stats-only shape -- that smoke capture is not a reviewed baseline and is not committed.
+A reviewed, stats-only baseline capture (committed JSON plus its accompanying Markdown report,
+from a clean, finalized harness commit, following the same policy as the other families here)
+will follow as a separate PR once this harness has been merged.
+
 ### Dataset discovery
 
 The first reviewed baseline is captured:
@@ -496,6 +575,6 @@ No examples or numbers are invented ahead of an actual case.
 CI runs exactly one non-timing smoke job: `uv run --group benchmark pytest benchmarks/
 --benchmark-disable` on a single platform/Python/OpenCV combination. It checks that the harness
 imports, collects, and its fixtures and correctness assertions still pass -- it asserts nothing
-about timing, and produces no JSON. This collects all four families (20 affine cases + 6 hashing
-cases + 6 discovery cases + 16 evaluation cases = 48). The normal `uv run pytest` used everywhere
-else never touches `benchmarks/` at all.
+about timing, and produces no JSON. This collects all five families (20 affine cases + 6 hashing
+cases + 6 similarity cases + 6 discovery cases + 16 evaluation cases = 54). The normal `uv run
+pytest` used everywhere else never touches `benchmarks/` at all.
