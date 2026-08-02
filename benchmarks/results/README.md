@@ -78,12 +78,25 @@ this project's C++ sibling's own dated result notes) -- not required for every r
 - [`2026-08-01-discovery-baseline.md`](2026-08-01-discovery-baseline.md) -- the reviewed narrative
   interpretation of that JSON: environment, integrity checks, per-case tables, scaling
   observations, measurement spread, and limitations.
+- [`2026-08-02-evaluation-baseline.json`](2026-08-02-evaluation-baseline.json) -- a **compact,
+  stats-only native saved run** (produced with `--benchmark-save`/`--benchmark-storage`, no
+  `--benchmark-save-data`; `stats.data` confirmed absent from every entry), covering
+  `confusion_matrix`, `classification_metrics`, `multiclass_roc_auc_score`, and `multiclass_
+  average_precision_score` (the latter three at `average="macro"`) across sample scaling
+  (1,000/10,000/100,000, fixed 10 classes) and ranking class scaling (3/10/100, fixed 10,000
+  samples), at commit `658a6bcc6b943a1f9e232be51149b2d52d1a08d2`. This is the default format
+  described above, not an exception.
+- [`2026-08-02-evaluation-baseline.md`](2026-08-02-evaluation-baseline.md) -- the reviewed
+  narrative interpretation of that JSON: environment, integrity checks, per-case tables, scaling
+  observations, measurement spread, and limitations.
 
-Both the augmentation pair and the discovery pair describe their own single capture, each at its
-own commit (`55ed9b6d92942b35319b13faf95938c51bc4cbc9` for augmentation,
-`50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` for discovery), both with `commit_info.dirty: false`.
-Per the immutable-results policy above, neither pair is ever overwritten by a future result -- a
-later baseline for either family gets its own new dated filename. The augmentation full-data
-capture remains a historical exception specific to that first-ever run; the discovery baseline
-uses -- and future baselines are expected to keep using -- the compact, stats-only saved-run
-format, reserving a full-data capture for a specific, reviewed diagnostic need.
+The augmentation pair, the discovery pair, and the evaluation pair each describe their own
+single capture, at their own commit (`55ed9b6d92942b35319b13faf95938c51bc4cbc9` for augmentation,
+`50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` for discovery,
+`658a6bcc6b943a1f9e232be51149b2d52d1a08d2` for evaluation), all three with
+`commit_info.dirty: false`. Per the immutable-results policy above, none of the three pairs is
+ever overwritten by a future result -- a later baseline for any family gets its own new dated
+filename. The augmentation full-data capture remains a historical exception specific to that
+first-ever run; the discovery and evaluation baselines use -- and future baselines are expected
+to keep using -- the compact, stats-only saved-run format, reserving a full-data capture for a
+specific, reviewed diagnostic need.
