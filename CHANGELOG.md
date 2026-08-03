@@ -10,6 +10,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `PerceptualHashManifest`/`PerceptualHashManifestEntry` (`improcv.manifest`): a deterministic,
+  portable JSON snapshot of precomputed `PerceptualHash` values, with a single `algorithm`/
+  `hash_size` per manifest (matching `find_similar_image_pairs`'s own single-hash-space
+  requirement); paths are stored as canonical, relative `pathlib.PurePosixPath` identifiers, never
+  absolute and never platform-specific; `from_hashes`/`to_hashes` round-trip directly against
+  `find_similar_image_pairs`'s `hashes` argument; `to_json`/`from_json` produce and strictly parse
+  a versioned schema (`schema_version: 1`) that serializes byte-identically regardless of input
+  insertion order and rejects malformed, duplicate-keyed, or non-canonical input with a specific
+  field-level error; the manifest performs no filesystem I/O, stores no dataset root or file
+  metadata, and makes no freshness or cache guarantees -- it is a snapshot, not a cache, and file
+  save/load convenience is left for a future addition. No new dependencies.
+
 ## [0.3.0a1] - 2026-08-03
 
 ### Added
