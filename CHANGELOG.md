@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.3.0a1] - 2026-08-03
+
 ### Added
 - First reviewed pairwise image similarity benchmark baseline
   (`benchmarks/results/2026-08-02-similarity-baseline.json` and its accompanying `.md` report),
