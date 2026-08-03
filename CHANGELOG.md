@@ -10,6 +10,19 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `build_perceptual_hash_manifest` (`improcv.dataset`): a deterministic, sequential dataset-to-
+  manifest builder -- delegates discovery of a local dataset root entirely to `discover_images`
+  (inheriting its ordering, symlink, hidden-file, and extension-matching policy unchanged), decodes
+  each discovered file exactly once as 8-bit grayscale, hashes it with the requested `AVERAGE_HASH`
+  or `PHASH` algorithm, and hands the resulting relative, portable identifiers to
+  `PerceptualHashManifest.from_hashes` to produce a canonical manifest. An empty dataset returns a
+  well-defined empty manifest (no image is ever decoded); a file that fails to decode raises
+  immediately, naming the first such file (in canonical order) by its relative identifier and
+  local source path, with no partial manifest ever returned. The function only ever returns a
+  `PerceptualHashManifest` -- it never saves it, never reads or reuses an existing manifest, never
+  checks freshness, and never runs any work in parallel. No new dependencies.
+
 ## [0.3.0a2] - 2026-08-03
 
 ### Added
