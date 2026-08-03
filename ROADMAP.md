@@ -69,8 +69,10 @@ version decided at the time each is actually published, rather than mechanically
   manifests, dataset splits, and batching/loading remain planned, not started), and
   dataset image similarity (deterministic pairwise similarity search over precomputed perceptual
   hashes -- `improcv.similarity.find_similar_image_pairs` -- implemented, shipping in `0.3.0a1`;
-  hash manifests/caching, duplicate groups/clustering, indexed/subquadratic search, and parallel
-  hashing/search remain planned, not started). Bounding boxes/
+  portable, deterministic perceptual-hash manifests (`improcv.manifest.PerceptualHashManifest`)
+  with strict schema-v1 JSON and atomic `save`/`load` implemented, shipping in `0.3.0a2`;
+  incremental caching/freshness validation, duplicate groups/clustering, indexed/subquadratic
+  search, and parallel hashing/search remain planned, not started). Bounding boxes/
   keypoints/polygons in augmentation, a
   `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as

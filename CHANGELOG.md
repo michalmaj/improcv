@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.3.0a2] - 2026-08-03
+
 ### Added
 - `PerceptualHashManifest`/`PerceptualHashManifestEntry` (`improcv.manifest`): a deterministic,
   portable JSON snapshot of precomputed `PerceptualHash` values, with a single `algorithm`/
