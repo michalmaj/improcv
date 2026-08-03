@@ -29,22 +29,6 @@ def _hash(
     return PerceptualHash.from_hex(hex_value, algorithm=algorithm, hash_size=hash_size)
 
 
-def _hashes(
-    mapping: dict[str | os.PathLike[str], PerceptualHash],
-) -> dict[str | os.PathLike[str], PerceptualHash]:
-    """Identity wrapper that widens a dict literal's inferred key type to match
-    `find_similar_image_pairs`' own `Mapping[str | os.PathLike[str], ...]`
-    parameter type.
-
-    `Mapping`'s key type is invariant in the type system, so a plain
-    `dict[str, PerceptualHash]` literal is not otherwise assignable where
-    `Mapping[str | os.PathLike[str], PerceptualHash]` is expected -- passing
-    the literal through this function's annotated parameter instead makes
-    Pyright infer the literal directly against the wider key type.
-    """
-    return mapping
-
-
 class _Boom:
     def __call__(self, *args: object, **kwargs: object) -> None:
         raise AssertionError("find_similar_image_pairs must not perform this operation")
@@ -170,22 +154,20 @@ def test_two_different_paths_with_identical_hash_is_a_legal_pair() -> None:
 
 
 def test_maximum_legal_threshold_returns_all_pairs() -> None:
-    hashes = _hashes({"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")})
+    hashes = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     assert len(result) == 3
 
 
 def test_every_pair_checked_exactly_once() -> None:
-    hashes = _hashes(
-        {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3"), "d.png": _hash("F")}
-    )
+    hashes = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3"), "d.png": _hash("F")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     seen_keys = {frozenset((p.first, p.second)) for p in result}
     assert len(seen_keys) == len(result) == 6
 
 
 def test_no_self_pairs() -> None:
-    hashes = _hashes({"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")})
+    hashes = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     assert all(pair.first != pair.second for pair in result)
 
@@ -206,15 +188,15 @@ def test_result_elements_are_similar_image_pair() -> None:
 
 
 def test_insertion_order_does_not_affect_result() -> None:
-    forward = _hashes({"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")})
-    backward = _hashes({"c.png": _hash("3"), "b.png": _hash("1"), "a.png": _hash("0")})
+    forward = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")}
+    backward = {"c.png": _hash("3"), "b.png": _hash("1"), "a.png": _hash("0")}
     assert find_similar_image_pairs(forward, max_distance=4) == find_similar_image_pairs(
         backward, max_distance=4
     )
 
 
 def test_result_sorted_by_distance_primarily() -> None:
-    hashes = _hashes({"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")})
+    hashes = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     distances = [pair.distance for pair in result]
     assert distances == sorted(distances)
@@ -222,7 +204,7 @@ def test_result_sorted_by_distance_primarily() -> None:
 
 def test_ties_in_distance_broken_by_first_path() -> None:
     # a<->m: distance(3, 1) = 1; a<->z: distance(3, 0) = 2; m<->z: distance(1, 0) = 1
-    hashes = _hashes({"z.png": _hash("0"), "m.png": _hash("1"), "a.png": _hash("3")})
+    hashes = {"z.png": _hash("0"), "m.png": _hash("1"), "a.png": _hash("3")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     assert [(p.first.name, p.second.name, p.distance) for p in result] == [
         ("a.png", "m.png", 1),
@@ -233,7 +215,7 @@ def test_ties_in_distance_broken_by_first_path() -> None:
 
 def test_ties_in_distance_and_first_broken_by_second_path() -> None:
     # a<->b: distance(0, 1) = 1; a<->c: distance(0, 2) = 1; b<->c: distance(1, 2) = 2
-    hashes = _hashes({"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("2")})
+    hashes = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("2")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     assert [(p.first.name, p.second.name, p.distance) for p in result] == [
         ("a.png", "b.png", 1),
@@ -243,21 +225,19 @@ def test_ties_in_distance_and_first_broken_by_second_path() -> None:
 
 
 def test_every_pair_is_in_canonical_order() -> None:
-    hashes = _hashes({"z.png": _hash("0"), "m.png": _hash("1"), "a.png": _hash("3")})
+    hashes = {"z.png": _hash("0"), "m.png": _hash("1"), "a.png": _hash("3")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     assert all(pair.first.as_posix() < pair.second.as_posix() for pair in result)
 
 
 def test_three_entries_give_exactly_three_pairs_at_max_threshold() -> None:
-    hashes = _hashes({"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")})
+    hashes = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     assert len(result) == 3
 
 
 def test_four_entries_give_exactly_six_pairs_at_max_threshold() -> None:
-    hashes = _hashes(
-        {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3"), "d.png": _hash("F")}
-    )
+    hashes = {"a.png": _hash("0"), "b.png": _hash("1"), "c.png": _hash("3"), "d.png": _hash("F")}
     result = find_similar_image_pairs(hashes, max_distance=4)
     assert len(result) == 6
 
@@ -274,12 +254,48 @@ def test_returns_pairs_without_transitive_grouping() -> None:
     must contain exactly (A, B) and (B, C), never a merged group {A, B, C},
     never only one of the two pairs, and never (A, C).
     """
-    hashes = _hashes({"A.png": _hash("0"), "B.png": _hash("1"), "C.png": _hash("3")})
+    hashes = {"A.png": _hash("0"), "B.png": _hash("1"), "C.png": _hash("3")}
     result = find_similar_image_pairs(hashes, max_distance=1)
     assert result == (
         SimilarImagePair(first=Path("A.png"), second=Path("B.png"), distance=1),
         SimilarImagePair(first=Path("B.png"), second=Path("C.png"), distance=1),
     )
+
+
+# =====================================================================================
+# find_similar_image_pairs -- accepted concrete mapping key types (static + runtime)
+# =====================================================================================
+
+
+def test_accepts_dict_str_keys() -> None:
+    hashes: dict[str, PerceptualHash] = {"a.png": _hash("0"), "b.png": _hash("1")}
+    result = find_similar_image_pairs(hashes, max_distance=1)
+    assert len(result) == 1
+
+
+def test_accepts_dict_path_keys() -> None:
+    path_hashes: dict[Path, PerceptualHash] = {
+        Path("a.png"): _hash("0"),
+        Path("b.png"): _hash("1"),
+    }
+    result = find_similar_image_pairs(path_hashes, max_distance=1)
+    assert len(result) == 1
+
+
+def test_accepts_dict_custom_pathlike_keys() -> None:
+    class _StrPath:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        def __fspath__(self) -> str:
+            return self._name
+
+    custom_hashes: dict[_StrPath, PerceptualHash] = {
+        _StrPath("a.png"): _hash("0"),
+        _StrPath("b.png"): _hash("1"),
+    }
+    result = find_similar_image_pairs(custom_hashes, max_distance=1)
+    assert len(result) == 1
 
 
 # =====================================================================================
@@ -561,7 +577,7 @@ def test_does_not_import_cv2_or_discovery() -> None:
 def test_does_not_modify_the_input_mapping() -> None:
     hash_a = _hash("0")
     hash_b = _hash("1")
-    hashes = _hashes({"a.png": hash_a, "b.png": hash_b})
+    hashes = {"a.png": hash_a, "b.png": hash_b}
     snapshot = dict(hashes)
 
     find_similar_image_pairs(hashes, max_distance=1)

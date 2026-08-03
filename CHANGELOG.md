@@ -21,7 +21,10 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   insertion order and rejects malformed, duplicate-keyed, or non-canonical input with a specific
   field-level error; the manifest performs no filesystem I/O, stores no dataset root or file
   metadata, and makes no freshness or cache guarantees -- it is a snapshot, not a cache, and file
-  save/load convenience is left for a future addition. No new dependencies.
+  save/load convenience is left for a future addition. No new dependencies. `from_hashes`' `hashes`
+  parameter (and `find_similar_image_pairs`'s own `hashes` parameter) is now generic over its path
+  key type, so concrete mappings keyed by `str`, `Path`, `PurePosixPath`, or a custom
+  `os.PathLike[str]` type-check directly without a cast; no runtime behavior changed.
 
 ## [0.3.0a1] - 2026-08-03
 
