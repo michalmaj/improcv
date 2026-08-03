@@ -30,6 +30,13 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   parameter) is now generic over its path key type, so concrete mappings keyed by `str`, `Path`,
   `PurePosixPath`, or a custom `os.PathLike[str]` type-check directly without a cast; no runtime
   behavior changed.
+- `examples/image_similarity_manifest.py`: a runnable manifest persistence workflow --
+  `discover_images` finds a synthetic dataset, each image is decoded and hashed exactly once, the
+  hashes are stored under identifiers relative to the dataset root, and the resulting
+  `PerceptualHashManifest` is written and reloaded with deterministic `save`/`load`; the dataset
+  root is then moved and a similarity search runs against the reloaded hashes with no re-decoding
+  or re-hashing. Uses only synthetic, in-memory data -- no external data, no network, no GUI, no
+  new public API, no new dependency.
 
 ## [0.3.0a1] - 2026-08-03
 
