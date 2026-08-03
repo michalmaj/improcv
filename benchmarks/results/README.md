@@ -99,16 +99,28 @@ this project's C++ sibling's own dated result notes) -- not required for every r
 - [`2026-08-02-hashing-baseline.md`](2026-08-02-hashing-baseline.md) -- the reviewed narrative
   interpretation of that JSON: environment, integrity checks, per-case tables, scaling
   observations, measurement spread, and limitations.
+- [`2026-08-02-similarity-baseline.json`](2026-08-02-similarity-baseline.json) -- a **compact,
+  stats-only native saved run** (produced with `--benchmark-save`/`--benchmark-storage`, no
+  `--benchmark-save-data`; `stats.data` confirmed absent from every entry), covering the complete
+  public `find_similar_image_pairs` call against precomputed `PHASH` values (`hash_size=8`) at
+  `30`/`100`/`300` items (`435`/`4,950`/`44,850` unordered pairs), in two groups
+  (`similarity-no-matches`: 3 entries, `similarity-all-matches`: 3 entries), at the exact harness
+  commit `72a2e01594f0ad1e2c569a74a2a2600992d0fef6`. This is the default format described above,
+  not an exception.
+- [`2026-08-02-similarity-baseline.md`](2026-08-02-similarity-baseline.md) -- the reviewed
+  narrative interpretation of that JSON: environment, integrity checks, per-case tables, scaling
+  observations, measurement spread, and limitations.
 
-The augmentation pair, the discovery pair, the evaluation pair, and the hashing pair each
-describe their own single capture, at their own commit
+The augmentation pair, the discovery pair, the evaluation pair, the hashing pair, and the
+similarity pair each describe their own single capture, at their own commit
 (`55ed9b6d92942b35319b13faf95938c51bc4cbc9` for augmentation,
 `50a0a2bc48e8c49b9a26b3f7c8284107e6f5bfce` for discovery,
 `658a6bcc6b943a1f9e232be51149b2d52d1a08d2` for evaluation,
-`c0a07a5a506b20aea15a8572c68a22d9eea641ce` for hashing), all four with
-`commit_info.dirty: false`. Per the immutable-results policy above, none of the four pairs is
+`c0a07a5a506b20aea15a8572c68a22d9eea641ce` for hashing,
+`72a2e01594f0ad1e2c569a74a2a2600992d0fef6` for similarity), all five with
+`commit_info.dirty: false`. Per the immutable-results policy above, none of the five pairs is
 ever overwritten by a future result -- a later baseline for any family gets its own new dated
 filename. The augmentation full-data capture remains a historical exception specific to that
-first-ever run; the discovery, evaluation, and hashing baselines use -- and future baselines are
-expected to keep using -- the compact, stats-only saved-run format, reserving a full-data capture
-for a specific, reviewed diagnostic need.
+first-ever run; the discovery, evaluation, hashing, and similarity baselines use -- and future
+baselines are expected to keep using -- the compact, stats-only saved-run format, reserving a
+full-data capture for a specific, reviewed diagnostic need.
