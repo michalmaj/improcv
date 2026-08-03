@@ -19,12 +19,17 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `find_similar_image_pairs`'s `hashes` argument; `to_json`/`from_json` produce and strictly parse
   a versioned schema (`schema_version: 1`) that serializes byte-identically regardless of input
   insertion order and rejects malformed, duplicate-keyed, or non-canonical input with a specific
-  field-level error; the manifest performs no filesystem I/O, stores no dataset root or file
-  metadata, and makes no freshness or cache guarantees -- it is a snapshot, not a cache, and file
-  save/load convenience is left for a future addition. No new dependencies. `from_hashes`' `hashes`
-  parameter (and `find_similar_image_pairs`'s own `hashes` parameter) is now generic over its path
-  key type, so concrete mappings keyed by `str`, `Path`, `PurePosixPath`, or a custom
-  `os.PathLike[str]` type-check directly without a cast; no runtime behavior changed.
+  field-level error; the manifest model itself performs no filesystem I/O, stores no dataset root
+  or file metadata, and makes no freshness or cache guarantees -- it is a snapshot, not a cache.
+  `save(path, overwrite=False)`/`load(path)` add a thin, explicit UTF-8 file transport: `save`
+  writes the exact deterministic `to_json()` bytes to a same-directory temporary file, flushes and
+  `fsync`s it, then publishes it -- atomically refusing to clobber an existing file by default, or
+  atomically replacing it with `overwrite=True` -- always cleaning up the temporary file and never
+  creating the parent directory; `load` reads UTF-8 and delegates entirely to `from_json`. No new
+  dependencies. `from_hashes`' `hashes` parameter (and `find_similar_image_pairs`'s own `hashes`
+  parameter) is now generic over its path key type, so concrete mappings keyed by `str`, `Path`,
+  `PurePosixPath`, or a custom `os.PathLike[str]` type-check directly without a cast; no runtime
+  behavior changed.
 
 ## [0.3.0a1] - 2026-08-03
 

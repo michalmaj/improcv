@@ -374,21 +374,36 @@ Precomputed hashes don't have to be recomputed every run: `PerceptualHashManifes
 reused later, or shared with another machine:
 
 ```python
-manifest = im.PerceptualHashManifest.from_hashes(hashes, algorithm=im.PerceptualHashAlgorithm.PHASH, hash_size=8)
-text = manifest.to_json()
+manifest = im.PerceptualHashManifest.from_hashes(
+    hashes,
+    algorithm=im.PerceptualHashAlgorithm.PHASH,
+    hash_size=8,
+)
 
-restored = im.PerceptualHashManifest.from_json(text)
-pairs = im.find_similar_image_pairs(restored.to_hashes(), max_distance=8)
+manifest.save("image-hashes.json")
+
+restored = im.PerceptualHashManifest.load(
+    "image-hashes.json"
+)
+
+pairs = im.find_similar_image_pairs(
+    restored.to_hashes(),
+    max_distance=8,
+)
 ```
 
 A manifest stores each path as a portable, relative, POSIX-style identifier -- never an absolute
 path -- so the same JSON is valid regardless of which machine or directory it was built on, and
-`to_json()`/`from_json()` round-trip byte-for-byte regardless of the input mapping's insertion
-order. It is a snapshot, not a cache: it never checks whether a path still exists, never records
-file size or modification time, and has no notion of "freshness" -- keeping a manifest in sync
-with the images it describes is entirely the caller's responsibility. Reading or writing an actual
-`.json` file is not part of this API yet; `to_json()`/`from_json()` work on in-memory `str` values,
-and file save/load convenience is planned as a separate addition.
+`to_json()`/`from_json()` (and, in turn, `save()`/`load()`) round-trip byte-for-byte regardless of
+the input mapping's insertion order. `save()` writes UTF-8, deterministic JSON text and publishes
+it atomically; by default (`overwrite=False`) it never clobbers an existing file at that path --
+saving again under the same name requires `manifest.save(path, overwrite=True)` explicitly. The
+parent directory is never created automatically. It is still a snapshot, not a cache: `save`/`load`
+add a file transport, nothing else -- the manifest never checks whether a path still exists, never
+checks freshness, never records file size or modification time, and keeping it in sync with the
+images it describes is entirely the caller's responsibility. `to_json()`/`from_json()` remain
+available for in-memory transport (e.g. sending a manifest over a network) when a file isn't
+wanted at all.
 
 Photo/creative single-image effects:
 

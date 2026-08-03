@@ -921,12 +921,11 @@ def test_top_level_all_places_new_symbols_alphabetically() -> None:
 
 
 def test_manifest_module_does_not_import_cv2_or_numpy() -> None:
-    """Static architecture-boundary check: `manifest.py` never references cv2/NumPy/filesystem
-    I/O -- building and (de)serializing a manifest is its entire responsibility.
+    """Static architecture-boundary check: `manifest.py` never references cv2 or NumPy --
+    the manifest model and its JSON string transport have no dependency on either. This no
+    longer claims the whole module is free of file I/O: `save`/`load` are its one explicit,
+    intentional filesystem-touching surface (see tests/test_manifest_io.py).
     """
     source = Path(manifest_module.__file__).read_text()
     assert "cv2" not in source
     assert "numpy" not in source
-    assert "open(" not in source
-    assert "read_text" not in source
-    assert "write_text" not in source
