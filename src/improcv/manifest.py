@@ -2,19 +2,30 @@
 
 A `PerceptualHashManifest` is a snapshot of ``relative image identifier -> precomputed
 PerceptualHash`` -- nothing more. It never reads, decodes, or hashes an image itself, never
-touches the filesystem, never stores an absolute dataset root, and never records file size,
-modification time, or content digest. It does not check whether an identifier still refers to
-an existing file, and it does not know or care whether a hash is still "fresh" relative to the
-image it was computed from -- that judgment belongs entirely to the caller. This is a manifest,
-not a cache: there is no invalidation logic here, and none is planned for this module. File
-save/load convenience (reading/writing an actual file on disk) is deliberately out of scope for
-this slice and is planned as a separate follow-up.
+stores an absolute dataset root, and never records file size, modification time, or content
+digest. It does not check whether an identifier still refers to an existing file, and it does
+not know or care whether a hash is still "fresh" relative to the image it was computed from --
+that judgment belongs entirely to the caller. This is a manifest, not a cache: there is no
+invalidation logic here, and none is planned for this module.
+
+The model itself -- construction, `from_hashes`, `to_hashes`, `to_json`, `from_json` -- remains
+entirely free of filesystem I/O: building a manifest and converting it to or from a JSON string
+never opens, reads, writes, or stats anything. The only filesystem-touching operations in this
+module are the explicit `PerceptualHashManifest.save`/`PerceptualHashManifest.load` methods. A
+`save()` is published atomically -- a reader only ever sees the complete old file or the complete
+new file, never a partially written one -- and by default (`overwrite=False`) never clobbers an
+existing file at the destination. Neither `save` nor `load` adds any freshness or cache
+semantics: they are a thin, explicit file transport for the same snapshot described above, not a
+step towards making the manifest track its dataset automatically.
 
 Every stored identifier is a canonical, relative, POSIX-style `pathlib.PurePosixPath` -- never a
 platform-specific `Path`, and never an absolute path. This is what makes a manifest portable: two
 manifests built on different machines (Windows, Linux, macOS) for the same relative dataset
 layout serialize to byte-identical JSON. See `PerceptualHashManifestEntry`/
-`PerceptualHashManifest` for the exact path contract.
+`PerceptualHashManifest` for the exact path contract. Note that this identifier policy is
+unrelated to the *manifest file's own* location: the `path` argument to `save`/`load` names a
+place on the local filesystem, not an image identifier, and follows an entirely different, much
+looser contract -- see `save`/`load`.
 
 A manifest has exactly one hash space (one `algorithm`, one `hash_size`) for all of its entries --
 the same constraint `improcv.similarity.find_similar_image_pairs` itself already enforces on any
@@ -31,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Self, TypeVar
 
-from improcv._validation import require_int
+from improcv._validation import require_bool, require_int
 from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm
 
 __all__ = [
@@ -141,6 +152,71 @@ def _local_path_to_manifest_identifier(value: object, *, name: str) -> PurePosix
         raise ValueError(f"{name} must be a relative path, got {raw!r}")
 
     return _validate_canonical_posix_identifier(local_path.as_posix(), name=name)
+
+
+def _validate_manifest_file_path(value: object, *, name: str) -> Path:
+    """Raise TypeError/ValueError unless `value` is a valid manifest *file* path; return it as a
+    local `Path`.
+
+    This is an entirely different contract from a manifest entry's portable image-identifier
+    path policy (see `_local_path_to_manifest_identifier`): a manifest file path names a location
+    on the local filesystem for `PerceptualHashManifest.save`/`load` to write or read, so it may
+    be relative or absolute, may contain local separators and `..` segments, and is never
+    validated as a canonical, relative POSIX identifier. Accepts a `str` or `os.PathLike[str]` --
+    never a bare `bytes`, and never a `PathLike` whose `__fspath__()` returns `bytes`. Never
+    expanded (``~``), never resolved, and never checked against the filesystem -- this function
+    itself performs no I/O.
+    """
+    try:
+        raw = os.fspath(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise TypeError(
+            f"{name} must be a str or os.PathLike[str], got {type(value).__name__}"
+        ) from exc
+    if not isinstance(raw, str):
+        raise TypeError(
+            f"{name} must resolve to a str, got {type(raw).__name__} from os.fspath() -- "
+            "a PathLike whose __fspath__() returns bytes is not accepted"
+        )
+    if raw == "":
+        raise ValueError(f"{name} must not be an empty string")
+    if "\x00" in raw:
+        raise ValueError(f"{name} must not contain a NUL character")
+    return Path(raw)
+
+
+def _write_temp_manifest_file(directory: Path, base_name: str, text: str) -> Path:
+    """Write `text` to a new, unique file in `directory`; flush, `fsync`, and close it before
+    returning its path.
+
+    The temporary file's name is derived only from `base_name` (the destination's own final path
+    component, never its full path) plus a random suffix -- unique, unpredictable, and guaranteed
+    to never collide with the destination's own name. Created via `os.open` with
+    ``O_CREAT | O_EXCL`` (a `FileExistsError` from an actual name collision is retried with a
+    fresh random suffix, not propagated) at ordinary, umask-subject permissions (``0o666``, the
+    same mode a plain `open()` call would use) -- no custom permission policy is introduced.
+    Always created in `directory` itself, so the later same-directory publish step (`os.link`/
+    `os.replace`) never crosses a filesystem boundary. If `directory` does not exist or is not a
+    directory, the underlying native `OSError` (`FileNotFoundError`/`NotADirectoryError`)
+    propagates unchanged, and nothing is created. If writing, flushing, or `fsync`ing fails, the
+    partial temporary file is removed before the error propagates.
+    """
+    for _ in range(10):
+        candidate = directory / f".{base_name}.{os.urandom(8).hex()}.tmp"
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            candidate.unlink(missing_ok=True)
+            raise
+        return candidate
+    raise OSError("could not create a unique temporary manifest file after several attempts")
 
 
 def _json_kind(value: object) -> str:
@@ -265,6 +341,14 @@ class PerceptualHashManifest:
     grouping/clustering here, and no pair-search result is ever stored in a manifest -- see
     `to_hashes` for handing a manifest's hashes to
     `improcv.similarity.find_similar_image_pairs`.
+
+    Constructing a manifest and converting it to or from a JSON string (`from_hashes`,
+    `to_hashes`, `to_json`, `from_json`) never touches the filesystem. `save`/`load` are this
+    class's only filesystem-touching operations -- a thin, explicit file transport for the exact
+    same JSON text `to_json`/`from_json` already produce and accept, not a step towards automatic
+    dataset synchronization: writing or reading a manifest file does not make this class a cache,
+    does not check image freshness or existence, and does not add any implicit save/reload
+    behavior anywhere else.
     """
 
     algorithm: PerceptualHashAlgorithm
@@ -538,3 +622,90 @@ class PerceptualHashManifest:
 
         sorted_entries = tuple(sorted(entries, key=lambda entry: entry.path.as_posix()))
         return cls(algorithm=algorithm, hash_size=hash_size, entries=sorted_entries)
+
+    def save(self, path: str | os.PathLike[str], *, overwrite: bool = False) -> None:
+        """Write this manifest to `path` as the exact text `to_json()` produces.
+
+        `path` names the manifest *file* itself -- a location on the local filesystem -- which
+        is an entirely different contract from an entry's portable image-identifier path (see
+        this class's own docstring): it may be relative or absolute, may use local separators and
+        ``..`` segments, is never validated as a manifest image identifier, and is never itself
+        stored inside the written manifest. Accepts a `str` or `os.PathLike[str]`; never expanded
+        (``~``), never resolved, and no particular file suffix (e.g. ``.json``) is required. The
+        parent directory is never created.
+
+        The complete `to_json()` text is written to a new, unique temporary file in `path`'s own
+        directory, flushed, and `fsync`ed before anything is done to `path` itself, so a reader
+        can only ever observe the old complete file or the new complete file -- never a partially
+        written one. This is a guarantee about the atomic *visibility* of complete content at
+        publication; it is not a promise of full crash durability of the directory entry itself
+        across a power loss (an `fsync` of the containing directory is out of scope here).
+
+        By default (`overwrite=False`), an existing `path` -- a regular file, a directory, or
+        even a dangling symlink -- is left completely untouched and `FileExistsError` is raised;
+        this is implemented as a single atomic publish step (`os.link`), never a separate
+        existence check followed by a write, so two concurrent `save()` calls targeting the same
+        new `path` can never result in one silently clobbering the other. With `overwrite=True`,
+        the existing `path` (or, if `path` is itself a symlink, the symlink entry itself -- never
+        written through to whatever it points at) is atomically replaced (`os.replace`) with the
+        new content. Always returns `None`.
+
+        Raises
+        ------
+        TypeError
+            If `path` is not a `str`/`os.PathLike[str]` (including a bare `bytes` or a `PathLike`
+            whose `__fspath__()` returns `bytes`), or `overwrite` is not a plain `bool`.
+        ValueError
+            If `path` normalizes to an empty string or contains a NUL character.
+        FileExistsError
+            If `overwrite` is `False` and `path` already exists in any form.
+        FileNotFoundError
+            If `path`'s parent directory does not exist.
+        OSError
+            Any other native filesystem error -- e.g. `path`'s parent is itself a file, or `path`
+            is an existing directory and `overwrite=True`. The file previously at `path`, if any,
+            is left unchanged, and no temporary file is left behind.
+        """
+        require_bool(overwrite, "overwrite")
+        target = _validate_manifest_file_path(path, name="path")
+        text = self.to_json()
+
+        temp_path = _write_temp_manifest_file(target.parent, target.name, text)
+        try:
+            if overwrite:
+                os.replace(temp_path, target)
+            else:
+                os.link(temp_path, target)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    @classmethod
+    def load(cls, path: str | os.PathLike[str]) -> Self:
+        """Read a `PerceptualHashManifest` back from a JSON file written by `save`.
+
+        `path` is validated the same way `save`'s `path` argument is: accepts a `str` or
+        `os.PathLike[str]`, never a bare `bytes` or a `PathLike` whose `__fspath__()` returns
+        `bytes`. Never expanded (``~``), never resolved, and the file's suffix is never
+        inspected or required. The file is opened and decoded as UTF-8 with newline translation
+        disabled, so the exact on-disk text is passed to `from_json` unchanged; `from_json` alone
+        performs the entire remaining interpretation of the document -- this method neither
+        parses JSON itself nor duplicates any of `from_json`'s validation.
+
+        Raises
+        ------
+        TypeError
+            If `path` is not a `str`/`os.PathLike[str]` (see `save`).
+        ValueError
+            If `path` normalizes to an empty string or contains a NUL character; or if the
+            decoded text is not a valid manifest document -- see `from_json`.
+        FileNotFoundError
+            If no file exists at `path`.
+        OSError
+            Any other native filesystem error, e.g. if `path` names a directory.
+        UnicodeDecodeError
+            If the file's bytes are not valid UTF-8.
+        """
+        source = _validate_manifest_file_path(path, name="path")
+        with open(source, encoding="utf-8", newline="") as handle:
+            text = handle.read()
+        return cls.from_json(text)
