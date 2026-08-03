@@ -1,5 +1,4 @@
 import dataclasses
-import os
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -21,16 +20,6 @@ def _hash(
 ) -> PerceptualHash:
     """Build a `PerceptualHash` with an easily hand-verifiable value (see test_similarity.py)."""
     return PerceptualHash.from_hex(hex_value, algorithm=algorithm, hash_size=hash_size)
-
-
-def _hashes(
-    mapping: dict[str | os.PathLike[str], PerceptualHash],
-) -> dict[str | os.PathLike[str], PerceptualHash]:
-    """Identity wrapper that widens a dict variable's inferred key type to match
-    `from_hashes`' own `Mapping[str | os.PathLike[str], ...]` parameter type (see
-    test_similarity.py's identical helper for the invariance rationale).
-    """
-    return mapping
 
 
 class _Boom:
@@ -298,6 +287,46 @@ def test_from_hashes_accepts_custom_pathlike_returning_str() -> None:
     assert manifest.entries[0].path == PurePosixPath("a.png")
 
 
+def test_from_hashes_accepts_dict_str_keys_variable() -> None:
+    hashes: dict[str, PerceptualHash] = {"a.png": _hash("0"), "b.png": _hash("1")}
+    manifest = PerceptualHashManifest.from_hashes(hashes, algorithm=_PHASH, hash_size=2)
+    assert len(manifest.entries) == 2
+
+
+def test_from_hashes_accepts_dict_path_keys_variable() -> None:
+    path_hashes: dict[Path, PerceptualHash] = {
+        Path("a.png"): _hash("0"),
+        Path("b.png"): _hash("1"),
+    }
+    manifest = PerceptualHashManifest.from_hashes(path_hashes, algorithm=_PHASH, hash_size=2)
+    assert len(manifest.entries) == 2
+
+
+def test_from_hashes_accepts_dict_pure_posix_path_keys_variable() -> None:
+    pure_hashes: dict[PurePosixPath, PerceptualHash] = {
+        PurePosixPath("a.png"): _hash("0"),
+        PurePosixPath("b.png"): _hash("1"),
+    }
+    manifest = PerceptualHashManifest.from_hashes(pure_hashes, algorithm=_PHASH, hash_size=2)
+    assert len(manifest.entries) == 2
+
+
+def test_from_hashes_accepts_dict_custom_pathlike_keys_variable() -> None:
+    class _StrPath:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        def __fspath__(self) -> str:
+            return self._name
+
+    custom_hashes: dict[_StrPath, PerceptualHash] = {
+        _StrPath("a.png"): _hash("0"),
+        _StrPath("b.png"): _hash("1"),
+    }
+    manifest = PerceptualHashManifest.from_hashes(custom_hashes, algorithm=_PHASH, hash_size=2)
+    assert len(manifest.entries) == 2
+
+
 def test_from_hashes_rejects_bytes_key() -> None:
     with pytest.raises(TypeError):
         PerceptualHashManifest.from_hashes(
@@ -378,7 +407,7 @@ def test_from_hashes_rejects_mismatch_with_explicit_hash_size() -> None:
 
 def test_from_hashes_does_not_modify_input_mapping() -> None:
     hash_a = _hash("0")
-    hashes = _hashes({"a.png": hash_a})
+    hashes = {"a.png": hash_a}
     snapshot = dict(hashes)
 
     PerceptualHashManifest.from_hashes(hashes, algorithm=_PHASH, hash_size=2)
@@ -835,23 +864,21 @@ def test_from_json_error_does_not_contain_whole_document() -> None:
 
 
 def test_manifest_round_trip_preserves_find_similar_image_pairs_result() -> None:
-    hashes = _hashes(
-        {
-            "a.png": _hash("0"),
-            "b.png": _hash("1"),
-            "c.png": _hash("3"),
-        }
-    )
+    hashes = {
+        "a.png": _hash("0"),
+        "b.png": _hash("1"),
+        "c.png": _hash("3"),
+    }
     manifest = PerceptualHashManifest.from_hashes(hashes, algorithm=_PHASH, hash_size=2)
     restored = PerceptualHashManifest.from_json(manifest.to_json())
 
     assert restored == manifest
 
     pairs_before = im.find_similar_image_pairs(hashes, max_distance=1)
-    # `to_hashes()` returns `dict[PurePosixPath, PerceptualHash]`; PurePosixPath satisfies
-    # `os.PathLike[str]` at runtime, but `Mapping`'s key type is invariant, so Pyright doesn't
-    # accept it here without a cast (see `_hashes()` above for the identical dict-literal case).
-    pairs_after = im.find_similar_image_pairs(restored.to_hashes(), max_distance=1)  # type: ignore[arg-type]
+    # `to_hashes()` returns `dict[PurePosixPath, PerceptualHash]`, directly accepted here since
+    # `find_similar_image_pairs`'s `hashes` parameter is generic over any `str | os.PathLike[str]`
+    # key type (see `_PathIdentifierT` in `similarity.py`), not fixed to one concrete union.
+    pairs_after = im.find_similar_image_pairs(restored.to_hashes(), max_distance=1)
 
     assert pairs_after == pairs_before
     assert len(pairs_after) == 2
@@ -861,7 +888,7 @@ def test_manifest_to_hashes_is_directly_usable_by_find_similar_image_pairs() -> 
     manifest = PerceptualHashManifest.from_hashes(
         {"a.png": _hash("0"), "b.png": _hash("1")}, algorithm=_PHASH, hash_size=2
     )
-    pairs = im.find_similar_image_pairs(manifest.to_hashes(), max_distance=4)  # type: ignore[arg-type]
+    pairs = im.find_similar_image_pairs(manifest.to_hashes(), max_distance=4)
     assert len(pairs) == 1
     assert pairs[0].distance == 1
 

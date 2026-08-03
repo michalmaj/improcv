@@ -29,7 +29,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Self
+from typing import Any, Self, TypeVar
 
 from improcv._validation import require_int
 from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm
@@ -199,6 +199,16 @@ def _require_exact_keys(
         raise ValueError(f"{context} has unexpected field(s): {sorted(extra)!r}")
 
 
+_PathIdentifierT = TypeVar("_PathIdentifierT", bound=str | os.PathLike[str])
+"""Bound to `str | os.PathLike[str]` so a concrete mapping type (`dict[str, ...]`,
+`dict[Path, ...]`, `dict[PurePosixPath, ...]`, a custom `PathLike[str]`, ...) is accepted
+directly by `PerceptualHashManifest.from_hashes` -- `Mapping`'s key type is otherwise invariant,
+so a `Mapping[str | os.PathLike[str], PerceptualHash]` parameter would reject every concrete
+mapping type except that exact union. Not exported; purely a static-typing device with no runtime
+effect.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class PerceptualHashManifestEntry:
     """One ``(path, hash)`` record inside a `PerceptualHashManifest`.
@@ -303,7 +313,7 @@ class PerceptualHashManifest:
     @classmethod
     def from_hashes(
         cls,
-        hashes: Mapping[str | os.PathLike[str], PerceptualHash],
+        hashes: Mapping[_PathIdentifierT, PerceptualHash],
         *,
         algorithm: PerceptualHashAlgorithm,
         hash_size: int,

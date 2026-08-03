@@ -13,6 +13,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 from improcv._validation import require_non_negative_int
 from improcv.hashing import PerceptualHash
@@ -152,8 +153,17 @@ def _require_single_hash_space(entries: list[tuple[str, Path, PerceptualHash]]) 
         )
 
 
+_PathIdentifierT = TypeVar("_PathIdentifierT", bound=str | os.PathLike[str])
+"""Bound to `str | os.PathLike[str]` so a concrete mapping type (`dict[str, ...]`,
+`dict[Path, ...]`, `dict[PurePosixPath, ...]`, a custom `PathLike[str]`, ...) is accepted
+directly by `find_similar_image_pairs` -- `Mapping`'s key type is otherwise invariant, so a
+`Mapping[str | os.PathLike[str], PerceptualHash]` parameter would reject every concrete mapping
+type except that exact union. Not exported; purely a static-typing device with no runtime effect.
+"""
+
+
 def find_similar_image_pairs(
-    hashes: Mapping[str | os.PathLike[str], PerceptualHash],
+    hashes: Mapping[_PathIdentifierT, PerceptualHash],
     *,
     max_distance: int,
 ) -> tuple[SimilarImagePair, ...]:
