@@ -149,6 +149,7 @@ from improcv.hough import (
     hough_line_segments,
     hough_lines,
 )
+from improcv.manifest import PerceptualHashManifest, PerceptualHashManifestEntry
 from improcv.morphology import (
     blackhat,
     dilate,
@@ -251,6 +252,8 @@ __all__ = [
     "PencilSketchResult",
     "PerceptualHash",
     "PerceptualHashAlgorithm",
+    "PerceptualHashManifest",
+    "PerceptualHashManifestEntry",
     "PerspectiveParameters",
     "PrecisionRecallCurve",
     "QRCode",

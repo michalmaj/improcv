@@ -369,6 +369,27 @@ snippet above) specifically to make its exact hash bits and Hamming distances ve
 show `find_similar_image_pairs` reporting a non-transitive pair of matches -- both are
 intentionally correct, complementary illustrations of the same API, not a contradiction.
 
+Precomputed hashes don't have to be recomputed every run: `PerceptualHashManifest` snapshots a
+`path -> PerceptualHash` mapping as deterministic JSON, so the same hashes can be saved once and
+reused later, or shared with another machine:
+
+```python
+manifest = im.PerceptualHashManifest.from_hashes(hashes, algorithm=im.PerceptualHashAlgorithm.PHASH, hash_size=8)
+text = manifest.to_json()
+
+restored = im.PerceptualHashManifest.from_json(text)
+pairs = im.find_similar_image_pairs(restored.to_hashes(), max_distance=8)
+```
+
+A manifest stores each path as a portable, relative, POSIX-style identifier -- never an absolute
+path -- so the same JSON is valid regardless of which machine or directory it was built on, and
+`to_json()`/`from_json()` round-trip byte-for-byte regardless of the input mapping's insertion
+order. It is a snapshot, not a cache: it never checks whether a path still exists, never records
+file size or modification time, and has no notion of "freshness" -- keeping a manifest in sync
+with the images it describes is entirely the caller's responsibility. Reading or writing an actual
+`.json` file is not part of this API yet; `to_json()`/`from_json()` work on in-memory `str` values,
+and file save/load convenience is planned as a separate addition.
+
 Photo/creative single-image effects:
 
 ```python
