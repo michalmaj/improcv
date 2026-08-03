@@ -36,6 +36,7 @@ def test_examples_directory_has_the_expected_scripts() -> None:
         "discovery_and_augmentation.py",
         "classification_evaluation.py",
         "image_similarity.py",
+        "image_similarity_manifest.py",
     }
 
 
@@ -85,6 +86,37 @@ def test_image_similarity_example_runs_cleanly() -> None:
 
     # The unrelated image must never appear alongside a reported similar pair.
     pair_lines = [line for line in result.stdout.splitlines() if "<->" in line]
+    assert not any("z_unrelated.png" in line for line in pair_lines), pair_lines
+
+
+def test_image_similarity_manifest_example_runs_cleanly() -> None:
+    result = _run_example(_EXAMPLES_DIR / "image_similarity_manifest.py")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert "images discovered: 4" in result.stdout
+    assert "images decoded: 4" in result.stdout
+    assert "hashes computed: 4" in result.stdout
+    assert "algorithm: average_hash" in result.stdout
+    assert "hash size: 8 (64 bits)" in result.stdout
+    assert "manifest entries: 4" in result.stdout
+    assert "manifest paths relative: yes" in result.stdout
+    assert "manifest round-trip identical: yes" in result.stdout
+    assert "dataset moved after save: yes" in result.stdout
+    assert "rehash after load: no" in result.stdout
+    assert "threshold: 2" in result.stdout
+    assert "similar pairs: 2" in result.stdout
+
+    pair_lines = [line for line in result.stdout.splitlines() if "<->" in line]
+    assert len(pair_lines) == 2, pair_lines
+    assert any(
+        "a_base.png" in line and "b_variant.png" in line and line.startswith("2 ")
+        for line in pair_lines
+    ), pair_lines
+    assert any(
+        "b_variant.png" in line and "c_variant_more.png" in line and line.startswith("2 ")
+        for line in pair_lines
+    ), pair_lines
     assert not any("z_unrelated.png" in line for line in pair_lines), pair_lines
 
 

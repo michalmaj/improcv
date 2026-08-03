@@ -405,6 +405,9 @@ images it describes is entirely the caller's responsibility. `to_json()`/`from_j
 available for in-memory transport (e.g. sending a manifest over a network) when a file isn't
 wanted at all.
 
+A complete runnable persistence workflow is available in
+[`examples/image_similarity_manifest.py`](examples/image_similarity_manifest.py).
+
 Photo/creative single-image effects:
 
 ```python

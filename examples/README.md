@@ -1,6 +1,6 @@
 # improcv examples
 
-Small, self-contained, runnable recipes for the three main first-use workflows. Each script is
+Small, self-contained, runnable recipes for the four main first-use workflows. Each script is
 deterministic, needs no network access, no GUI, no Matplotlib, and no external data files -- it
 creates whatever tiny input it needs (in a temporary directory it cleans up itself) and prints a
 short, stable summary. Both run identically on Windows, Linux, and macOS.
@@ -23,6 +23,7 @@ uv sync
 uv run python examples/discovery_and_augmentation.py
 uv run python examples/classification_evaluation.py
 uv run python examples/image_similarity.py
+uv run python examples/image_similarity_manifest.py
 ```
 
 (Without `uv`, `python examples/discovery_and_augmentation.py` works too, as long as `improcv` and
@@ -58,6 +59,15 @@ helpers, are all `(width, height)` -- the reverse of `array.shape[:2]`.
   result demonstrates that threshold similarity is not transitive: two overlapping pairs are
   reported, never one merged group of three. This is a deliberately tiny, hand-checkable
   demonstration of the workflow, not a benchmark or a production deduplication tool.
+- [`image_similarity_manifest.py`](image_similarity_manifest.py) -- the same four synthetic
+  images, but focused entirely on persistence rather than hashing or thresholds: each image is
+  decoded and hashed exactly once, the resulting hashes are stored under relative, portable
+  identifiers in a `PerceptualHashManifest`, and the manifest is written out with `manifest.save()`.
+  The dataset directory is then physically moved to a different path, the manifest is reloaded
+  with `PerceptualHashManifest.load()`, and a similarity search runs entirely against the reloaded
+  hashes -- with no re-decoding and no re-hashing. A `PerceptualHashManifest` is a snapshot, not a
+  cache: it never checks freshness or whether an image still exists, so reusing a reloaded
+  manifest like this is a deliberate choice made once, not something the manifest verifies for you.
 
 ## DNN preprocessing as a supporting layer
 
