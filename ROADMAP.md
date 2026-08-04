@@ -70,9 +70,13 @@ version decided at the time each is actually published, rather than mechanically
   dataset image similarity (deterministic pairwise similarity search over precomputed perceptual
   hashes -- `improcv.similarity.find_similar_image_pairs` -- implemented, shipping in `0.3.0a1`;
   portable, deterministic perceptual-hash manifests (`improcv.manifest.PerceptualHashManifest`)
-  with strict schema-v1 JSON and atomic `save`/`load` implemented, shipping in `0.3.0a2`;
-  incremental caching/freshness validation, duplicate groups/clustering, indexed/subquadratic
-  search, and parallel hashing/search remain planned, not started). Bounding boxes/
+  with strict schema-v1 JSON and atomic `save`/`load` implemented, shipping in `0.3.0a2`; a
+  deterministic, sequential dataset-to-manifest builder (`improcv.dataset.
+  build_perceptual_hash_manifest`) that discovers a local dataset root, decodes each file exactly
+  once with fixed grayscale semantics (Unicode-path-safe on Windows via `Path.read_bytes`/
+  `cv2.imdecode`), and produces root-relative canonical identifiers implemented, shipping in
+  `0.3.0a3`; incremental caching/freshness validation, duplicate groups/clustering, indexed/
+  subquadratic search, and parallel hashing/search remain planned, not started). Bounding boxes/
   keypoints/polygons in augmentation, a
   `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as

@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.3.0a3] - 2026-08-04
+
 ### Added
 - `build_perceptual_hash_manifest` (`improcv.dataset`): a deterministic, sequential dataset-to-
   manifest builder -- delegates discovery of a local dataset root entirely to `discover_images`
