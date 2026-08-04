@@ -1,5 +1,6 @@
 import inspect
 import os
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -320,6 +321,10 @@ def test_root_dot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert [entry.path.as_posix() for entry in manifest.entries] == ["a.png"]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cv2.imread/imwrite do not reliably support non-ASCII paths on Windows",
+)
 def test_root_with_unicode(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "żółw"
     _write_image(dataset_dir / "a.png", _checkerboard())
@@ -327,6 +332,10 @@ def test_root_with_unicode(tmp_path: Path) -> None:
     assert [entry.path.as_posix() for entry in manifest.entries] == ["a.png"]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cv2.imread/imwrite do not reliably support non-ASCII paths on Windows",
+)
 def test_nested_unicode_identifier(tmp_path: Path) -> None:
     _write_image(tmp_path / "dane" / "żółw.png", _checkerboard())
     manifest = build_perceptual_hash_manifest(tmp_path, algorithm=_AVERAGE_HASH)
@@ -415,8 +424,12 @@ def test_decode_error_message_contains_relative_identifier(tmp_path: Path) -> No
 def test_decode_error_message_contains_source_path(tmp_path: Path) -> None:
     broken = tmp_path / "broken.png"
     broken.write_bytes(b"not a real png")
-    with pytest.raises(ValueError, match=str(broken).replace("\\", "\\\\")):
+    with pytest.raises(ValueError) as exc_info:
         build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
+    # The message embeds the source path via `!r` (see dataset.py), which backslash-escapes it
+    # in the rendered text -- comparing against repr(str(broken)) directly (a plain substring
+    # check) avoids re-deriving that escaping as a regex pattern.
+    assert repr(str(broken)) in str(exc_info.value)
 
 
 def test_multiple_broken_files_reports_first_in_canonical_order(tmp_path: Path) -> None:
