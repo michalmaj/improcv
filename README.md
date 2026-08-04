@@ -1499,7 +1499,10 @@ referencing the same file via a hard link remain a legal, distinct pair. Both si
 
 ## Status
 
-`improcv` is in early alpha development. See
+`improcv` is in beta development. The functional scope planned for `0.3.0` is complete, and
+`0.3.0b1` is the upcoming first beta release, opening a stabilization phase: bug fixes, contract
+and typing corrections, documentation corrections, and feedback from real-world usage take
+priority over new major features, which are deferred to later development lines. See
 [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for published
 releases and the exact contents of the current development line. `0.1.0a1` was the project's
 first public release and covered the accumulated scope of Phases 0-3 (see
@@ -1507,11 +1510,12 @@ first public release and covered the accumulated scope of Phases 0-3 (see
 and why it doesn't match the project's original one-phase-per-minor-version plan).
 
 **Compatibility policy before `1.0.0`:**
-- All current releases are alpha releases: functional and tested, but the public API is not yet
-  declared stable.
+- Releases through `0.3.0a3` were alpha releases; `0.3.0b1` begins the beta line. Beta means the
+  planned functional scope has settled and the focus has shifted to stabilization -- it does not
+  mean the public API is declared stable.
 - Before `1.0.0`, the public API may still change, including in backwards-incompatible ways, in any
-  `0.MINOR` release. While in alpha, this also applies between consecutive prereleases of the same
-  version (e.g. `0.1.0a1` → `0.1.0a2`).
+  `0.MINOR` release. While in alpha or beta, this also applies between consecutive prereleases of
+  the same version (e.g. `0.1.0a1` → `0.1.0a2`, or a later `0.3.0b1` → `0.3.0b2`).
 - Any backwards-incompatible change will always be called out explicitly in `CHANGELOG.md`, not
   silently folded into a routine entry.
 - Deprecation (a warning period before removal) will be used where practical, but the project does
