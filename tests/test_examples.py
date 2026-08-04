@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,8 +34,9 @@ def _run_example(script: Path) -> subprocess.CompletedProcess[str]:
 def test_examples_directory_has_the_expected_scripts() -> None:
     names = {script.name for script in _EXAMPLE_SCRIPTS}
     assert names == {
-        "discovery_and_augmentation.py",
         "classification_evaluation.py",
+        "dataset_manifest_builder.py",
+        "discovery_and_augmentation.py",
         "image_similarity.py",
         "image_similarity_manifest.py",
     }
@@ -118,6 +120,44 @@ def test_image_similarity_manifest_example_runs_cleanly() -> None:
         for line in pair_lines
     ), pair_lines
     assert not any("z_unrelated.png" in line for line in pair_lines), pair_lines
+
+
+def test_dataset_manifest_builder_example_runs_cleanly() -> None:
+    result = _run_example(_EXAMPLES_DIR / "dataset_manifest_builder.py")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert "builder: build_perceptual_hash_manifest" in result.stdout
+    assert "algorithm: average_hash" in result.stdout
+    assert "hash size: 8 (64 bits)" in result.stdout
+    assert "manifest entries: 4" in result.stdout
+    assert "dataset root stored: no" in result.stdout
+    assert "manifest paths relative: yes" in result.stdout
+    assert "unicode dataset path: yes" in result.stdout
+    assert "manifest round-trip identical: yes" in result.stdout
+    assert "dataset moved after save: yes" in result.stdout
+    assert "threshold: 2" in result.stdout
+    assert "similar pairs: 2" in result.stdout
+
+    pair_lines = [line for line in result.stdout.splitlines() if "<->" in line]
+    assert len(pair_lines) == 2, pair_lines
+    assert any(
+        "obrazy/a_base.png" in line and "obrazy/b_variant.png" in line and line.startswith("2  ")
+        for line in pair_lines
+    ), pair_lines
+    assert any(
+        "obrazy/b_variant.png" in line
+        and "obrazy/c_variant_more.png" in line
+        and line.startswith("2  ")
+        for line in pair_lines
+    ), pair_lines
+    assert all("/" in line for line in pair_lines), pair_lines
+    assert not any("z_unrelated.png" in line for line in pair_lines), pair_lines
+    assert not any("żółw-dataset" in line for line in pair_lines), pair_lines
+    assert not any("przeniesiony-dataset" in line for line in pair_lines), pair_lines
+
+    # No absolute temporary-directory path anywhere in stdout, not only in the pair lines.
+    assert tempfile.gettempdir() not in result.stdout
 
 
 def test_examples_leave_no_files_behind_in_the_repository() -> None:
