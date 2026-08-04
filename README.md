@@ -366,17 +366,23 @@ independently rather than merged into clusters. Comparing every pair costs
 a promise to scale to millions of images.
 
 **A real bug this fixes:** an earlier version of this README built the hash mapping by hand, keyed
-by the *absolute* path `discover_images` returns (`hashes[path] = im.phash(image)`), then handed
-that mapping straight to `PerceptualHashManifest.from_hashes`. `from_hashes` stores whatever
-relative path it's given as-is -- it has no notion of a "dataset root" to relativize against, so
-it cannot fix this for you -- so keys built that way became manifest identifiers like
-`images/cat.jpg`, not `cat.jpg`. That's a real, working relative path, but it silently embeds the
-old root directory's own name; rename `images/` to `photos/` later and every stored identifier is
-now wrong relative to the new layout, even though nothing about the images themselves changed.
-`build_perceptual_hash_manifest` fixes this structurally, not by convention: it relativizes every
-discovered path against the exact `root` you passed it (`"images"` above), so identifiers are
-always `cat.jpg`, never `images/cat.jpg`, regardless of what the root directory happens to be
-named.
+by the *root-anchored* path `discover_images` returns (`hashes[path] = im.phash(image)`), then
+handed that mapping straight to `PerceptualHashManifest.from_hashes`. `discover_images` preserves
+whichever form its `root` argument had -- a relative `root` like `"images"` (the snippet's own
+root) yields root-anchored *relative* paths such as `Path("images/cat.jpg")`, not absolute ones;
+only an absolute `root` (e.g. `Path("/datasets/images")`) yields absolute results. So the earlier
+mapping's keys were never absolute paths -- but `Path("images/cat.jpg")` still isn't the same
+thing as a true dataset-root-relative identifier: it still carries the `"images"` root segment,
+where `path.relative_to("images")` would give the *actual* root-relative path, `Path("cat.jpg")`.
+`from_hashes` stores whatever path it's given as-is -- it has no notion of a "dataset root" to
+relativize against, so it cannot strip that root prefix for you -- so keys built that way became
+manifest identifiers like `images/cat.jpg`, not `cat.jpg`. That's a real, working relative path,
+but it silently embeds the old root directory's own name; rename `images/` to `photos/` later and
+every stored identifier is now wrong relative to the new layout, even though nothing about the
+images themselves changed. `build_perceptual_hash_manifest` fixes this structurally, not by
+convention: it relativizes every discovered path against the exact `root` you passed it (`"images"`
+above, via `path.relative_to(root)`), so identifiers are always `cat.jpg`, never `images/cat.jpg`,
+regardless of what the root directory happens to be named.
 
 A complete runnable recipe using the builder is available in
 [`examples/dataset_manifest_builder.py`](examples/dataset_manifest_builder.py) -- a concise
