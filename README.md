@@ -1499,10 +1499,10 @@ referencing the same file via a hard link remain a legal, distinct pair. Both si
 
 ## Status
 
-`improcv` is in beta development. The functional scope planned for `0.3.0` is complete, and
-`0.3.0b1` is the upcoming first beta release, opening a stabilization phase: bug fixes, contract
-and typing corrections, documentation corrections, and feedback from real-world usage take
-priority over new major features, which are deferred to later development lines. See
+`improcv` is in beta development. `0.3.0b1` marks the first beta release: the functional scope
+planned for `0.3.0` is complete, and development is focused on stabilization -- bug fixes,
+contract and typing corrections, documentation corrections, and feedback from real-world usage
+take priority over new major features, which are deferred to later development lines. See
 [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for published
 releases and the exact contents of the current development line. `0.1.0a1` was the project's
 first public release and covered the accumulated scope of Phases 0-3 (see

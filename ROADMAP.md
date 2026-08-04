@@ -75,8 +75,10 @@ version decided at the time each is actually published, rather than mechanically
   build_perceptual_hash_manifest`) that discovers a local dataset root, decodes each file exactly
   once with fixed grayscale semantics (Unicode-path-safe on Windows via `Path.read_bytes`/
   `cv2.imdecode`), and produces root-relative canonical identifiers implemented, shipping in
-  `0.3.0a3`; incremental caching/freshness validation, duplicate groups/clustering, indexed/
-  subquadratic search, and parallel hashing/search remain planned, not started). Bounding boxes/
+  `0.3.0a3`; `0.3.0b1` begins beta stabilization after completion of the planned `0.3.0` functional
+  scope above -- no new major feature slice; incremental caching/freshness validation, duplicate
+  groups/clustering, indexed/subquadratic search, and parallel hashing/search remain planned, not
+  started, with no version assigned yet). Bounding boxes/
   keypoints/polygons in augmentation, a
   `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as
