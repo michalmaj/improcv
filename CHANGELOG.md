@@ -10,6 +10,18 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.3.0b1] - 2026-08-04
+
+### Changed
+- `improcv 0.3.0b1` is the first beta release of the `0.3.0` line: the planned functional scope
+  for `0.3.0` is complete, and this release makes no runtime changes relative to `0.3.0a3` -- no
+  new public symbols, no changed public signatures or defaults, no changed manifest schema-v1, and
+  no changed path, decode, save/load, or similarity semantics. The beta phase shifts focus to
+  stabilization: bug fixes, compatibility corrections, typing corrections, documentation
+  corrections, and incorporating feedback from real-world usage, rather than new major features,
+  which are deferred to later development lines. Project metadata now declares `Development
+  Status :: 4 - Beta`.
+
 ## [0.3.0a3] - 2026-08-04
 
 ### Added
