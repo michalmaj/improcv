@@ -14,6 +14,19 @@ import this one or each other for this purpose, so there is no import cycle. `di
 `hashing.py`, and `manifest.py` remain exactly as decoupled from the filesystem/each other as
 before this module existed.
 
+Reading and decoding a discovered file are two deliberately separate steps, not one `cv2.imread`
+call: each file's bytes are read through Python's own path handling (`pathlib.Path.read_bytes`),
+then decoded from an in-memory buffer via `cv2.imdecode`. `cv2.imread`/`cv2.imwrite` resolve a
+filename through the operating system's native path APIs, which on Windows do not reliably
+support paths containing characters outside the active code page -- `cv2.imdecode` has no such
+problem, since it never touches a filename at all. This is not a new, general-purpose decoder:
+the decode policy is still exactly fixed 8-bit grayscale, nothing about `average_hash`/`phash`'s
+input contract changes, and a file whose bytes cannot be decoded as an image still raises the
+same `ValueError` as before; only *how* the file's bytes reach OpenCV has changed. A native
+error reading the file itself (missing file, permission denied, or another filesystem error) is
+a different failure mode from an undecodable image and is never turned into that `ValueError` --
+see `build_perceptual_hash_manifest`'s own docstring.
+
 `build_perceptual_hash_manifest` only ever returns a `PerceptualHashManifest` -- it never writes a
 file, never reads an existing manifest, never checks whether a previously computed hash is still
 valid for its image's current content, and never runs any work in parallel. Saving the result is
@@ -28,6 +41,7 @@ from pathlib import Path
 from typing import assert_never, cast
 
 import cv2
+import numpy as np
 
 from improcv.discovery import discover_images
 from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm, average_hash, phash
@@ -37,6 +51,31 @@ from improcv.types import ImageU8
 __all__ = [
     "build_perceptual_hash_manifest",
 ]
+
+
+def _decode_grayscale(path: Path) -> ImageU8 | None:
+    """Read `path`'s bytes through Python's own (Unicode-safe) path handling, then decode them
+    as an 8-bit grayscale image via `cv2.imdecode` -- never `cv2.imread`.
+
+    `path.read_bytes()` never resolves a filename through the operating system's native path
+    APIs, unlike `cv2.imread`, which on Windows does not reliably support paths containing
+    characters outside the active code page; reading through Python first sidesteps that
+    entirely, since `cv2.imdecode` only ever sees an in-memory buffer, never a filename. An empty
+    file is treated as undecodable (`None`) without ever calling `cv2.imdecode` on an empty
+    buffer. Any `OSError` raised by `path.read_bytes()` itself (e.g. the file was deleted after
+    discovery, or is unreadable) propagates unchanged -- this function does not distinguish a
+    read failure from a decode failure; that distinction is made by its caller.
+    """
+    encoded_bytes = path.read_bytes()
+    if not encoded_bytes:
+        return None
+    encoded = np.frombuffer(encoded_bytes, dtype=np.uint8)
+    decoded = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
+    if decoded is None:
+        return None
+    # cv2.imdecode's stubs type the result as the loose MatLike | None; IMREAD_GRAYSCALE always
+    # produces a uint8 array when decoding succeeds.
+    return cast(ImageU8, decoded)
 
 
 def _compute_perceptual_hash(
@@ -74,11 +113,14 @@ def build_perceptual_hash_manifest(
     recursive, extensions=extensions, include_hidden=include_hidden)` finds candidate image
     files (its full contract -- ordering, symlink policy, hidden-file policy, extension
     matching, and root-related errors -- is inherited unchanged, not reimplemented here); each
-    discovered file is decoded exactly once as 8-bit grayscale (`cv2.IMREAD_GRAYSCALE` -- fixed,
-    not a parameter, in this first slice: one comparable decode policy, a stable input shape, no
-    alpha channel, and no unsupported `uint16`/floating-point depths to reason about); each
-    decoded image is hashed exactly once with the algorithm named by `algorithm`; and the
-    resulting `{relative identifier: PerceptualHash}` mapping is handed to
+    discovered file's bytes are read exactly once through Python's own (Unicode-safe) path
+    handling and decoded exactly once as 8-bit grayscale via `cv2.imdecode` (fixed, not a
+    parameter, in this first slice: one comparable decode policy, a stable input shape, no alpha
+    channel, and no unsupported `uint16`/floating-point depths to reason about) -- see
+    `_decode_grayscale`, which never calls `cv2.imread`/`cv2.imwrite` and so never depends on the
+    operating system's own, sometimes Unicode-unsafe, filename handling; each decoded image is
+    hashed exactly once with the algorithm named by `algorithm`; and the resulting
+    `{relative identifier: PerceptualHash}` mapping is handed to
     `PerceptualHashManifest.from_hashes`, which performs the actual path-canonicalization,
     sorting, and hash-space validation -- this function never constructs a
     `PerceptualHashManifestEntry` or a `PurePosixPath` itself.
@@ -125,9 +167,9 @@ def build_perceptual_hash_manifest(
         `algorithm`/`hash_size` are exactly the values passed in. `entries` are in canonical
         sorted order (via `from_hashes`), with relative `PurePosixPath` identifiers and no
         dataset-root segment. An empty dataset (no discovered files) returns a well-defined,
-        empty manifest with the given `algorithm`/`hash_size` -- not an error -- and never calls
-        `cv2.imread`. Two calls against the same files with the same parameters return equal
-        manifests (`manifest_a == manifest_b`) that serialize identically
+        empty manifest with the given `algorithm`/`hash_size` -- not an error -- and never reads
+        or decodes any file. Two calls against the same files with the same parameters return
+        equal manifests (`manifest_a == manifest_b`) that serialize identically
         (``manifest_a.to_json() == manifest_b.to_json()``); this does not extend across different
         OpenCV versions/builds, whose exact decode or resize output is not guaranteed to be
         bit-identical.
@@ -142,13 +184,19 @@ def build_perceptual_hash_manifest(
     ValueError
         If `hash_size` is out of `PerceptualHash`'s valid range; any `ValueError`
         `discover_images` itself raises (e.g. an empty `root`, illegal `extensions`); or if any
-        discovered file fails to decode (`cv2.imread` returns `None`) -- raised immediately, for
-        the first such file in `discover_images`' own canonical order, naming that file's
-        relative manifest identifier and its local source path. No later file is decoded once
-        this happens, and no partial manifest is ever returned.
+        discovered file's bytes cannot be decoded as an image (`cv2.imdecode` returns `None`,
+        including an empty file, which is never even handed to `cv2.imdecode`) -- raised
+        immediately, for the first such file in `discover_images`' own canonical order, naming
+        that file's relative manifest identifier and its local source path. No later file is
+        read or decoded once this happens, and no partial manifest is ever returned. This is
+        distinct from a native error *reading* a file's bytes (see below), which is never turned
+        into this `ValueError`.
     FileNotFoundError, NotADirectoryError, OSError
         Propagated unchanged from `discover_images` for problems with `root` itself or its
-        traversal.
+        traversal; also propagated unchanged (never wrapped) if reading a discovered file's
+        bytes itself fails -- e.g. the file was deleted after discovery, or is unreadable -- as
+        opposed to being read successfully but failing to decode as an image, which raises
+        `ValueError` instead (see above).
     """
     if not isinstance(algorithm, PerceptualHashAlgorithm):
         raise TypeError(
@@ -175,13 +223,11 @@ def build_perceptual_hash_manifest(
     hashes: dict[Path, PerceptualHash] = {}
     for path in paths:
         identifier = path.relative_to(root_path)
-        decoded = cv2.imread(os.fspath(path), cv2.IMREAD_GRAYSCALE)
+        decoded = _decode_grayscale(path)
         if decoded is None:
             raise ValueError(f"failed to decode image {identifier.as_posix()!r} from {str(path)!r}")
-        # cv2.imread's stubs type the result as the loose MatLike; IMREAD_GRAYSCALE always
-        # produces a uint8 array in practice.
         hashes[identifier] = _compute_perceptual_hash(
-            cast(ImageU8, decoded), algorithm=algorithm, hash_size=hash_size
+            decoded, algorithm=algorithm, hash_size=hash_size
         )
 
     return PerceptualHashManifest.from_hashes(hashes, algorithm=algorithm, hash_size=hash_size)
