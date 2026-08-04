@@ -77,6 +77,7 @@ from improcv.contours import (
     min_area_rect,
     sort_contours,
 )
+from improcv.dataset import build_perceptual_hash_manifest
 from improcv.denoising import nl_means_denoise, nl_means_denoise_colored
 from improcv.detectors import (
     FastType,
@@ -286,6 +287,7 @@ __all__ = [
     "bitwise_or",
     "blackhat",
     "bounding_boxes",
+    "build_perceptual_hash_manifest",
     "calibrate_camera_response_debevec",
     "calibrate_camera_response_robertson",
     "center_crop",
