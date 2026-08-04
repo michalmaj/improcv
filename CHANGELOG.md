@@ -36,10 +36,11 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   `examples/image_similarity_manifest.py`, which is preserved unchanged. The main README's
   "Dataset image similarity" recommended workflow now uses the builder instead of a hand-rolled
   `discover_images` → `cv2.imread` → hash → mapping → `PerceptualHashManifest.from_hashes` loop,
-  which had a real bug: keying that mapping by the absolute paths `discover_images` returns
-  produced manifest identifiers that silently embedded the dataset root's own directory name
-  (e.g. `images/cat.jpg`) rather than a true root-relative identifier (`cat.jpg`), breaking
-  portability across a root rename. Also corrects imprecise documentation wording in
+  which had a real bug: keying the mapping by paths returned from a relative root without
+  stripping that root prefix produced manifest identifiers that silently embedded the dataset
+  root's own directory name (e.g. `images/cat.jpg`) rather than a true root-relative identifier
+  (`cat.jpg`), breaking portability across a root rename. Also corrects imprecise documentation
+  wording in
   `improcv.dataset`'s docstrings that described `Path.read_bytes` as never going through the
   operating system's native filesystem APIs; the corrected wording explains that Python's own
   path handling still uses those APIs, just in a Unicode-capable way that OpenCV's filename-based
