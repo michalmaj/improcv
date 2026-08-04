@@ -321,24 +321,36 @@ the same algorithm names.
 Dataset image similarity:
 
 ```python
-from pathlib import Path
-
-import cv2
 import improcv as im
 
-hashes: dict[Path, im.PerceptualHash] = {}
+manifest = im.build_perceptual_hash_manifest(
+    "images",
+    algorithm=im.PerceptualHashAlgorithm.PHASH,
+    hash_size=8,
+)
 
-for path in im.discover_images("images"):
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise RuntimeError(f"could not decode {path}")
-    hashes[path] = im.phash(image)
-
-pairs = im.find_similar_image_pairs(hashes, max_distance=8)
+pairs = im.find_similar_image_pairs(
+    manifest.to_hashes(),
+    max_distance=8,
+)
 
 for pair in pairs:
     print(pair.distance, pair.first, pair.second)
 ```
+
+This no longer needs `from pathlib import Path` or `import cv2`: `build_perceptual_hash_manifest`
+discovers every image under `"images"` with `discover_images` (inheriting its own ordering,
+symlink, hidden-file, and extension-matching rules unchanged), decodes each one exactly once as
+fixed 8-bit grayscale, and hashes it with the requested algorithm -- all in one call, never using
+`cv2.imread`. Each resulting identifier is relative to `"images"` itself; `"images"` is never
+stored as a segment of any entry path, so renaming that directory later doesn't change what the
+manifest says about the files inside it (see "A real bug this fixes" below). The first file whose
+bytes can't be decoded as an image raises `ValueError` immediately, naming that file; a native
+error reading a file's bytes at all (missing file, permission denied, or another filesystem error)
+propagates unchanged instead, since that's a different failure mode from an undecodable image.
+Like the manual pipeline it replaces, the builder only ever returns a `PerceptualHashManifest` --
+it does not save it (see persistence below), it is not a cache, it does not check freshness, and
+it does not run any work in parallel.
 
 `find_similar_image_pairs` never touches the filesystem, decodes an image, or
 computes a hash itself -- it only compares the `PerceptualHash` values you
@@ -353,8 +365,27 @@ independently rather than merged into clusters. Comparing every pair costs
 `O(n**2)` -- this first slice is a simple, deterministic building block, not
 a promise to scale to millions of images.
 
-A complete runnable recipe is available in
-[`examples/image_similarity.py`](examples/image_similarity.py).
+**A real bug this fixes:** an earlier version of this README built the hash mapping by hand, keyed
+by the *absolute* path `discover_images` returns (`hashes[path] = im.phash(image)`), then handed
+that mapping straight to `PerceptualHashManifest.from_hashes`. `from_hashes` stores whatever
+relative path it's given as-is -- it has no notion of a "dataset root" to relativize against, so
+it cannot fix this for you -- so keys built that way became manifest identifiers like
+`images/cat.jpg`, not `cat.jpg`. That's a real, working relative path, but it silently embeds the
+old root directory's own name; rename `images/` to `photos/` later and every stored identifier is
+now wrong relative to the new layout, even though nothing about the images themselves changed.
+`build_perceptual_hash_manifest` fixes this structurally, not by convention: it relativizes every
+discovered path against the exact `root` you passed it (`"images"` above), so identifiers are
+always `cat.jpg`, never `images/cat.jpg`, regardless of what the root directory happens to be
+named.
+
+A complete runnable recipe using the builder is available in
+[`examples/dataset_manifest_builder.py`](examples/dataset_manifest_builder.py) -- a concise
+builder-based workflow covering discovery, decoding, hashing, persistence, moving the dataset
+root, and a similarity search, entirely through public API.
+
+A second recipe, [`examples/image_similarity.py`](examples/image_similarity.py), demonstrates
+hashes, distances, and non-transitivity specifically -- not the builder -- calling
+`discover_images` and `average_hash` directly on hand-checkable synthetic images.
 
 <img
   src="https://raw.githubusercontent.com/michalmaj/improcv/main/docs/assets/image-similarity-gallery.png"
@@ -369,17 +400,11 @@ snippet above) specifically to make its exact hash bits and Hamming distances ve
 show `find_similar_image_pairs` reporting a non-transitive pair of matches -- both are
 intentionally correct, complementary illustrations of the same API, not a contradiction.
 
-Precomputed hashes don't have to be recomputed every run: `PerceptualHashManifest` snapshots a
-`path -> PerceptualHash` mapping as deterministic JSON, so the same hashes can be saved once and
-reused later, or shared with another machine:
+Precomputed hashes don't have to be recomputed every run: `PerceptualHashManifest` (the `manifest`
+already built above) snapshots a `path -> PerceptualHash` mapping as deterministic JSON, so the
+same hashes can be saved once and reused later, or shared with another machine:
 
 ```python
-manifest = im.PerceptualHashManifest.from_hashes(
-    hashes,
-    algorithm=im.PerceptualHashAlgorithm.PHASH,
-    hash_size=8,
-)
-
 manifest.save("image-hashes.json")
 
 restored = im.PerceptualHashManifest.load(
@@ -391,6 +416,16 @@ pairs = im.find_similar_image_pairs(
     max_distance=8,
 )
 ```
+
+There's no need to rebuild the manifest with `PerceptualHashManifest.from_hashes(...)` here -- the
+builder above already returned one. `from_hashes` is what you'd reach for only if you had a
+`path -> PerceptualHash` mapping from somewhere *other* than the builder; it has no notion of a
+dataset root, so it cannot make a manually keyed mapping relative to one for you -- a mapping keyed
+by paths that still include the old root directory's name stays exactly that way, not just a
+"relative path" in some looser, still-portable sense. `build_perceptual_hash_manifest`'s
+identifiers are relative to the dataset root itself, by construction, which is the actual
+portability guarantee (see "A real bug this fixes" above) -- not merely relative paths that may
+still embed the old root's directory name.
 
 A manifest stores each path as a portable, relative, POSIX-style identifier -- never an absolute
 path -- so the same JSON is valid regardless of which machine or directory it was built on, and
@@ -405,7 +440,10 @@ images it describes is entirely the caller's responsibility. `to_json()`/`from_j
 available for in-memory transport (e.g. sending a manifest over a network) when a file isn't
 wanted at all.
 
-A complete runnable persistence workflow is available in
+A complete runnable persistence workflow using the builder is available in
+[`examples/dataset_manifest_builder.py`](examples/dataset_manifest_builder.py). A second, manual
+step-by-step equivalent -- showing explicit discovery, decoding, hashing, `relative_to(root)`, and
+`from_hashes` -- is available in
 [`examples/image_similarity_manifest.py`](examples/image_similarity_manifest.py).
 
 Photo/creative single-image effects:

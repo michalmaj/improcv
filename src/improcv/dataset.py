@@ -15,17 +15,20 @@ import this one or each other for this purpose, so there is no import cycle. `di
 before this module existed.
 
 Reading and decoding a discovered file are two deliberately separate steps, not one `cv2.imread`
-call: each file's bytes are read through Python's own path handling (`pathlib.Path.read_bytes`),
-then decoded from an in-memory buffer via `cv2.imdecode`. `cv2.imread`/`cv2.imwrite` resolve a
-filename through the operating system's native path APIs, which on Windows do not reliably
-support paths containing characters outside the active code page -- `cv2.imdecode` has no such
-problem, since it never touches a filename at all. This is not a new, general-purpose decoder:
-the decode policy is still exactly fixed 8-bit grayscale, nothing about `average_hash`/`phash`'s
-input contract changes, and a file whose bytes cannot be decoded as an image still raises the
-same `ValueError` as before; only *how* the file's bytes reach OpenCV has changed. A native
-error reading the file itself (missing file, permission denied, or another filesystem error) is
-a different failure mode from an undecodable image and is never turned into that `ValueError` --
-see `build_perceptual_hash_manifest`'s own docstring.
+call: each file's bytes are read through Python's own filesystem path handling
+(`pathlib.Path.read_bytes`), then decoded from an in-memory buffer via `cv2.imdecode`. Python's
+path handling still goes through the operating system's own filesystem APIs -- it does not avoid
+them -- but on Windows it is Unicode-capable, whereas OpenCV's filename-based `cv2.imread`/
+`cv2.imwrite` are not reliable for paths containing characters outside the active code page.
+`cv2.imdecode` sidesteps that specific problem by never receiving a filename in the first place:
+by the time it runs, the file has already been read, so it only ever sees the resulting in-memory
+encoded byte buffer. This is not a new, general-purpose decoder: the decode policy is still
+exactly fixed 8-bit grayscale, nothing about `average_hash`/`phash`'s input contract changes, and
+a file whose bytes cannot be decoded as an image still raises the same `ValueError` as before;
+only *how* the file's bytes reach OpenCV has changed. A native error reading the file itself
+(missing file, permission denied, or another filesystem error) is a different failure mode from
+an undecodable image and is never turned into that `ValueError` -- see
+`build_perceptual_hash_manifest`'s own docstring.
 
 `build_perceptual_hash_manifest` only ever returns a `PerceptualHashManifest` -- it never writes a
 file, never reads an existing manifest, never checks whether a previously computed hash is still
@@ -54,14 +57,16 @@ __all__ = [
 
 
 def _decode_grayscale(path: Path) -> ImageU8 | None:
-    """Read `path`'s bytes through Python's own (Unicode-safe) path handling, then decode them
-    as an 8-bit grayscale image via `cv2.imdecode` -- never `cv2.imread`.
+    """Read `path`'s bytes through Python's own filesystem path handling, then decode them as an
+    8-bit grayscale image via `cv2.imdecode` -- never `cv2.imread`.
 
-    `path.read_bytes()` never resolves a filename through the operating system's native path
-    APIs, unlike `cv2.imread`, which on Windows does not reliably support paths containing
-    characters outside the active code page; reading through Python first sidesteps that
-    entirely, since `cv2.imdecode` only ever sees an in-memory buffer, never a filename. An empty
-    file is treated as undecodable (`None`) without ever calling `cv2.imdecode` on an empty
+    `path.read_bytes()` still goes through the operating system's own filesystem APIs to open and
+    read the file -- it does not avoid them -- but on Windows that handling is Unicode-capable,
+    unlike `cv2.imread`, whose filename-based handling is not reliable for paths containing
+    characters outside the active code page. `cv2.imdecode` never receives a filename at all: by
+    the time it runs, `path`'s bytes are already an in-memory buffer, so whichever filename-related
+    limitation OpenCV's own handling might have on a given platform is simply never exercised. An
+    empty file is treated as undecodable (`None`) without ever calling `cv2.imdecode` on an empty
     buffer. Any `OSError` raised by `path.read_bytes()` itself (e.g. the file was deleted after
     discovery, or is unreadable) propagates unchanged -- this function does not distinguish a
     read failure from a decode failure; that distinction is made by its caller.
@@ -113,13 +118,14 @@ def build_perceptual_hash_manifest(
     recursive, extensions=extensions, include_hidden=include_hidden)` finds candidate image
     files (its full contract -- ordering, symlink policy, hidden-file policy, extension
     matching, and root-related errors -- is inherited unchanged, not reimplemented here); each
-    discovered file's bytes are read exactly once through Python's own (Unicode-safe) path
-    handling and decoded exactly once as 8-bit grayscale via `cv2.imdecode` (fixed, not a
+    discovered file's bytes are read exactly once through Python's own, Unicode-capable filesystem
+    path handling and decoded exactly once as 8-bit grayscale via `cv2.imdecode` (fixed, not a
     parameter, in this first slice: one comparable decode policy, a stable input shape, no alpha
     channel, and no unsupported `uint16`/floating-point depths to reason about) -- see
-    `_decode_grayscale`, which never calls `cv2.imread`/`cv2.imwrite` and so never depends on the
-    operating system's own, sometimes Unicode-unsafe, filename handling; each decoded image is
-    hashed exactly once with the algorithm named by `algorithm`; and the resulting
+    `_decode_grayscale`, which never calls `cv2.imread`/`cv2.imwrite` and so never routes a
+    filename through OpenCV's own filename-based handling, which is not reliable on Windows for
+    paths outside the active code page; each decoded image is hashed exactly once with the
+    algorithm named by `algorithm`; and the resulting
     `{relative identifier: PerceptualHash}` mapping is handed to
     `PerceptualHashManifest.from_hashes`, which performs the actual path-canonicalization,
     sorting, and hash-space validation -- this function never constructs a

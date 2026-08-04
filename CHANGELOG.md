@@ -28,6 +28,23 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   grayscale decode policy is unchanged, and reading a file's bytes still raises a native
   `FileNotFoundError`/`PermissionError`/`OSError` distinct from the `ValueError` raised for content
   that isn't decodable as an image.
+- Executable documentation for `build_perceptual_hash_manifest`:
+  [`examples/dataset_manifest_builder.py`](examples/dataset_manifest_builder.py), a concise,
+  builder-based recipe covering discovery/decode/hash in one call, relative-to-root identifiers
+  under a Unicode dataset root and nested subdirectory, deterministic `save`/`load`, moving the
+  dataset root, and a similarity search -- alongside the existing, manually-equivalent
+  `examples/image_similarity_manifest.py`, which is preserved unchanged. The main README's
+  "Dataset image similarity" recommended workflow now uses the builder instead of a hand-rolled
+  `discover_images` → `cv2.imread` → hash → mapping → `PerceptualHashManifest.from_hashes` loop,
+  which had a real bug: keying that mapping by the absolute paths `discover_images` returns
+  produced manifest identifiers that silently embedded the dataset root's own directory name
+  (e.g. `images/cat.jpg`) rather than a true root-relative identifier (`cat.jpg`), breaking
+  portability across a root rename. Also corrects imprecise documentation wording in
+  `improcv.dataset`'s docstrings that described `Path.read_bytes` as never going through the
+  operating system's native filesystem APIs; the corrected wording explains that Python's own
+  path handling still uses those APIs, just in a Unicode-capable way that OpenCV's filename-based
+  `cv2.imread`/`cv2.imwrite` handling is not. No public API, runtime behavior, or dependency
+  change.
 
 ## [0.3.0a2] - 2026-08-03
 

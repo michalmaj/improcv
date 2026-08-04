@@ -1,9 +1,9 @@
 # improcv examples
 
-Small, self-contained, runnable recipes for the four main first-use workflows. Each script is
+Five small, self-contained, runnable recipes for the main first-use workflows. Each script is
 deterministic, needs no network access, no GUI, no Matplotlib, and no external data files -- it
 creates whatever tiny input it needs (in a temporary directory it cleans up itself) and prints a
-short, stable summary. Both run identically on Windows, Linux, and macOS.
+short, stable summary. All five run identically on Windows, Linux, and macOS.
 
 ## Installation
 
@@ -24,6 +24,7 @@ uv run python examples/discovery_and_augmentation.py
 uv run python examples/classification_evaluation.py
 uv run python examples/image_similarity.py
 uv run python examples/image_similarity_manifest.py
+uv run python examples/dataset_manifest_builder.py
 ```
 
 (Without `uv`, `python examples/discovery_and_augmentation.py` works too, as long as `improcv` and
@@ -68,6 +69,19 @@ helpers, are all `(width, height)` -- the reverse of `array.shape[:2]`.
   hashes -- with no re-decoding and no re-hashing. A `PerceptualHashManifest` is a snapshot, not a
   cache: it never checks freshness or whether an image still exists, so reusing a reloaded
   manifest like this is a deliberate choice made once, not something the manifest verifies for you.
+  **Manual, educational equivalent** of `dataset_manifest_builder.py`, below.
+- [`dataset_manifest_builder.py`](dataset_manifest_builder.py) -- the same four synthetic images
+  as the two `image_similarity*.py` scripts, but discovered, decoded, hashed, and turned into
+  relative identifiers by one call to `build_perceptual_hash_manifest`, under a Unicode dataset
+  root (`żółw-dataset/obrazy/`) to exercise its cross-platform, Unicode-safe decode contract and
+  its nested, portable relative identifiers directly. The fixed grayscale decode policy is the
+  same one the manual scripts use. The resulting manifest is saved, the dataset root is physically
+  moved, the manifest is reloaded, and a similarity search runs against the reloaded hashes -- the
+  same persistence/move/reload/search shape as `image_similarity_manifest.py`, with the discovery/
+  decode/hash/relativize/`from_hashes` steps collapsed into one function call. Like every
+  `PerceptualHashManifest`, it is a snapshot, not a cache: no freshness check, and no external
+  data, network, or GUI is used anywhere in this script. **Concise, recommended workflow** -- see
+  `image_similarity_manifest.py`, above, for the manual, educational equivalent it corresponds to.
 
 ## DNN preprocessing as a supporting layer
 
