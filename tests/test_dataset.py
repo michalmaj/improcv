@@ -1,6 +1,5 @@
 import inspect
 import os
-import sys
 from pathlib import Path
 from typing import cast
 
@@ -30,10 +29,15 @@ def _vertical_split(size: int = 8) -> np.ndarray:
 
 
 def _write_image(path: Path, pixels: np.ndarray) -> None:
+    # Writes path-safely (encode in memory, then `Path.write_bytes`) rather than via
+    # `cv2.imwrite`, which on Windows does not reliably support paths containing characters
+    # outside the active code page -- this fixture helper is used for both ASCII and Unicode
+    # paths so every test exercises the same, always-Unicode-safe write.
     path.parent.mkdir(parents=True, exist_ok=True)
-    ok = cv2.imwrite(str(path), pixels)
+    ok, encoded = cv2.imencode(".png", pixels)
     if not ok:
-        raise RuntimeError(f"failed to write test fixture {path}")
+        raise RuntimeError(f"failed to encode test fixture {path}")
+    path.write_bytes(encoded.tobytes())
 
 
 class _Boom:
@@ -160,8 +164,8 @@ def test_rejects_hash_size_above_maximum(tmp_path: Path) -> None:
 def test_argument_validation_runs_before_touching_filesystem(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    boom = _Boom()
-    monkeypatch.setattr(cv2, "imread", boom)
+    monkeypatch.setattr(Path, "read_bytes", _Boom())
+    monkeypatch.setattr(cv2, "imdecode", _Boom())
     # A missing root would otherwise raise inside discover_images -- confirms algorithm/hash_size
     # are checked first, before any discovery/decoding is attempted.
     with pytest.raises(TypeError, match="algorithm"):
@@ -217,10 +221,10 @@ def test_directory_with_no_matching_extensions_returns_empty_manifest(tmp_path: 
     assert manifest.entries == ()
 
 
-def test_empty_dataset_never_calls_cv2_imread(
+def test_empty_dataset_never_calls_cv2_imdecode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cv2, "imread", _Boom())
+    monkeypatch.setattr(cv2, "imdecode", _Boom())
     manifest = build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
     assert manifest.entries == ()
 
@@ -321,10 +325,6 @@ def test_root_dot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert [entry.path.as_posix() for entry in manifest.entries] == ["a.png"]
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="cv2.imread/imwrite do not reliably support non-ASCII paths on Windows",
-)
 def test_root_with_unicode(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "żółw"
     _write_image(dataset_dir / "a.png", _checkerboard())
@@ -332,10 +332,6 @@ def test_root_with_unicode(tmp_path: Path) -> None:
     assert [entry.path.as_posix() for entry in manifest.entries] == ["a.png"]
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="cv2.imread/imwrite do not reliably support non-ASCII paths on Windows",
-)
 def test_nested_unicode_identifier(tmp_path: Path) -> None:
     _write_image(tmp_path / "dane" / "żółw.png", _checkerboard())
     manifest = build_perceptual_hash_manifest(tmp_path, algorithm=_AVERAGE_HASH)
@@ -378,16 +374,16 @@ def test_symlinked_file_skipped(tmp_path: Path) -> None:
 # =====================================================================================
 
 
-def test_uses_imread_grayscale_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_uses_imdecode_grayscale_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_image(tmp_path / "a.png", _checkerboard())
     seen_flags: list[int] = []
-    real_imread = cv2.imread
+    real_imdecode = cv2.imdecode
 
-    def spy(filename: str, flags: int) -> np.ndarray | None:
+    def spy(buffer: np.ndarray, flags: int) -> np.ndarray | None:
         seen_flags.append(flags)
-        return real_imread(filename, flags)
+        return real_imdecode(buffer, flags)
 
-    monkeypatch.setattr(cv2, "imread", spy)
+    monkeypatch.setattr(cv2, "imdecode", spy)
     build_perceptual_hash_manifest(tmp_path, algorithm=_AVERAGE_HASH)
     assert seen_flags == [cv2.IMREAD_GRAYSCALE]
 
@@ -396,16 +392,48 @@ def test_each_file_decoded_exactly_once(tmp_path: Path, monkeypatch: pytest.Monk
     _write_image(tmp_path / "a.png", _checkerboard())
     _write_image(tmp_path / "b.png", _vertical_split())
     call_count = 0
-    real_imread = cv2.imread
+    real_imdecode = cv2.imdecode
 
-    def spy(filename: str, flags: int) -> np.ndarray | None:
+    def spy(buffer: np.ndarray, flags: int) -> np.ndarray | None:
         nonlocal call_count
         call_count += 1
-        return real_imread(filename, flags)
+        return real_imdecode(buffer, flags)
 
-    monkeypatch.setattr(cv2, "imread", spy)
+    monkeypatch.setattr(cv2, "imdecode", spy)
     build_perceptual_hash_manifest(tmp_path, algorithm=_AVERAGE_HASH)
     assert call_count == 2
+
+
+def test_imdecode_receives_exact_file_bytes_as_1d_uint8_buffer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "a.png"
+    _write_image(target, _checkerboard())
+    expected_bytes = target.read_bytes()
+    real_imdecode = cv2.imdecode
+    seen_buffers: list[np.ndarray] = []
+
+    def spy(buffer: np.ndarray, flags: int) -> np.ndarray | None:
+        seen_buffers.append(buffer)
+        return real_imdecode(buffer, flags)
+
+    monkeypatch.setattr(cv2, "imdecode", spy)
+    build_perceptual_hash_manifest(tmp_path, algorithm=_AVERAGE_HASH)
+
+    assert len(seen_buffers) == 1
+    buffer = seen_buffers[0]
+    assert buffer.ndim == 1
+    assert buffer.dtype == np.uint8
+    assert buffer.tobytes() == expected_bytes
+
+
+def test_empty_file_does_not_call_cv2_imdecode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "empty.png").write_bytes(b"")
+    monkeypatch.setattr(cv2, "imdecode", _Boom())
+    with pytest.raises(ValueError, match="empty.png"):
+        build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
 
 
 def test_undecodable_file_raises_value_error(tmp_path: Path) -> None:
@@ -443,14 +471,14 @@ def test_no_decode_after_first_failure(tmp_path: Path, monkeypatch: pytest.Monke
     (tmp_path / "a_broken.png").write_bytes(b"not a real png")
     _write_image(tmp_path / "z_ok.png", _checkerboard())
     call_count = 0
-    real_imread = cv2.imread
+    real_imdecode = cv2.imdecode
 
-    def spy(filename: str, flags: int) -> np.ndarray | None:
+    def spy(buffer: np.ndarray, flags: int) -> np.ndarray | None:
         nonlocal call_count
         call_count += 1
-        return real_imread(filename, flags)
+        return real_imdecode(buffer, flags)
 
-    monkeypatch.setattr(cv2, "imread", spy)
+    monkeypatch.setattr(cv2, "imdecode", spy)
     with pytest.raises(ValueError):
         build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
     assert call_count == 1
@@ -481,7 +509,7 @@ def test_unicode_source_path_in_decode_error(tmp_path: Path) -> None:
         build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
 
 
-def test_cv2_imread_exception_propagates_unwrapped(
+def test_cv2_imdecode_exception_propagates_unwrapped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_image(tmp_path / "a.png", _checkerboard())
@@ -489,12 +517,57 @@ def test_cv2_imread_exception_propagates_unwrapped(
     class _CustomError(RuntimeError):
         pass
 
-    def failing_imread(filename: str, flags: int) -> np.ndarray | None:
+    def failing_imdecode(buffer: np.ndarray, flags: int) -> np.ndarray | None:
         raise _CustomError("simulated decode crash")
 
-    monkeypatch.setattr(cv2, "imread", failing_imread)
+    monkeypatch.setattr(cv2, "imdecode", failing_imdecode)
     with pytest.raises(_CustomError, match="simulated decode crash"):
         build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
+
+
+def test_file_deleted_between_discovery_and_read_raises_file_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "a.png"
+    _write_image(target, _checkerboard())
+    real_discover_images = dataset_module.discover_images
+
+    def vanishing_discover_images(
+        root: str | os.PathLike[str], **kwargs: object
+    ) -> tuple[Path, ...]:
+        paths = real_discover_images(root, **kwargs)  # type: ignore[arg-type]
+        target.unlink()
+        return paths
+
+    monkeypatch.setattr(dataset_module, "discover_images", vanishing_discover_images)
+    with pytest.raises(FileNotFoundError):
+        build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
+
+
+def test_artificial_read_error_propagates_unwrapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "a.png"
+    _write_image(target, _checkerboard())
+
+    class _CustomOSError(OSError):
+        pass
+
+    real_read_bytes = Path.read_bytes
+
+    def failing_read_bytes(self: Path) -> bytes:
+        if self == target:
+            raise _CustomOSError("simulated read failure")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", failing_read_bytes)
+    monkeypatch.setattr(cv2, "imdecode", _Boom())
+
+    before = {path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")}
+    with pytest.raises(_CustomOSError, match="simulated read failure"):
+        build_perceptual_hash_manifest(tmp_path, algorithm=_PHASH)
+    after = {path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")}
+    assert after == before
 
 
 # =====================================================================================

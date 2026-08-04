@@ -21,7 +21,13 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   immediately, naming the first such file (in canonical order) by its relative identifier and
   local source path, with no partial manifest ever returned. The function only ever returns a
   `PerceptualHashManifest` -- it never saves it, never reads or reuses an existing manifest, never
-  checks freshness, and never runs any work in parallel. No new dependencies.
+  checks freshness, and never runs any work in parallel. No new dependencies. Each discovered
+  file's bytes are read through Python's own Unicode-safe path handling and decoded from an
+  in-memory buffer via `cv2.imdecode`, rather than `cv2.imread`, so dataset roots, nested
+  directories, and filenames containing non-ASCII characters work correctly on Windows; the fixed
+  grayscale decode policy is unchanged, and reading a file's bytes still raises a native
+  `FileNotFoundError`/`PermissionError`/`OSError` distinct from the `ValueError` raised for content
+  that isn't decodable as an image.
 
 ## [0.3.0a2] - 2026-08-03
 
