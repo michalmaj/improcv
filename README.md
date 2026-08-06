@@ -469,9 +469,12 @@ identical hash is `unchanged` -- `diff.added`/`diff.removed` are full `Perceptua
 values, `diff.changed` is a tuple of `PerceptualHashManifestChange` (path plus the hash on each
 side), and `diff.unchanged` is a tuple of bare paths. A rename is always reported as one `removed`
 entry plus one `added` entry, never specially detected or merged -- even when the hash under the
-old and new path is identical, since a shared hash is exactly as likely to be an unrelated
-collision as an actual rename (see `improcv.hashing` for why perceptual hash collisions are
-expected, not a defect). `before`/`after` must share the same `algorithm` and `hash_size`, or this
+old and new path is identical. An identical hash under different paths does not establish that a
+rename occurred: it may represent renamed content, duplicated content, perceptually similar
+content, or a hash collision (see `improcv.hashing` for why perceptual hash collisions are
+expected, not a defect). `compare_perceptual_hash_manifests` deliberately does not infer which
+case occurred -- path identity remains the only identity rule, so the result is always
+`removed`+`added`. `before`/`after` must share the same `algorithm` and `hash_size`, or this
 raises `ValueError`, exactly like `PerceptualHash.distance` and `find_similar_image_pairs` already
 require of their own inputs. This function performs no filesystem access and no image decoding --
 it only compares two already-constructed `PerceptualHashManifest` values in memory, so it works
