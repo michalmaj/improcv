@@ -904,20 +904,31 @@ def test_top_level_exports_are_the_same_objects() -> None:
 
 
 def test_module_all_contains_exactly_the_public_symbols() -> None:
-    assert manifest_module.__all__ == ["PerceptualHashManifest", "PerceptualHashManifestEntry"]
+    assert manifest_module.__all__ == [
+        "PerceptualHashManifest",
+        "PerceptualHashManifestChange",
+        "PerceptualHashManifestDiff",
+        "PerceptualHashManifestEntry",
+        "compare_perceptual_hash_manifests",
+    ]
 
 
 def test_top_level_all_contains_new_symbols_without_duplicates() -> None:
     assert im.__all__.count("PerceptualHashManifest") == 1
     assert im.__all__.count("PerceptualHashManifestEntry") == 1
+    assert im.__all__.count("PerceptualHashManifestChange") == 1
+    assert im.__all__.count("PerceptualHashManifestDiff") == 1
+    assert im.__all__.count("compare_perceptual_hash_manifests") == 1
     assert len(im.__all__) == len(set(im.__all__))
 
 
 def test_top_level_all_places_new_symbols_alphabetically() -> None:
     index = im.__all__.index("PerceptualHashManifest")
     assert im.__all__[index - 1] == "PerceptualHashAlgorithm"
-    assert im.__all__[index + 1] == "PerceptualHashManifestEntry"
-    assert im.__all__[index + 2] == "PerspectiveParameters"
+    assert im.__all__[index + 1] == "PerceptualHashManifestChange"
+    assert im.__all__[index + 2] == "PerceptualHashManifestDiff"
+    assert im.__all__[index + 3] == "PerceptualHashManifestEntry"
+    assert im.__all__[index + 4] == "PerspectiveParameters"
 
 
 def test_manifest_module_does_not_import_cv2_or_numpy() -> None:

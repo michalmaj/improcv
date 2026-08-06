@@ -452,6 +452,39 @@ step-by-step equivalent -- showing explicit discovery, decoding, hashing, `relat
 `from_hashes` -- is available in
 [`examples/image_similarity_manifest.py`](examples/image_similarity_manifest.py).
 
+Comparing two manifests of the same logical dataset from different points in time:
+
+```python
+diff = im.compare_perceptual_hash_manifests(before, after)
+
+print(len(diff.added), len(diff.removed), len(diff.changed), len(diff.unchanged))
+for change in diff.changed:
+    print(change.path, change.before, "->", change.after)
+```
+
+`compare_perceptual_hash_manifests` classifies every path in `before`/`after` by canonical
+manifest path identity alone: a path present only in `after` is `added`, present only in `before`
+is `removed`, present in both with a different hash is `changed`, and present in both with an
+identical hash is `unchanged` -- `diff.added`/`diff.removed` are full `PerceptualHashManifestEntry`
+values, `diff.changed` is a tuple of `PerceptualHashManifestChange` (path plus the hash on each
+side), and `diff.unchanged` is a tuple of bare paths. A rename is always reported as one `removed`
+entry plus one `added` entry, never specially detected or merged -- even when the hash under the
+old and new path is identical, since a shared hash is exactly as likely to be an unrelated
+collision as an actual rename (see `improcv.hashing` for why perceptual hash collisions are
+expected, not a defect). `before`/`after` must share the same `algorithm` and `hash_size`, or this
+raises `ValueError`, exactly like `PerceptualHash.distance` and `find_similar_image_pairs` already
+require of their own inputs. This function performs no filesystem access and no image decoding --
+it only compares two already-constructed `PerceptualHashManifest` values in memory, so it works
+identically whether they came from `build_perceptual_hash_manifest`, `PerceptualHashManifest.load`,
+or `from_hashes`. Like the manifest itself, this is a snapshot comparison, not a cache or a
+freshness check: it says nothing about whether either manifest is still valid against the current
+contents of the dataset it describes. This is a separate operation from
+`find_similar_image_pairs`: comparing two manifests is path-identity based and has nothing to do
+with perceptual similarity between images, and `compare_perceptual_hash_manifests` never calls it.
+
+A complete runnable example is available in
+[`examples/manifest_comparison.py`](examples/manifest_comparison.py).
+
 Photo/creative single-image effects:
 
 ```python

@@ -150,7 +150,13 @@ from improcv.hough import (
     hough_line_segments,
     hough_lines,
 )
-from improcv.manifest import PerceptualHashManifest, PerceptualHashManifestEntry
+from improcv.manifest import (
+    PerceptualHashManifest,
+    PerceptualHashManifestChange,
+    PerceptualHashManifestDiff,
+    PerceptualHashManifestEntry,
+    compare_perceptual_hash_manifests,
+)
 from improcv.morphology import (
     blackhat,
     dilate,
@@ -254,6 +260,8 @@ __all__ = [
     "PerceptualHash",
     "PerceptualHashAlgorithm",
     "PerceptualHashManifest",
+    "PerceptualHashManifestChange",
+    "PerceptualHashManifestDiff",
     "PerceptualHashManifestEntry",
     "PerspectiveParameters",
     "PrecisionRecallCurve",
@@ -294,6 +302,7 @@ __all__ = [
     "clahe",
     "classification_metrics",
     "classification_metrics_from_confusion_matrix",
+    "compare_perceptual_hash_manifests",
     "confusion_matrix",
     "connected_components",
     "connected_components_with_stats",
