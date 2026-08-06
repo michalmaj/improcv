@@ -39,6 +39,7 @@ def test_examples_directory_has_the_expected_scripts() -> None:
         "discovery_and_augmentation.py",
         "image_similarity.py",
         "image_similarity_manifest.py",
+        "manifest_comparison.py",
     }
 
 
@@ -158,6 +159,29 @@ def test_dataset_manifest_builder_example_runs_cleanly() -> None:
 
     # No absolute temporary-directory path anywhere in stdout, not only in the pair lines.
     assert tempfile.gettempdir() not in result.stdout
+
+
+def test_manifest_comparison_example_runs_cleanly() -> None:
+    result = _run_example(_EXAMPLES_DIR / "manifest_comparison.py")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout == (
+        "comparison: compare_perceptual_hash_manifests\n"
+        "identity: canonical manifest path\n"
+        "filesystem access: no\n"
+        "added: 2\n"
+        "A  cats/c.png  aaaaaaaaaaaaaaaa\n"
+        "A  cats/new_name.png  3333333333333333\n"
+        "removed: 1\n"
+        "R  cats/old_name.png  3333333333333333\n"
+        "changed: 1\n"
+        "C  cats/b.png  0f0f0f0f0f0f0f0f -> 8f0f0f0f0f0f0f0f\n"
+        "unchanged: 1\n"
+        "U  cats/a.png\n"
+        "rename detection: no\n"
+        "same hash old/new reported separately: yes\n"
+    )
 
 
 def test_examples_leave_no_files_behind_in_the_repository() -> None:

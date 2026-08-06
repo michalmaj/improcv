@@ -1,9 +1,10 @@
 # improcv examples
 
-Five small, self-contained, runnable recipes for the main first-use workflows. Each script is
+Six small, self-contained, runnable recipes for the main first-use workflows. Each script is
 deterministic, needs no network access, no GUI, no Matplotlib, and no external data files -- it
-creates whatever tiny input it needs (in a temporary directory it cleans up itself) and prints a
-short, stable summary. All five run identically on Windows, Linux, and macOS.
+creates whatever tiny input it needs (in a temporary directory it cleans up itself, except
+`manifest_comparison.py`, which needs no files at all) and prints a short, stable summary. All six
+run identically on Windows, Linux, and macOS.
 
 ## Installation
 
@@ -25,6 +26,7 @@ uv run python examples/classification_evaluation.py
 uv run python examples/image_similarity.py
 uv run python examples/image_similarity_manifest.py
 uv run python examples/dataset_manifest_builder.py
+uv run python examples/manifest_comparison.py
 ```
 
 (Without `uv`, `python examples/discovery_and_augmentation.py` works too, as long as `improcv` and
@@ -82,6 +84,13 @@ helpers, are all `(width, height)` -- the reverse of `array.shape[:2]`.
   `PerceptualHashManifest`, it is a snapshot, not a cache: no freshness check, and no external
   data, network, or GUI is used anywhere in this script. **Concise, recommended workflow** -- see
   `image_similarity_manifest.py`, above, for the manual, educational equivalent it corresponds to.
+- [`manifest_comparison.py`](manifest_comparison.py) -- a pure, deterministic comparison of two
+  `PerceptualHashManifest` snapshots with `compare_perceptual_hash_manifests`, showing all four
+  classification categories (`added`/`removed`/`changed`/`unchanged`) plus a rename reported as a
+  separate `removed` and `added` entry rather than detected as a rename. Unlike every other script
+  here, both manifests are built directly from hand-constructed hash mappings -- no files, no
+  `cv2`, no NumPy, no temporary directory -- since the comparison itself needs no filesystem
+  access at all.
 
 ## DNN preprocessing as a supporting layer
 

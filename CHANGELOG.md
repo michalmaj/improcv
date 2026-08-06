@@ -10,6 +10,18 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `compare_perceptual_hash_manifests(before, after) -> PerceptualHashManifestDiff`, the first
+  `0.4.x` slice: a pure, in-memory, deterministic comparison of two `PerceptualHashManifest`
+  snapshots by canonical manifest path identity, classifying every path as `added` (only in
+  `after`), `removed` (only in `before`), `changed` (same path, different hash, carried in the new
+  `PerceptualHashManifestChange`), or `unchanged` (same path, identical hash) -- a rename is always
+  reported as one `removed` entry plus one `added` entry, never specially detected or merged, even
+  when the hash under the old and new path is identical. Runs in `O(n + m)` time via a merge-join
+  over the two manifests' already-sorted entries, performs no filesystem access, and requires
+  `before`/`after` to share the same `algorithm`/`hash_size` (`ValueError` otherwise). No changes
+  to manifest schema v1, and no new runtime dependency.
+
 ## [0.3.0b1] - 2026-08-04
 
 ### Changed

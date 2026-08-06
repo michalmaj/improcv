@@ -47,7 +47,10 @@ from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm
 
 __all__ = [
     "PerceptualHashManifest",
+    "PerceptualHashManifestChange",
+    "PerceptualHashManifestDiff",
     "PerceptualHashManifestEntry",
+    "compare_perceptual_hash_manifests",
 ]
 
 # The only schema version this slice understands. A manifest JSON document with any other
@@ -709,3 +712,152 @@ class PerceptualHashManifest:
         with open(source, encoding="utf-8", newline="") as handle:
             text = handle.read()
         return cls.from_json(text)
+
+
+@dataclass(frozen=True, slots=True)
+class PerceptualHashManifestChange:
+    """One path present in both manifests compared by `compare_perceptual_hash_manifests`,
+    with a different hash on each side.
+
+    `before`/`after` are the two `PerceptualHash` values for `path`, taken from the `before`/
+    `after` manifest respectively -- never from any other source.
+    """
+
+    path: PurePosixPath
+    before: PerceptualHash
+    after: PerceptualHash
+
+
+@dataclass(frozen=True, slots=True)
+class PerceptualHashManifestDiff:
+    """The result of `compare_perceptual_hash_manifests`: every path from either manifest,
+    classified as `added`, `removed`, `changed`, or `unchanged` by path identity.
+
+    Every path in the `before`/`after` manifests compared falls into exactly one of these four
+    tuples. `added`/`removed` hold full `PerceptualHashManifestEntry` values (the hash exists in
+    only one of the two manifests for these); `changed` holds `PerceptualHashManifestChange`
+    (path plus both hashes); `unchanged` holds bare `PurePosixPath` identifiers (the hash is, by
+    definition, identical in both manifests). All four tuples are sorted ascending by
+    `path.as_posix()`.
+    """
+
+    added: tuple[PerceptualHashManifestEntry, ...]
+    removed: tuple[PerceptualHashManifestEntry, ...]
+    changed: tuple[PerceptualHashManifestChange, ...]
+    unchanged: tuple[PurePosixPath, ...]
+
+
+def compare_perceptual_hash_manifests(
+    before: PerceptualHashManifest,
+    after: PerceptualHashManifest,
+) -> PerceptualHashManifestDiff:
+    """Classify every path in `before`/`after` as added, removed, changed, or unchanged.
+
+    Identity is the canonical manifest path (`PerceptualHashManifestEntry.path`) alone -- this
+    function never looks for matching content under a different path. For every path in
+    `before.entries` union `after.entries`: a path present only in `after` is `added`; a path
+    present only in `before` is `removed`; a path present in both with a different hash is
+    `changed`; a path present in both with an identical hash is `unchanged`. A rename is always
+    reported as one `removed` entry (old path) plus one `added` entry (new path), never specially
+    detected or merged -- even when the hash under the old and new path is identical, since an
+    identical hash under two different paths is exactly as likely to be an unrelated collision
+    (perceptual hash collisions are expected, see `improcv.hashing`) as an actual rename. Hash
+    values are never compared across `added`/`removed`/`changed`/`unchanged` categories.
+
+    `before`/`after` must share the same `algorithm` and `hash_size` -- comparing hashes from
+    different hash spaces is not meaningful, exactly as `PerceptualHash.distance` and
+    `improcv.similarity.find_similar_image_pairs` already require for their own inputs. This
+    function never calls `find_similar_image_pairs` and never performs any perceptual-similarity
+    matching of its own -- it is a path-identity comparison only.
+
+    This function performs no filesystem access, no image decoding, and no mutation of `before`
+    or `after`. It runs a single merge-join over `before.entries`/`after.entries` (both already
+    guaranteed sorted ascending by `path.as_posix()`, with no duplicate paths, by
+    `PerceptualHashManifest.__post_init__`), comparing paths via `path.as_posix()` string form --
+    in `O(n + m)` time and `O(1)` additional working memory beyond the four result tuples, where
+    `n = len(before.entries)` and `m = len(after.entries)`. Every result tuple is therefore
+    already sorted ascending by `path.as_posix()`. Calling this function twice with the same two
+    manifests always returns equal results.
+
+    Parameters
+    ----------
+    before : PerceptualHashManifest
+        The earlier snapshot. Must be an instance of `PerceptualHashManifest` (a subclass is
+        accepted). Not modified.
+    after : PerceptualHashManifest
+        The later snapshot. Must be an instance of `PerceptualHashManifest` (a subclass is
+        accepted), sharing `before`'s `algorithm` and `hash_size`. Not modified.
+
+    Returns
+    -------
+    PerceptualHashManifestDiff
+
+    Raises
+    ------
+    TypeError
+        If `before` is not a `PerceptualHashManifest`, checked before `after`; or if `after` is
+        not a `PerceptualHashManifest`.
+    ValueError
+        If `before.algorithm != after.algorithm` or `before.hash_size != after.hash_size` --
+        checked only once both arguments' types are confirmed.
+    """
+    if not isinstance(before, PerceptualHashManifest):
+        raise TypeError(f"before must be a PerceptualHashManifest, got {type(before).__name__}")
+    if not isinstance(after, PerceptualHashManifest):
+        raise TypeError(f"after must be a PerceptualHashManifest, got {type(after).__name__}")
+
+    if before.algorithm != after.algorithm or before.hash_size != after.hash_size:
+        raise ValueError(
+            f"cannot compare {before.algorithm.value}(hash_size={before.hash_size}) with "
+            f"{after.algorithm.value}(hash_size={after.hash_size}) -- comparison requires "
+            "the same algorithm and hash_size"
+        )
+
+    before_entries = before.entries
+    after_entries = after.entries
+    i, j = 0, 0
+
+    added: list[PerceptualHashManifestEntry] = []
+    removed: list[PerceptualHashManifestEntry] = []
+    changed: list[PerceptualHashManifestChange] = []
+    unchanged: list[PurePosixPath] = []
+
+    while i < len(before_entries) and j < len(after_entries):
+        before_entry = before_entries[i]
+        after_entry = after_entries[j]
+        before_path = before_entry.path.as_posix()
+        after_path = after_entry.path.as_posix()
+
+        if before_path < after_path:
+            removed.append(before_entry)
+            i += 1
+        elif after_path < before_path:
+            added.append(after_entry)
+            j += 1
+        else:
+            if before_entry.hash == after_entry.hash:
+                unchanged.append(before_entry.path)
+            else:
+                changed.append(
+                    PerceptualHashManifestChange(
+                        path=before_entry.path,
+                        before=before_entry.hash,
+                        after=after_entry.hash,
+                    )
+                )
+            i += 1
+            j += 1
+
+    while i < len(before_entries):
+        removed.append(before_entries[i])
+        i += 1
+    while j < len(after_entries):
+        added.append(after_entries[j])
+        j += 1
+
+    return PerceptualHashManifestDiff(
+        added=tuple(added),
+        removed=tuple(removed),
+        changed=tuple(changed),
+        unchanged=tuple(unchanged),
+    )
