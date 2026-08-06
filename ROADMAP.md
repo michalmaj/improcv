@@ -76,9 +76,13 @@ version decided at the time each is actually published, rather than mechanically
   once with fixed grayscale semantics (Unicode-path-safe on Windows via `Path.read_bytes`/
   `cv2.imdecode`), and produces root-relative canonical identifiers implemented, shipping in
   `0.3.0a3`; `0.3.0b1` begins beta stabilization after completion of the planned `0.3.0` functional
-  scope above -- no new major feature slice; incremental caching/freshness validation, duplicate
-  groups/clustering, indexed/subquadratic search, and parallel hashing/search remain planned, not
-  started, with no version assigned yet). Bounding boxes/
+  scope above -- no new major feature slice; `0.4.0a1` adds deterministic, in-memory comparison of
+  two `PerceptualHashManifest` snapshots (`improcv.manifest.compare_perceptual_hash_manifests`),
+  classifying every path as added/removed/changed/unchanged by canonical manifest path identity
+  alone via a linear merge-join, with a rename always reported as `removed` + `added`, no
+  filesystem I/O, and no manifest schema-v1 changes; incremental caching/freshness validation,
+  duplicate groups/clustering, indexed/subquadratic search, and parallel hashing/search remain
+  planned, not started, with no version assigned yet). Bounding boxes/
   keypoints/polygons in augmentation, a
   `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as

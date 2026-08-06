@@ -1535,10 +1535,17 @@ referencing the same file via a hard link remain a legal, distinct pair. Both si
 
 ## Status
 
-`improcv` is in beta development. `0.3.0b1` marks the first beta release: the functional scope
-planned for `0.3.0` is complete, and development is focused on stabilization -- bug fixes,
-contract and typing corrections, documentation corrections, and feedback from real-world usage
-take priority over new major features, which are deferred to later development lines. See
+`improcv`'s overall project maturity is beta development (`Development Status :: 4 - Beta`).
+`0.3.0b1` is the latest stable public prerelease: the first beta release of the `0.3.0` line,
+marking that its planned functional scope is complete and its focus has shifted to
+stabilization -- bug fixes, contract and typing corrections, documentation corrections, and
+feedback from real-world usage. `0.4.0a1` opens a new, additive feature line on top of that
+stabilized `0.3.0` scope: it is the first alpha of `0.4.0`, containing exactly one slice --
+deterministic, in-memory comparison of two `PerceptualHashManifest` snapshots
+(`compare_perceptual_hash_manifests`). The `a1` in `0.4.0a1` describes how far along `0.4.0`
+itself is in its own release cycle, not a reversion of the whole project's maturity classifier
+back to alpha -- the project as a whole remains Beta. `0.4.0a1` is not a claim that `0.4.0` is
+feature-complete, and no further feature is assigned to the rest of the `0.4.x` line yet. See
 [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for published
 releases and the exact contents of the current development line. `0.1.0a1` was the project's
 first public release and covered the accumulated scope of Phases 0-3 (see
@@ -1546,9 +1553,11 @@ first public release and covered the accumulated scope of Phases 0-3 (see
 and why it doesn't match the project's original one-phase-per-minor-version plan).
 
 **Compatibility policy before `1.0.0`:**
-- Releases through `0.3.0a3` were alpha releases; `0.3.0b1` begins the beta line. Beta means the
-  planned functional scope has settled and the focus has shifted to stabilization -- it does not
-  mean the public API is declared stable.
+- Releases through `0.3.0a3` were alpha releases; `0.3.0b1` began the beta line for the `0.3.0`
+  scope, which remains in beta stabilization. `0.4.0a1` opens alpha status for the new, additive
+  `0.4.x` feature line specifically. Beta means the planned functional scope for that line has
+  settled and the focus has shifted to stabilization; alpha means the opposite -- neither status
+  means the public API is declared stable.
 - Before `1.0.0`, the public API may still change, including in backwards-incompatible ways, in any
   `0.MINOR` release. While in alpha or beta, this also applies between consecutive prereleases of
   the same version (e.g. `0.1.0a1` → `0.1.0a2`, or a later `0.3.0b1` → `0.3.0b2`).
