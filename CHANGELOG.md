@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.4.0a1] - 2026-08-06
+
 ### Added
 - `compare_perceptual_hash_manifests(before, after) -> PerceptualHashManifestDiff`, the first
   `0.4.x` slice: a pure, in-memory, deterministic comparison of two `PerceptualHashManifest`
