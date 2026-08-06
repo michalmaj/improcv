@@ -759,10 +759,13 @@ def compare_perceptual_hash_manifests(
     present only in `before` is `removed`; a path present in both with a different hash is
     `changed`; a path present in both with an identical hash is `unchanged`. A rename is always
     reported as one `removed` entry (old path) plus one `added` entry (new path), never specially
-    detected or merged -- even when the hash under the old and new path is identical, since an
-    identical hash under two different paths is exactly as likely to be an unrelated collision
-    (perceptual hash collisions are expected, see `improcv.hashing`) as an actual rename. Hash
-    values are never compared across `added`/`removed`/`changed`/`unchanged` categories.
+    detected or merged -- even when the hash under the old and new path is identical. An identical
+    hash under different paths does not establish that a rename occurred: it may represent renamed
+    content, duplicated content, perceptually similar content, or a hash collision (perceptual
+    hash collisions are expected, see `improcv.hashing`). This function deliberately does not
+    infer which case occurred -- path identity remains the only identity rule, so the result is
+    always `removed` + `added`. Hash values are never compared across
+    `added`/`removed`/`changed`/`unchanged` categories.
 
     `before`/`after` must share the same `algorithm` and `hash_size` -- comparing hashes from
     different hash spaces is not meaningful, exactly as `PerceptualHash.distance` and
@@ -773,11 +776,12 @@ def compare_perceptual_hash_manifests(
     This function performs no filesystem access, no image decoding, and no mutation of `before`
     or `after`. It runs a single merge-join over `before.entries`/`after.entries` (both already
     guaranteed sorted ascending by `path.as_posix()`, with no duplicate paths, by
-    `PerceptualHashManifest.__post_init__`), comparing paths via `path.as_posix()` string form --
-    in `O(n + m)` time and `O(1)` additional working memory beyond the four result tuples, where
-    `n = len(before.entries)` and `m = len(after.entries)`. Every result tuple is therefore
-    already sorted ascending by `path.as_posix()`. Calling this function twice with the same two
-    manifests always returns equal results.
+    `PerceptualHashManifest.__post_init__`), comparing paths via `path.as_posix()` string form.
+    Runs in `O(n + m)` time, where `n = len(before.entries)` and `m = len(after.entries)`. The
+    merge traversal itself keeps `O(1)` control state; the four output collections require
+    `O(n + m)` storage, with ordinary transient allocation while the immutable result tuples are
+    materialized. Every result tuple is therefore already sorted ascending by `path.as_posix()`.
+    Calling this function twice with the same two manifests always returns equal results.
 
     Parameters
     ----------
