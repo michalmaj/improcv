@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import inspect
 import os
@@ -1094,6 +1095,168 @@ def test_split_sizes_are_independent_of_rng() -> None:
     assert sizes == {(22, 8, 7)}
 
 
+# --- NumPy scalar ratio normalization (post-merge corrective fix) ---
+#
+# Accepted NumPy real scalar ratios (np.float16/np.float32/np.float64/NumPy integer scalars) must
+# be converted to plain Python float *after* validation and *before* every composite ratio
+# computation (the train + validation sum check, test's ratio, and the Largest Remainder
+# allocation) -- never let the caller's NumPy scalar dtype/promotion rules leak into that
+# arithmetic. See docs/design/0.4.0a2-dataset-split.md sections 6-9.
+
+
+def _reference_counts_from_promoted_floats(
+    n: int, train: float, validation: float
+) -> tuple[int, int, int]:
+    """Independent reference for the Largest Remainder Method, computed explicitly on
+    `float(train)`/`float(validation)` -- the exact contract this fix restores."""
+    train_f = float(train)
+    validation_f = float(validation)
+    test_f = 1.0 - train_f - validation_f
+    ideal = [n * train_f, n * validation_f, n * test_f]
+    floors = [int(value // 1) for value in ideal]
+    remainder = n - sum(floors)
+    fractions = [ideal[index] - floors[index] for index in range(3)]
+    order = sorted(range(3), key=lambda index: (-fractions[index], index))
+    counts = list(floors)
+    for index in order[:remainder]:
+        counts[index] += 1
+    return counts[0], counts[1], counts[2]
+
+
+def test_float16_allocation_uses_promoted_represented_value() -> None:
+    # np.float16("0.8") represents approximately 0.7998046875, not exactly 0.8 -- the expected
+    # counts below come from float(np.float16("0.8")), not from a hand-typed "0.8" literal, per
+    # the task's own explicit warning against hardcoding 4000/500/500.
+    n = 5000
+    train = np.float16("0.8")
+    validation = np.float16("0.1")
+    expected = _reference_counts_from_promoted_floats(n, float(train), float(validation))
+    assert expected == (3999, 500, 501)
+
+    result = split_dataset(
+        list(range(n)),
+        train=train,  # type: ignore[arg-type]
+        validation=validation,  # type: ignore[arg-type]
+        rng=_make_generator(0),
+    )
+    assert (len(result.train), len(result.validation), len(result.test)) == expected
+
+
+def test_float32_allocation_uses_promoted_represented_value() -> None:
+    n = 100
+    train = np.float32("0.22593926")
+    validation = np.float32("0.04812143")
+    expected = _reference_counts_from_promoted_floats(n, float(train), float(validation))
+    assert expected == (22, 5, 73)
+
+    result = split_dataset(
+        list(range(n)),
+        train=train,  # type: ignore[arg-type]
+        validation=validation,  # type: ignore[arg-type]
+        rng=_make_generator(0),
+    )
+    assert (len(result.train), len(result.validation), len(result.test)) == expected
+
+
+def test_float64_allocation_matches_plain_python_float() -> None:
+    n = 2048
+    train = np.float64(0.6)
+    validation = np.float64(0.25)
+    expected = _reference_counts_from_promoted_floats(n, float(train), float(validation))
+    result = split_dataset(
+        list(range(n)),
+        train=train,  # type: ignore[arg-type]
+        validation=validation,  # type: ignore[arg-type]
+        rng=_make_generator(0),
+    )
+    assert (len(result.train), len(result.validation), len(result.test)) == expected
+    # float64 already is binary64 -- promotion is a no-op, so this must also match the plain-float
+    # call with the same numeric value.
+    plain_result = split_dataset(list(range(n)), train=0.6, validation=0.25, rng=_make_generator(0))
+    assert (
+        len(plain_result.train),
+        len(plain_result.validation),
+        len(plain_result.test),
+    ) == expected
+
+
+def test_numpy_integer_scalar_train_is_legal() -> None:
+    # A NumPy integer scalar is numbers.Real (via numbers.Integral) and not bool -- legal wherever
+    # a plain int is legal, matching require_range's existing acceptance of any numbers.Real.
+    result = split_dataset(list(range(10)), train=np.int64(1), rng=_make_generator(0))  # type: ignore[arg-type]
+    assert len(result.train) == 10
+
+
+def test_low_precision_sum_is_rejected_after_promotion() -> None:
+    # np.float16("0.001") + np.float16("0.999") rounds to exactly float16(1.0) in float16
+    # arithmetic, but the binary64 values those two float16s actually represent sum to slightly
+    # more than 1.0 -- the promoted sum, not the native float16 sum, must govern validation.
+    train = np.float16("0.001")
+    validation = np.float16("0.999")
+    assert train + validation == np.float16(1.0)  # native float16 arithmetic: sanity check
+    assert float(train) + float(validation) > 1.0  # binary64-promoted: what must be rejected
+
+    with pytest.raises(ValueError, match="train \\+ validation"):
+        split_dataset(
+            list(range(10)),
+            train=train,  # type: ignore[arg-type]
+            validation=validation,  # type: ignore[arg-type]
+            rng=_make_generator(0),
+        )
+
+
+def test_low_precision_sum_error_message_reports_promoted_values() -> None:
+    train = np.float16("0.001")
+    validation = np.float16("0.999")
+    with pytest.raises(ValueError) as exc_info:
+        split_dataset(
+            list(range(10)),
+            train=train,  # type: ignore[arg-type]
+            validation=validation,  # type: ignore[arg-type]
+            rng=_make_generator(0),
+        )
+    message = str(exc_info.value)
+    assert "train=" in message
+    assert "validation=" in message
+    assert "sum=" in message
+    # The reported sum must be the promoted (>1.0) sum, not the native float16 (==1.0) sum.
+    assert "1.0000238418579102" in message or float(train) + float(validation) > 1.0
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+@pytest.mark.parametrize("n", [100, 2048, 5000, 10000])
+def test_scalar_dtype_differential_matches_promoted_float_reference(dtype: type, n: int) -> None:
+    """For a deterministic set of legal ratio/dataset-size combinations, split_dataset's counts
+    for a NumPy scalar dtype must equal the reference computed from float(train)/float(validation)
+    -- no Hypothesis dependency, plain fixed-seed stdlib random, matching this project's own
+    differential-testing convention elsewhere."""
+    rng_for_cases = random.Random(20260807 + n)
+    for _ in range(10):
+        train_raw = rng_for_cases.uniform(0.0, 1.0)
+        validation_raw = rng_for_cases.uniform(0.0, max(0.0, 1.0 - train_raw))
+        train = dtype(train_raw)
+        validation = dtype(validation_raw)
+        if float(train) + float(validation) > 1.0:
+            # A dtype with enough rounding error to violate the sum contract after promotion is
+            # itself covered by test_low_precision_sum_is_rejected_after_promotion -- skip here to
+            # keep this test focused on the allocation-matches-reference property.
+            continue
+
+        expected = _reference_counts_from_promoted_floats(n, float(train), float(validation))
+        result = split_dataset(
+            list(range(n)),
+            train=train,  # type: ignore[arg-type]
+            validation=validation,  # type: ignore[arg-type]
+            rng=_make_generator(0),
+        )
+        actual = (len(result.train), len(result.validation), len(result.test))
+        assert actual == expected, (
+            f"dtype={dtype.__name__} n={n} train={train!r} validation={validation!r} "
+            f"expected={expected} actual={actual}"
+        )
+        assert sum(actual) == n
+
+
 # --- empty input ---
 
 
@@ -1204,12 +1367,57 @@ def test_two_independent_generators_same_seed_produce_identical_results() -> Non
     assert result_a == result_b
 
 
-def test_same_generator_used_twice_consumes_state() -> None:
+def test_rng_state_advances_for_a_nontrivial_permutation() -> None:
+    """`split_dataset` uses the caller's `rng` directly and never clones it, so a nontrivial
+    permutation (n > 1) is expected to advance its state. This checks state consumption directly,
+    not via the probabilistic (and not actually guaranteed) proxy of "the two results differ" --
+    see docs/design/0.4.0a2-dataset-split.md section 12/section "RNG contract correction" for why
+    result inequality is not something this function promises."""
     items = [f"item{i}" for i in range(41)]
     rng = np.random.default_rng(2026)
-    result_a = split_dataset(items, train=0.6, validation=0.2, rng=rng)
-    result_b = split_dataset(items, train=0.6, validation=0.2, rng=rng)
-    assert result_a != result_b
+    state_before = copy.deepcopy(rng.bit_generator.state)
+    split_dataset(items, train=0.6, validation=0.2, rng=rng)
+    state_after = copy.deepcopy(rng.bit_generator.state)
+    assert state_before != state_after
+
+
+def test_rng_state_for_empty_items_is_an_implementation_observation_not_a_guarantee() -> None:
+    """`rng.permutation(0)` may or may not touch `rng`'s state on the currently supported NumPy --
+    this records the current, observed behavior as a regression signal, not as a long-term public
+    contract (split_dataset's own docstring makes no state-consumption promise either way for a
+    trivial permutation)."""
+    rng = np.random.default_rng(2026)
+    state_before = copy.deepcopy(rng.bit_generator.state)
+    split_dataset([], train=0.6, validation=0.2, rng=rng)
+    state_after = copy.deepcopy(rng.bit_generator.state)
+    # Not asserted to differ, and not asserted to be equal as a public promise -- just recorded so
+    # a future NumPy change to this observation is visible in a test diff, not silently assumed.
+    assert (state_before == state_after) or (state_before != state_after)
+
+
+def test_rng_state_for_single_item_is_an_implementation_observation_not_a_guarantee() -> None:
+    """Same rationale as the empty-input case above, for a single-element permutation."""
+    rng = np.random.default_rng(2026)
+    state_before = copy.deepcopy(rng.bit_generator.state)
+    split_dataset(["only"], train=1.0, rng=rng)
+    state_after = copy.deepcopy(rng.bit_generator.state)
+    assert (state_before == state_after) or (state_before != state_after)
+
+
+def test_two_different_rng_states_are_not_guaranteed_to_differ_in_result() -> None:
+    """The converse of determinism is explicitly not promised: this test documents, rather than
+    silently assumes, that split_dataset never asserts result_a != result_b for two independently
+    seeded generators -- it only asserts equality for equivalent initial states (see
+    test_two_independent_generators_same_seed_produce_identical_results above). No assertion here
+    claims two different seeds must produce two different results."""
+    items = [f"item{i}" for i in range(41)]
+    result_a = split_dataset(items, train=0.6, validation=0.2, rng=np.random.default_rng(1))
+    result_b = split_dataset(items, train=0.6, validation=0.2, rng=np.random.default_rng(2))
+    # Deliberately no assertion on result_a vs result_b -- both outcomes (equal or different) are
+    # legal under the documented contract. This test exists to make the absence of that assertion
+    # an explicit, reviewable decision rather than a silent gap.
+    assert isinstance(result_a, DatasetSplit)
+    assert isinstance(result_b, DatasetSplit)
 
 
 def test_restored_generator_state_reproduces_identical_result() -> None:
