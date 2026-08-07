@@ -77,7 +77,7 @@ from improcv.contours import (
     min_area_rect,
     sort_contours,
 )
-from improcv.dataset import build_perceptual_hash_manifest
+from improcv.dataset import DatasetSplit, build_perceptual_hash_manifest, split_dataset
 from improcv.denoising import nl_means_denoise, nl_means_denoise_colored
 from improcv.detectors import (
     FastType,
@@ -232,6 +232,7 @@ __all__ = [
     "Connectivity",
     "Contour",
     "CropParameters",
+    "DatasetSplit",
     "DescriptorNorm",
     "DistanceMaskSize",
     "DistanceType",
@@ -387,6 +388,7 @@ __all__ = [
     "seamless_clone",
     "sobel_edge",
     "sort_contours",
+    "split_dataset",
     "ssim",
     "stitch_images",
     "stylize",

@@ -1533,6 +1533,57 @@ shared root), since one path cannot serve as both members of the pair -- this do
 referencing the same file via a hard link remain a legal, distinct pair. Both sides empty gives
 `()`.
 
+Deterministic dataset splits:
+
+```python
+paths = im.discover_images("dataset/images")
+
+rng = np.random.default_rng(0)
+split = im.split_dataset(paths, train=0.7, validation=0.15, rng=rng)
+
+len(split.train), len(split.validation), len(split.test)
+# (7, 1, 2) for a 10-file dataset -- the exact triple only depends on
+# len(paths)/train/validation, never on rng (see below)
+
+# discover_image_mask_pairs(...) composes directly -- an ImageMaskPair is one atomic sample, so
+# its image/mask never land in different splits:
+pairs = im.discover_image_mask_pairs("dataset/images", "dataset/masks")
+pair_split = im.split_dataset(pairs, train=0.7, validation=0.15, rng=rng)
+```
+
+`split_dataset` accepts any `Sequence[T]` -- `list`, `tuple` (including `discover_images`'/
+`discover_image_mask_pairs`' own output, unchanged), or a custom `Sequence` implementation. A bare
+`str`/`bytes`/`bytearray` (which would otherwise be silently split as a sequence of its own
+characters), a `Mapping`, a `numpy.ndarray`, a generator/iterator, and a single `pathlib.Path` are
+all rejected with `TypeError` -- see `split_dataset`'s docstring for the exact rationale.
+
+The non-overlap guarantee is about input **occurrences**, not values: `im.split_dataset(["a", "a",
+"b"], train=..., rng=...)` treats the two `"a"` entries as two independent positions that may land
+in different splits -- items need not be hashable, and equal values are never merged or
+deduplicated.
+
+`train`/`validation` are ratios; `test` is always the exact remainder, `1.0 - train - validation`
+-- there is no `test` parameter. Split *sizes* are computed by the Largest Remainder Method (floor
+each ratio's ideal count, then distribute the leftover occurrences to the split(s) with the
+largest fractional part, breaking an exact tie `train` -> `validation` -> `test`) and are a pure,
+deterministic function of `len(items)`/`train`/`validation` alone, independent of `rng`. Only
+*which* items land in which split depends on `rng`. Within each of `train`/`validation`/`test`,
+elements appear in permutation order -- never re-sorted back to the input's own order.
+
+`rng` must be an explicit `numpy.random.Generator` (no bare integer seed, no global/ambient RNG),
+consumed directly by this call -- exactly like `sample_flip`/`sample_affine` -- so its state
+advances and reusing the same, not-yet-consumed `rng` in two calls gives two different results.
+The determinism guarantee this makes is the same one those augmentation functions already make:
+the same items plus a `rng` in the same state, on the currently supported NumPy/Python stack,
+reproduce the same split -- not that this exact split is frozen forever across every future
+NumPy/Python version.
+
+`split_dataset` guarantees only that every input position ends up in exactly one split. It does
+**not** guarantee that the same real-world subject, or semantically/visually duplicate content,
+stays confined to one split, and it performs no stratification or class balancing -- `items`
+carries no label/group/subject concept to this function at all. It never accesses the filesystem
+and never decodes an image.
+
 ## Status
 
 `improcv`'s overall project maturity is beta development (`Development Status :: 4 - Beta`).

@@ -36,6 +36,7 @@ def test_examples_directory_has_the_expected_scripts() -> None:
     assert names == {
         "classification_evaluation.py",
         "dataset_manifest_builder.py",
+        "dataset_split.py",
         "discovery_and_augmentation.py",
         "image_similarity.py",
         "image_similarity_manifest.py",
@@ -181,6 +182,33 @@ def test_manifest_comparison_example_runs_cleanly() -> None:
         "U  cats/a.png\n"
         "rename detection: no\n"
         "same hash old/new reported separately: yes\n"
+    )
+
+
+def test_dataset_split_example_runs_cleanly() -> None:
+    result = _run_example(_EXAMPLES_DIR / "dataset_split.py")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout == (
+        "split: split_dataset\n"
+        "input: 10 synthetic Path values (no filesystem access)\n"
+        "ratios: train=0.7 validation=0.15 test=0.15 (exact remainder)\n"
+        "train: 7\n"
+        "T  cats/02.png\n"
+        "T  cats/09.png\n"
+        "T  cats/04.png\n"
+        "T  cats/03.png\n"
+        "T  cats/00.png\n"
+        "T  cats/07.png\n"
+        "T  cats/01.png\n"
+        "validation: 1\n"
+        "V  cats/05.png\n"
+        "test: 2\n"
+        "E  cats/08.png\n"
+        "E  cats/06.png\n"
+        "occurrence overlap: none\n"
+        "semantic/subject/class leakage guarantee: none\n"
     )
 
 
