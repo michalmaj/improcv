@@ -1208,6 +1208,11 @@ def test_low_precision_sum_is_rejected_after_promotion() -> None:
 def test_low_precision_sum_error_message_reports_promoted_values() -> None:
     train = np.float16("0.001")
     validation = np.float16("0.999")
+    promoted_train = float(train)
+    promoted_validation = float(validation)
+    promoted_sum = promoted_train + promoted_validation
+    assert promoted_sum > 1.0  # sanity: this is the promoted value that must be rejected
+
     with pytest.raises(ValueError) as exc_info:
         split_dataset(
             list(range(10)),
@@ -1216,11 +1221,13 @@ def test_low_precision_sum_error_message_reports_promoted_values() -> None:
             rng=_make_generator(0),
         )
     message = str(exc_info.value)
-    assert "train=" in message
-    assert "validation=" in message
-    assert "sum=" in message
-    # The reported sum must be the promoted (>1.0) sum, not the native float16 (==1.0) sum.
-    assert "1.0000238418579102" in message or float(train) + float(validation) > 1.0
+    # design doc section 20's exception contract: the message "names both values and their exact
+    # sum" -- checked here against the *promoted* (binary64) values actually used for the
+    # rejection decision, not the native float16 values/sum (which would render as exactly "1.0"
+    # and must not appear as the reported sum).
+    assert repr(promoted_train) in message
+    assert repr(promoted_validation) in message
+    assert repr(promoted_sum) in message
 
 
 @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
@@ -1231,6 +1238,7 @@ def test_scalar_dtype_differential_matches_promoted_float_reference(dtype: type,
     -- no Hypothesis dependency, plain fixed-seed stdlib random, matching this project's own
     differential-testing convention elsewhere."""
     rng_for_cases = random.Random(20260807 + n)
+    executed = 0
     for _ in range(10):
         train_raw = rng_for_cases.uniform(0.0, 1.0)
         validation_raw = rng_for_cases.uniform(0.0, max(0.0, 1.0 - train_raw))
@@ -1255,6 +1263,15 @@ def test_scalar_dtype_differential_matches_promoted_float_reference(dtype: type,
             f"expected={expected} actual={actual}"
         )
         assert sum(actual) == n
+        executed += 1
+
+    # This fixed seed, for every (dtype, n) parametrization, is verified to keep all 10 draws
+    # within the sum<=1.0 contract after promotion (the sampling range for validation_raw already
+    # makes train_raw + validation_raw <= 1.0 in exact real arithmetic; only dtype rounding could
+    # ever push the promoted sum above 1.0, and it does not for this seed) -- assert the exact
+    # count so a future change to the seed, the draw logic, or dtype rounding that starts skipping
+    # cases fails loudly here instead of silently verifying fewer than 10 comparisons.
+    assert executed == 10
 
 
 # --- empty input ---
@@ -1381,27 +1398,25 @@ def test_rng_state_advances_for_a_nontrivial_permutation() -> None:
     assert state_before != state_after
 
 
-def test_rng_state_for_empty_items_is_an_implementation_observation_not_a_guarantee() -> None:
-    """`rng.permutation(0)` may or may not touch `rng`'s state on the currently supported NumPy --
-    this records the current, observed behavior as a regression signal, not as a long-term public
-    contract (split_dataset's own docstring makes no state-consumption promise either way for a
-    trivial permutation)."""
-    rng = np.random.default_rng(2026)
-    state_before = copy.deepcopy(rng.bit_generator.state)
-    split_dataset([], train=0.6, validation=0.2, rng=rng)
-    state_after = copy.deepcopy(rng.bit_generator.state)
-    # Not asserted to differ, and not asserted to be equal as a public promise -- just recorded so
-    # a future NumPy change to this observation is visible in a test diff, not silently assumed.
-    assert (state_before == state_after) or (state_before != state_after)
+def test_split_dataset_succeeds_and_is_deterministic_for_empty_items() -> None:
+    """`n=0` is a legal, well-defined edge case (see the "empty input" tests above). This confirms
+    execution succeeds, the result has the documented empty-split shape, and the determinism
+    guarantee -- same items + equivalent initial rng state -> same result -- holds at this
+    boundary. Deliberately makes no assertion about whether `rng`'s own state advances for a
+    trivial permutation: `split_dataset`'s own docstring promises neither that it does nor that it
+    doesn't, so a test asserting either direction would freeze a NumPy implementation detail that
+    isn't part of the public contract (see docs/design/0.4.0a2-dataset-split.md's RNG contract
+    correction)."""
+    result_a = split_dataset([], train=0.6, validation=0.2, rng=np.random.default_rng(2026))
+    result_b = split_dataset([], train=0.6, validation=0.2, rng=np.random.default_rng(2026))
+    assert result_a == result_b == DatasetSplit(train=(), validation=(), test=())
 
 
-def test_rng_state_for_single_item_is_an_implementation_observation_not_a_guarantee() -> None:
+def test_split_dataset_succeeds_and_is_deterministic_for_single_item() -> None:
     """Same rationale as the empty-input case above, for a single-element permutation."""
-    rng = np.random.default_rng(2026)
-    state_before = copy.deepcopy(rng.bit_generator.state)
-    split_dataset(["only"], train=1.0, rng=rng)
-    state_after = copy.deepcopy(rng.bit_generator.state)
-    assert (state_before == state_after) or (state_before != state_after)
+    result_a = split_dataset(["only"], train=1.0, rng=np.random.default_rng(2026))
+    result_b = split_dataset(["only"], train=1.0, rng=np.random.default_rng(2026))
+    assert result_a == result_b == DatasetSplit(train=("only",), validation=(), test=())
 
 
 def test_two_different_rng_states_are_not_guaranteed_to_differ_in_result() -> None:
@@ -1475,12 +1490,10 @@ def test_ordering_matches_permutation_for_a_frozen_seed() -> None:
 
 
 def test_ordering_is_not_resorted_to_source_order() -> None:
+    # Seed-independent check that does not assume any specific permutation outcome: if the
+    # implementation ever resorted to source order, train would equal list(range(30)) for every
+    # seed -- assert that at least one of several seeds disagrees.
     items = list(range(30))
-    result = split_dataset(items, train=1.0, rng=_make_generator(123))
-    assert list(result.train) != sorted(result.train) or list(result.train) == list(range(30))
-    # A weaker, seed-independent check that does not assume any specific permutation outcome:
-    # if the implementation ever resorted to source order, train would always equal
-    # list(range(30)) for every seed -- assert that at least one of several seeds disagrees.
     outcomes = {
         split_dataset(items, train=1.0, rng=_make_generator(seed)).train for seed in range(10)
     }
