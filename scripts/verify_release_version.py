@@ -5,7 +5,7 @@ Reads the tag name from the GITHUB_REF_NAME environment variable (set by
 GitHub Actions for a tag-triggered run); also runnable locally by setting
 GITHUB_REF_NAME manually, e.g.:
 
-    GITHUB_REF_NAME=v0.4.0a1 python3 scripts/verify_release_version.py
+    GITHUB_REF_NAME=v0.4.0a2 python3 scripts/verify_release_version.py
 """
 
 from __future__ import annotations

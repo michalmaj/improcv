@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.4.0a2] - 2026-08-07
+
 ### Added
 - `split_dataset(items, *, train, validation=0.0, rng) -> DatasetSplit[T]`, the second `0.4.x`
   slice: a pure, in-memory, deterministic train/validation/test partition of any `Sequence[T]`
