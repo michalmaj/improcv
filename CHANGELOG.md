@@ -14,23 +14,29 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 - `split_dataset(items, *, train, validation=0.0, rng) -> DatasetSplit[T]`, the second `0.4.x`
   slice: a pure, in-memory, deterministic train/validation/test partition of any `Sequence[T]`
   (including `discover_images`'/`discover_image_mask_pairs`' own output, unchanged). `test` is
-  always the exact remainder `1.0 - train - validation`, never an independent parameter. Split
-  sizes are computed via the Largest Remainder Method (floor each ratio's ideal count, then
-  distribute the leftover occurrences to the split(s) with the largest fractional part, breaking
-  an exact tie `train` -> `validation` -> `test`), guaranteeing the three split sizes always sum to
-  `len(items)` exactly and depend only on `len(items)`/`train`/`validation`, never on `rng`. The
-  non-overlap guarantee is occurrence-based, not value-based: two equal values at different input
-  positions are independent samples that may land in different splits, and `items` need not be
-  hashable. `rng` must be an explicit `numpy.random.Generator` (no bare integer seed, no
-  global/ambient RNG) and is consumed directly, exactly like `sample_flip`/`sample_affine` --
-  reusing the same, not-yet-consumed `rng` in two calls yields two different results, and two
-  independently-seeded `Generator`s with equivalent state yield identical results. Because each
-  `Sequence` element is treated as one atomic, indivisible sample, a `discover_image_mask_pairs`
-  result composes directly with no special-casing: an `ImageMaskPair`'s image/mask never land in
-  different splits. Guarantees only occurrence-level non-overlap -- no stratification, no
-  class/subject/group-aware assignment, and no semantic-leakage protection of any kind. Performs
-  no filesystem access, no image decoding, and adds no new dependency (`numpy` is already required;
-  `np.random.Generator` is already used publicly by `improcv.augmentation`).
+  always the exact remainder `1.0 - train - validation`, never an independent parameter. Accepted
+  NumPy real scalar ratios (`np.float16`/`np.float32`/`np.float64`/NumPy integer scalars, alongside
+  plain `int`/`float`) are converted to Python `float` after validation and before all composite
+  ratio arithmetic (the sum check, `test`'s ratio, and the Largest Remainder allocation), so
+  allocation never depends on the caller's NumPy scalar dtype/promotion behavior while still
+  honoring the scalar's actual represented value. Split sizes are computed via the Largest
+  Remainder Method (floor each ratio's ideal count, then distribute the leftover occurrences to
+  the split(s) with the largest fractional part, breaking an exact tie `train` -> `validation` ->
+  `test`), guaranteeing the three split sizes always sum to `len(items)` exactly and depend only on
+  `len(items)`/`train`/`validation`, never on `rng`. The non-overlap guarantee is occurrence-based,
+  not value-based: two equal values at different input positions are independent samples that may
+  land in different splits, and `items` need not be hashable. `rng` must be an explicit
+  `numpy.random.Generator` (no bare integer seed, no global/ambient RNG), used directly and never
+  cloned, exactly like `sample_flip`/`sample_affine` -- its state is subject to whatever
+  consumption a non-trivial permutation performs, but reusing the same `rng` across two calls is
+  not guaranteed to yield different results; two independently-seeded `Generator`s in equivalent
+  initial states are guaranteed to yield identical results. Because each `Sequence` element is
+  treated as one atomic, indivisible sample, a `discover_image_mask_pairs` result composes
+  directly with no special-casing: an `ImageMaskPair`'s image/mask never land in different splits.
+  Guarantees only occurrence-level non-overlap -- no stratification, no class/subject/group-aware
+  assignment, and no semantic-leakage protection of any kind. Performs no filesystem access, no
+  image decoding, and adds no new dependency (`numpy` is already required; `np.random.Generator` is
+  already used publicly by `improcv.augmentation`).
 
 ## [0.4.0a1] - 2026-08-06
 

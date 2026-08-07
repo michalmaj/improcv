@@ -1563,20 +1563,28 @@ in different splits -- items need not be hashable, and equal values are never me
 deduplicated.
 
 `train`/`validation` are ratios; `test` is always the exact remainder, `1.0 - train - validation`
--- there is no `test` parameter. Split *sizes* are computed by the Largest Remainder Method (floor
-each ratio's ideal count, then distribute the leftover occurrences to the split(s) with the
-largest fractional part, breaking an exact tie `train` -> `validation` -> `test`) and are a pure,
+-- there is no `test` parameter. Accepted NumPy real scalar ratios (`np.float16`/`np.float32`/
+`np.float64`/NumPy integer scalars, in addition to plain `int`/`float`) are converted to Python
+`float` after validation and before all composite ratio arithmetic -- this prevents split
+allocation from depending on NumPy scalar dtype/promotion behavior while preserving the scalar's
+actual represented numeric value (`np.float16(0.8)` is treated as `float(np.float16(0.8))`, not as
+the literal Python `0.8`). Split *sizes* are computed by the Largest Remainder Method (floor each
+ratio's ideal count, then distribute the leftover occurrences to the split(s) with the largest
+fractional part, breaking an exact tie `train` -> `validation` -> `test`) and are a pure,
 deterministic function of `len(items)`/`train`/`validation` alone, independent of `rng`. Only
 *which* items land in which split depends on `rng`. Within each of `train`/`validation`/`test`,
 elements appear in permutation order -- never re-sorted back to the input's own order.
 
 `rng` must be an explicit `numpy.random.Generator` (no bare integer seed, no global/ambient RNG),
-consumed directly by this call -- exactly like `sample_flip`/`sample_affine` -- so its state
-advances and reusing the same, not-yet-consumed `rng` in two calls gives two different results.
-The determinism guarantee this makes is the same one those augmentation functions already make:
-the same items plus a `rng` in the same state, on the currently supported NumPy/Python stack,
-reproduce the same split -- not that this exact split is frozen forever across every future
-NumPy/Python version.
+used directly by this call and never cloned -- exactly like `sample_flip`/`sample_affine`. For a
+non-trivial permutation its state normally advances, but reusing the same `rng` across two calls is
+**not** guaranteed to give two different results (an empty or single-element `items` may require no
+draw at all, and even two different `rng` states are not a mathematical guarantee of two different
+permutations). The one guarantee this function makes is the converse direction: two independently
+constructed `Generator`s in equivalent initial states reproduce the same split. The determinism
+guarantee this makes is the same one `sample_flip`/`sample_affine` already make: the same items plus
+a `rng` in the same state, on the currently supported NumPy/Python stack, reproduce the same split
+-- not that this exact split is frozen forever across every future NumPy/Python version.
 
 `split_dataset` guarantees only that every input position ends up in exactly one split. It does
 **not** guarantee that the same real-world subject, or semantically/visually duplicate content,

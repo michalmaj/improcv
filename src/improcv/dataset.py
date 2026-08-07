@@ -310,6 +310,11 @@ def _require_sequence(items: object) -> None:
 def _largest_remainder_counts(n: int, train: float, validation: float) -> tuple[int, int, int]:
     """Split `n` into `(n_train, n_validation, n_test)` via the Largest Remainder Method.
 
+    `train`/`validation` must already be plain Python `float` -- normalized by `split_dataset`
+    itself before calling this helper (see that function's own docstring). This is a private
+    implementation detail, not a second public contract: the normalization guarantee callers
+    actually rely on is the one `split_dataset` documents, not this helper's own parameter types.
+
     `test`'s ratio is `1.0 - train - validation`, computed exactly as `split_dataset`'s own
     docstring documents (by subtraction, not as an independent input). Each of the three ideal
     (real-valued) counts is floored; the `0`/`1`/`2` leftover occurrences implied by those floors
@@ -370,9 +375,20 @@ def split_dataset(
 
     `train`/`validation` are ratios in `[0.0, 1.0]` (a plain `int`, `float`, or NumPy real scalar;
     `bool` is rejected even though it is technically an `int` subclass, matching every other
-    probability-shaped parameter in this codebase). `test`'s ratio is always the exact remainder,
-    `1.0 - train - validation` -- there is no `test` parameter, and `train + validation` must not
-    exceed `1.0` (checked by an *exact* floating-point comparison, with no `math.isclose` tolerance
+    probability-shaped parameter in this codebase). Once validated, both are converted to plain
+    Python `float` (binary64) -- `float(train)`/`float(validation)` -- and every composite ratio
+    computation from that point on (the `train + validation` sum check, `test`'s ratio, the three
+    ideal Largest Remainder counts, and their fractional parts) uses only those converted values,
+    never the caller's original NumPy scalar dtype. This prevents split allocation from depending on
+    NumPy scalar-promotion rules (e.g. `np.float16(0.999) + np.float16(0.001)` rounds to exactly
+    `1.0` in `float16` arithmetic, while the actual binary64 values those two `float16`s represent
+    sum to slightly more than `1.0`) while still honoring the scalar's own actually-represented
+    numeric value -- `np.float16(0.8)` is treated as `float(np.float16(0.8))`
+    (`0.7998046875...`), not as the literal Python `0.8`.
+
+    `test`'s ratio is always the exact remainder, `1.0 - train - validation` (using the converted
+    `float` values) -- there is no `test` parameter, and `train + validation` must not exceed `1.0`
+    (checked by an *exact* comparison of the converted `float` sum, with no `math.isclose` tolerance
     anywhere in this function). Splits sizes are computed via the Largest Remainder Method: each of
     the three ideal, real-valued counts (`len(items) * ratio`) is floored, and the `0`/`1`/`2`
     leftover occurrences those floors omit are distributed to the split(s) with the largest
@@ -394,15 +410,20 @@ def split_dataset(
 
     `rng` must be an actual `numpy.random.Generator` instance (`isinstance`-checked, not
     duck-typed; a legacy `numpy.random.RandomState`, a bare integer seed, the `numpy.random`
-    module itself, or `None` are all rejected). This function **consumes the given `rng` directly**
-    -- it calls `rng.permutation(...)`, advancing `rng`'s own internal state, and never constructs
-    an internal copy or clone of it, exactly like `improcv.augmentation.sample_flip`/
-    `sample_affine`. Passing the same, not-yet-otherwise-consumed `rng` to two separate calls
-    produces two different results; two independently constructed `Generator` instances seeded
-    identically (and not yet consumed by anything else) produce identical results when passed to
-    two separate calls with the same `items`/`train`/`validation`. No global or ambient RNG
-    (`np.random.seed`, the free functions on the `numpy.random` module, Python's own `random`
-    module) is read or written anywhere in this function.
+    module itself, or `None` are all rejected). This function **uses the given `rng` directly and
+    never clones it** -- it calls `rng.permutation(len(items))`, and `rng` is left in whatever
+    state that call leaves it, exactly like `improcv.augmentation.sample_flip`/`sample_affine`
+    leave their own `rng` argument. For a non-trivial permutation, `rng`'s state normally advances
+    -- but this is *not* a guarantee that two consecutive calls with the same `rng` must return
+    different `DatasetSplit` values: an empty or single-element `items` may require no draw at
+    all, and even two genuinely different `rng` states are not a mathematical guarantee of two
+    different sampled permutations. Two independently constructed `Generator` instances in
+    equivalent initial states (e.g. two separate `np.random.default_rng(0)` calls, each not yet
+    consumed by anything else) passed to two separate calls with the same `items`/`train`/
+    `validation` produce identical results -- that is the guarantee this function makes; its
+    converse (different `rng` states imply different results) is not promised. No global or
+    ambient RNG (`np.random.seed`, the free functions on the `numpy.random` module, Python's own
+    `random` module) is read or written anywhere in this function.
 
     The determinism guarantee is: the same `items` (same positions, same values) plus a `rng` in
     the same internal state, on the currently supported NumPy/Python implementation stack, produce
@@ -463,16 +484,29 @@ def split_dataset(
     _require_sequence(items)
     require_range(train, 0.0, 1.0, "train")
     require_range(validation, 0.0, 1.0, "validation")
-    if train + validation > 1.0:
+
+    # Normalize to plain Python (binary64) float *after* validating the caller's original value,
+    # and use only these two values for every composite ratio computation from here on -- the sum
+    # check, the Largest Remainder allocation, and its error message. This is what keeps allocation
+    # from depending on the caller's NumPy scalar dtype/promotion rules (e.g. np.float16(0.999) +
+    # np.float16(0.001) rounds to exactly 1.0 in float16 arithmetic, even though the binary64 values
+    # those two float16s actually represent sum to slightly more than 1.0) while still honoring the
+    # scalar's own actually-represented value, not a re-interpretation of it.
+    train_value = float(train)
+    validation_value = float(validation)
+    ratio_sum = train_value + validation_value
+    if ratio_sum > 1.0:
         raise ValueError(
             "train + validation must be at most 1.0, got "
-            f"train={train!r}, validation={validation!r} (sum={train + validation!r})"
+            f"train={train_value!r}, validation={validation_value!r} (sum={ratio_sum!r})"
         )
     if not isinstance(rng, np.random.Generator):
         raise TypeError(f"rng must be a numpy.random.Generator, got {type(rng).__name__}")
 
     n = len(items)
-    train_count, validation_count, _test_count = _largest_remainder_counts(n, train, validation)
+    train_count, validation_count, _test_count = _largest_remainder_counts(
+        n, train_value, validation_value
+    )
 
     indices = rng.permutation(n)
     train_indices = indices[:train_count]
