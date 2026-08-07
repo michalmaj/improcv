@@ -1,5 +1,8 @@
+import dataclasses
 import inspect
 import os
+import random
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -9,7 +12,8 @@ import pytest
 
 import improcv as im
 import improcv.dataset as dataset_module
-from improcv.dataset import build_perceptual_hash_manifest
+from improcv.dataset import DatasetSplit, build_perceptual_hash_manifest, split_dataset
+from improcv.discovery import ImageMaskPair, discover_image_mask_pairs
 from improcv.hashing import PerceptualHash, PerceptualHashAlgorithm
 from improcv.manifest import PerceptualHashManifest
 
@@ -52,21 +56,41 @@ class _Boom:
 
 def test_top_level_export_is_the_same_object() -> None:
     assert im.build_perceptual_hash_manifest is build_perceptual_hash_manifest
+    assert im.split_dataset is split_dataset
+    assert im.DatasetSplit is DatasetSplit
 
 
-def test_module_all_contains_exactly_the_public_symbol() -> None:
-    assert dataset_module.__all__ == ["build_perceptual_hash_manifest"]
+def test_module_all_contains_exactly_the_public_symbols() -> None:
+    assert dataset_module.__all__ == [
+        "DatasetSplit",
+        "build_perceptual_hash_manifest",
+        "split_dataset",
+    ]
 
 
-def test_top_level_all_contains_symbol_without_duplicates() -> None:
+def test_top_level_all_contains_new_symbols_without_duplicates() -> None:
     assert im.__all__.count("build_perceptual_hash_manifest") == 1
+    assert im.__all__.count("split_dataset") == 1
+    assert im.__all__.count("DatasetSplit") == 1
     assert len(im.__all__) == len(set(im.__all__))
 
 
-def test_top_level_all_places_symbol_alphabetically() -> None:
+def test_top_level_all_places_build_perceptual_hash_manifest_alphabetically() -> None:
     index = im.__all__.index("build_perceptual_hash_manifest")
     assert im.__all__[index - 1] == "bounding_boxes"
     assert im.__all__[index + 1] == "calibrate_camera_response_debevec"
+
+
+def test_top_level_all_places_dataset_split_alphabetically() -> None:
+    index = im.__all__.index("DatasetSplit")
+    assert im.__all__[index - 1] == "CropParameters"
+    assert im.__all__[index + 1] == "DescriptorNorm"
+
+
+def test_top_level_all_places_split_dataset_alphabetically() -> None:
+    index = im.__all__.index("split_dataset")
+    assert im.__all__[index - 1] == "sort_contours"
+    assert im.__all__[index + 1] == "ssim"
 
 
 def test_public_signature() -> None:
@@ -711,3 +735,730 @@ def test_leaves_no_new_files_in_dataset_root(tmp_path: Path) -> None:
     build_perceptual_hash_manifest(tmp_path, algorithm=_AVERAGE_HASH)
     after = {path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")}
     assert after == before
+
+
+# =====================================================================================
+# split_dataset / DatasetSplit
+# =====================================================================================
+#
+# split_dataset/DatasetSplit are an entirely separate, independent utility from
+# build_perceptual_hash_manifest above -- they share this module and this test file only
+# because both are dataset-workflow orchestration (see docs/design/0.4.0a2-dataset-split.md).
+
+
+class _CustomSequence(Sequence):
+    """Minimal, real `collections.abc.Sequence` subclass -- not a list/tuple."""
+
+    def __init__(self, data: Sequence[object]) -> None:
+        self._data = tuple(data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __getitem__(self, index):  # type: ignore[no-untyped-def]
+        return self._data[index]
+
+
+class _AlwaysEqual:
+    """An object with a permissive `__eq__` and (as a consequence) no `__hash__` -- Python sets
+    `__hash__` to `None` automatically for any class that defines `__eq__` without also defining
+    `__hash__`, making this class both unhashable and always "equal" to anything."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+
+def _make_generator(seed: int) -> np.random.Generator:
+    return np.random.default_rng(seed)
+
+
+# --- signature ---
+
+
+def test_split_dataset_signature() -> None:
+    signature = inspect.signature(split_dataset)
+    parameters = signature.parameters
+    assert list(parameters) == ["items", "train", "validation", "rng"]
+    assert parameters["items"].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["items"].default is inspect.Parameter.empty
+    assert parameters["train"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert parameters["train"].default is inspect.Parameter.empty
+    assert parameters["validation"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert parameters["validation"].default == 0.0
+    assert parameters["rng"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert parameters["rng"].default is inspect.Parameter.empty
+
+
+# --- accepted input forms ---
+
+
+def test_accepts_list() -> None:
+    result = split_dataset(["a", "b", "c"], train=0.7, rng=_make_generator(0))
+    assert len(result.train) + len(result.validation) + len(result.test) == 3
+
+
+def test_accepts_tuple() -> None:
+    result = split_dataset(("a", "b", "c"), train=0.7, rng=_make_generator(0))
+    assert len(result.train) + len(result.validation) + len(result.test) == 3
+
+
+def test_accepts_custom_sequence() -> None:
+    result = split_dataset(_CustomSequence(["a", "b", "c"]), train=0.7, rng=_make_generator(0))
+    assert len(result.train) + len(result.validation) + len(result.test) == 3
+
+
+def test_accepts_range() -> None:
+    result = split_dataset(range(10), train=0.7, validation=0.15, rng=_make_generator(0))
+    assert len(result.train) + len(result.validation) + len(result.test) == 10
+
+
+def test_accepts_discover_images_result(tmp_path: Path) -> None:
+    _write_image(tmp_path / "a.png", _checkerboard())
+    _write_image(tmp_path / "b.png", _checkerboard())
+    from improcv.discovery import discover_images
+
+    paths = discover_images(tmp_path)
+    result = split_dataset(paths, train=0.5, validation=0.5, rng=_make_generator(0))
+    assert set(result.train) | set(result.validation) | set(result.test) == set(paths)
+
+
+def test_accepts_discover_image_mask_pairs_result(tmp_path: Path) -> None:
+    image_root = tmp_path / "images"
+    mask_root = tmp_path / "masks"
+    image_root.mkdir()
+    mask_root.mkdir()
+    (image_root / "a.jpg").write_bytes(b"")
+    (mask_root / "a.png").write_bytes(b"")
+    (image_root / "b.jpg").write_bytes(b"")
+    (mask_root / "b.png").write_bytes(b"")
+
+    pairs = discover_image_mask_pairs(image_root, mask_root)
+    result = split_dataset(pairs, train=0.5, validation=0.5, rng=_make_generator(0))
+    assert set(result.train) | set(result.validation) | set(result.test) == set(pairs)
+
+
+# --- rejected input forms ---
+
+
+def test_rejects_str_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset("images", train=0.5, rng=_make_generator(0))
+
+
+def test_rejects_bytes_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset(b"images", train=0.5, rng=_make_generator(0))
+
+
+def test_rejects_bytearray_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset(bytearray(b"images"), train=0.5, rng=_make_generator(0))
+
+
+def test_rejects_bare_path_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset(Path("images"), train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_mapping_items() -> None:
+    with pytest.raises(TypeError, match="Mapping"):
+        split_dataset({"a": 1, "b": 2}, train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_generator_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset((x for x in range(3)), train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_iterator_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset(iter([1, 2, 3]), train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_ndarray_items() -> None:
+    with pytest.raises(TypeError, match="numpy.ndarray"):
+        split_dataset(np.array([1, 2, 3]), train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_int_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset(3, train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_none_items() -> None:
+    with pytest.raises(TypeError, match="Sequence"):
+        split_dataset(None, train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_items_error_message_names_the_type() -> None:
+    with pytest.raises(TypeError, match="items"):
+        split_dataset("images", train=0.5, rng=_make_generator(0))
+    with pytest.raises(TypeError) as exc_info:
+        split_dataset(3, train=0.5, rng=_make_generator(0))  # type: ignore[arg-type]
+    assert "int" in str(exc_info.value)
+
+
+def test_does_not_iterate_items_during_validation() -> None:
+    class _ExplodingIterAttempt(Sequence):
+        def __len__(self) -> int:
+            return 3
+
+        def __getitem__(self, index):  # type: ignore[no-untyped-def]
+            return index
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            raise AssertionError("split_dataset must not iterate items during validation")
+
+    # A real Sequence still must not be iterated (only indexed via permutation) --
+    # this exercises the whole call, not just the type-check stage.
+    result = split_dataset(_ExplodingIterAttempt(), train=1.0, rng=_make_generator(0))
+    assert len(result.train) == 3
+
+
+# --- ratio validation ---
+
+
+def test_rejects_string_train() -> None:
+    with pytest.raises(TypeError):
+        split_dataset([1, 2, 3], train="0.5", rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_none_train() -> None:
+    with pytest.raises(TypeError):
+        split_dataset([1, 2, 3], train=None, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_complex_train() -> None:
+    with pytest.raises(TypeError):
+        split_dataset([1, 2, 3], train=complex(0.5, 0.0), rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_bool_train() -> None:
+    with pytest.raises(TypeError):
+        split_dataset([1, 2, 3], train=True, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_rejects_bool_validation() -> None:
+    with pytest.raises(TypeError):
+        split_dataset([1, 2, 3], train=0.5, validation=False, rng=_make_generator(0))  # type: ignore[arg-type]
+
+
+def test_accepts_int_train() -> None:
+    result = split_dataset([1, 2, 3], train=1, rng=_make_generator(0))
+    assert len(result.train) == 3
+
+
+def test_rejects_nan_train() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=float("nan"), rng=_make_generator(0))
+
+
+def test_rejects_positive_infinity_train() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=float("inf"), rng=_make_generator(0))
+
+
+def test_rejects_negative_infinity_train() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=float("-inf"), rng=_make_generator(0))
+
+
+def test_rejects_nan_validation() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=0.5, validation=float("nan"), rng=_make_generator(0))
+
+
+def test_rejects_train_below_zero() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=-0.1, rng=_make_generator(0))
+
+
+def test_rejects_train_above_one() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=1.1, rng=_make_generator(0))
+
+
+def test_rejects_validation_below_zero() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=0.5, validation=-0.1, rng=_make_generator(0))
+
+
+def test_rejects_validation_above_one() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=0.0, validation=1.1, rng=_make_generator(0))
+
+
+def test_accepts_train_exactly_zero() -> None:
+    result = split_dataset([1, 2, 3], train=0.0, validation=1.0, rng=_make_generator(0))
+    assert result.train == ()
+
+
+def test_accepts_train_exactly_one() -> None:
+    result = split_dataset([1, 2, 3], train=1.0, rng=_make_generator(0))
+    assert result.validation == ()
+    assert result.test == ()
+
+
+def test_rejects_sum_above_one() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=0.7, validation=0.4, rng=_make_generator(0))
+
+
+def test_accepts_sum_exactly_one() -> None:
+    result = split_dataset([1, 2, 3, 4], train=0.5, validation=0.5, rng=_make_generator(0))
+    assert result.test == ()
+
+
+def test_train_validated_before_validation() -> None:
+    # train's error must win even when validation is also invalid -- exact validation order
+    # is part of the frozen design contract (items -> train -> validation -> sum -> rng).
+    with pytest.raises(TypeError) as exc_info:
+        split_dataset([1, 2, 3], train="bad", validation="also bad", rng=_make_generator(0))  # type: ignore[arg-type]
+    assert "train" in str(exc_info.value)
+
+
+def test_validation_validated_before_sum_check() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        split_dataset([1, 2, 3], train=0.9, validation=1.5, rng=_make_generator(0))
+    assert "validation" in str(exc_info.value)
+
+
+def test_rng_validated_last() -> None:
+    # A bad rng only surfaces after every ratio check has already passed -- train/validation here
+    # are both valid, so the TypeError below can only come from the rng check itself.
+    with pytest.raises(TypeError, match="rng"):
+        split_dataset([1, 2, 3], train=0.5, validation=0.3, rng="not-a-generator")  # type: ignore[arg-type]
+    # And an invalid ratio is still reported even with an otherwise-valid rng.
+    with pytest.raises(ValueError):
+        split_dataset([1, 2, 3], train=2.0, rng=_make_generator(0))
+
+
+# --- Largest Remainder Method: exact counts table (design doc section 8) ---
+
+
+@pytest.mark.parametrize(
+    ("n", "train", "validation", "expected"),
+    [
+        (0, 0.70, 0.15, (0, 0, 0)),
+        (1, 0.70, 0.15, (1, 0, 0)),
+        (2, 0.70, 0.15, (2, 0, 0)),
+        (3, 0.70, 0.15, (2, 0, 1)),
+        (10, 0.70, 0.15, (7, 1, 2)),
+        (11, 0.70, 0.15, (8, 1, 2)),
+        (10, 0.80, 0.10, (8, 1, 1)),
+        (10, 0.50, 0.25, (5, 3, 2)),
+        (3, 1 / 3, 1 / 3, (1, 1, 1)),
+        (10, 1 / 3, 1 / 3, (3, 3, 4)),
+        (2, 0.50, 0.50, (1, 1, 0)),
+        (1, 1.00, 0.00, (1, 0, 0)),
+        (5, 1.00, 0.00, (5, 0, 0)),
+        (5, 0.00, 1.00, (0, 5, 0)),
+    ],
+)
+def test_split_counts_match_design_table(
+    n: int, train: float, validation: float, expected: tuple[int, int, int]
+) -> None:
+    items = list(range(n))
+    result = split_dataset(items, train=train, validation=validation, rng=_make_generator(0))
+    assert (len(result.train), len(result.validation), len(result.test)) == expected
+    assert len(result.train) + len(result.validation) + len(result.test) == n
+
+
+def test_rounding_protects_0_7_0_15_against_naive_tie_break(tmp_path: Path) -> None:
+    """Regression guard: a 'simplifying' refactor that assumed train=0.7/validation=0.15 gives an
+    exact validation/test tie at n=10 (and resolves it toward validation) would silently break
+    this -- the true IEEE 754 tie-break goes to test. See design doc section 7."""
+    items = list(range(10))
+    result = split_dataset(items, train=0.70, validation=0.15, rng=_make_generator(0))
+    assert (len(result.train), len(result.validation), len(result.test)) == (7, 1, 2)
+
+
+def test_rounding_protects_one_third_one_third_against_naive_tie_break() -> None:
+    """Regression guard: a 'simplifying' refactor that assumed train=validation=1/3 gives an exact
+    3-way tie at n=10 (and resolves it toward train) would silently break this -- the true IEEE 754
+    tie-break goes to test. See design doc section 7."""
+    items = list(range(10))
+    result = split_dataset(items, train=1 / 3, validation=1 / 3, rng=_make_generator(0))
+    assert (len(result.train), len(result.validation), len(result.test)) == (3, 3, 4)
+
+
+def test_split_sizes_are_independent_of_rng() -> None:
+    items = list(range(37))
+    sizes = {
+        (len(r.train), len(r.validation), len(r.test))
+        for r in (
+            split_dataset(items, train=0.6, validation=0.2, rng=_make_generator(seed))
+            for seed in range(20)
+        )
+    }
+    assert sizes == {(22, 8, 7)}
+
+
+# --- empty input ---
+
+
+def test_empty_list_returns_empty_split() -> None:
+    result = split_dataset([], train=0.7, validation=0.15, rng=_make_generator(0))
+    assert result == DatasetSplit(train=(), validation=(), test=())
+
+
+def test_empty_tuple_returns_empty_split() -> None:
+    result = split_dataset((), train=0.7, rng=_make_generator(0))
+    assert result == DatasetSplit(train=(), validation=(), test=())
+
+
+def test_empty_input_still_validates_bad_train() -> None:
+    with pytest.raises(ValueError):
+        split_dataset([], train=1.5, rng=_make_generator(0))
+
+
+def test_empty_input_still_validates_bad_rng() -> None:
+    with pytest.raises(TypeError):
+        split_dataset([], train=0.5, rng="nope")  # type: ignore[arg-type]
+
+
+# --- occurrence semantics ---
+
+
+def test_duplicate_values_are_two_independent_occurrences() -> None:
+    items = ["a", "a", "b"]
+    result = split_dataset(items, train=1.0, rng=_make_generator(0))
+    assert sorted(result.train) == ["a", "a", "b"]
+
+
+def test_duplicate_values_split_across_train_and_test() -> None:
+    items = ["a", "a", "b", "c"]
+    result = split_dataset(items, train=0.5, rng=_make_generator(0))
+    combined = list(result.train) + list(result.validation) + list(result.test)
+    assert sorted(combined) == sorted(items)
+    assert len(combined) == len(items)
+
+
+def test_unhashable_values_do_not_raise() -> None:
+    items = [_AlwaysEqual(), _AlwaysEqual(), _AlwaysEqual()]
+    with pytest.raises(TypeError):
+        hash(items[0])  # sanity: really unhashable
+    result = split_dataset(items, train=1.0, rng=_make_generator(0))
+    assert len(result.train) == 3
+
+
+def test_always_equal_objects_are_not_deduplicated() -> None:
+    items = [_AlwaysEqual() for _ in range(5)]
+    result = split_dataset(items, train=1.0, rng=_make_generator(0))
+    assert len(result.train) == 5
+
+
+def test_every_input_position_appears_exactly_once() -> None:
+    n = 50
+    items = list(range(n))
+    result = split_dataset(items, train=0.6, validation=0.2, rng=_make_generator(0))
+    combined = sorted(list(result.train) + list(result.validation) + list(result.test))
+    assert combined == list(range(n))
+
+
+def test_no_position_is_omitted_or_duplicated_across_many_seeds() -> None:
+    n = 30
+    items = list(range(n))
+    for seed in range(50):
+        result = split_dataset(items, train=0.5, validation=0.3, rng=_make_generator(seed))
+        combined = sorted(list(result.train) + list(result.validation) + list(result.test))
+        assert combined == list(range(n))
+
+
+# --- RNG contract ---
+
+
+def test_rejects_int_seed() -> None:
+    with pytest.raises(TypeError, match="numpy.random.Generator"):
+        split_dataset([1, 2, 3], train=0.5, rng=0)  # type: ignore[arg-type]
+
+
+def test_rejects_random_state() -> None:
+    with pytest.raises(TypeError, match="numpy.random.Generator"):
+        split_dataset([1, 2, 3], train=0.5, rng=np.random.RandomState(0))  # type: ignore[arg-type]
+
+
+def test_rejects_none_rng() -> None:
+    with pytest.raises(TypeError, match="numpy.random.Generator"):
+        split_dataset([1, 2, 3], train=0.5, rng=None)  # type: ignore[arg-type]
+
+
+def test_rejects_numpy_random_module_itself() -> None:
+    with pytest.raises(TypeError, match="numpy.random.Generator"):
+        split_dataset([1, 2, 3], train=0.5, rng=np.random)  # type: ignore[arg-type]
+
+
+def test_rejects_duck_typed_rng() -> None:
+    class _FakeGenerator:
+        def permutation(self, n: int):  # type: ignore[no-untyped-def]
+            return np.arange(n)
+
+    with pytest.raises(TypeError, match="numpy.random.Generator"):
+        split_dataset([1, 2, 3], train=0.5, rng=_FakeGenerator())  # type: ignore[arg-type]
+
+
+def test_two_independent_generators_same_seed_produce_identical_results() -> None:
+    items = [f"item{i}" for i in range(41)]
+    result_a = split_dataset(items, train=0.6, validation=0.2, rng=np.random.default_rng(2026))
+    result_b = split_dataset(items, train=0.6, validation=0.2, rng=np.random.default_rng(2026))
+    assert result_a == result_b
+
+
+def test_same_generator_used_twice_consumes_state() -> None:
+    items = [f"item{i}" for i in range(41)]
+    rng = np.random.default_rng(2026)
+    result_a = split_dataset(items, train=0.6, validation=0.2, rng=rng)
+    result_b = split_dataset(items, train=0.6, validation=0.2, rng=rng)
+    assert result_a != result_b
+
+
+def test_restored_generator_state_reproduces_identical_result() -> None:
+    items = [f"item{i}" for i in range(41)]
+    rng = np.random.default_rng(77)
+    saved_state = rng.bit_generator.state
+    result_a = split_dataset(items, train=0.5, validation=0.3, rng=rng)
+
+    replay_rng = np.random.default_rng(0)
+    replay_rng.bit_generator.state = saved_state
+    result_b = split_dataset(items, train=0.5, validation=0.3, rng=replay_rng)
+    assert result_a == result_b
+
+
+def test_does_not_read_or_write_global_numpy_random_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("split_dataset must not touch the global numpy.random state")
+
+    monkeypatch.setattr(np.random, "seed", _boom)
+    monkeypatch.setattr(np.random, "random", _boom)
+    monkeypatch.setattr(np.random, "randint", _boom)
+
+    result = split_dataset([1, 2, 3, 4], train=0.5, validation=0.25, rng=_make_generator(0))
+    assert len(result.train) + len(result.validation) + len(result.test) == 4
+
+
+def test_does_not_use_python_stdlib_random(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("split_dataset must not touch Python's stdlib random module")
+
+    monkeypatch.setattr(random, "shuffle", _boom)
+    monkeypatch.setattr(random, "random", _boom)
+
+    result = split_dataset([1, 2, 3, 4], train=0.5, validation=0.25, rng=_make_generator(0))
+    assert len(result.train) + len(result.validation) + len(result.test) == 4
+
+
+# --- ordering ---
+
+
+def test_ordering_matches_permutation_for_a_frozen_seed() -> None:
+    items = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+    rng = np.random.default_rng(12345)
+    expected_indices = np.random.default_rng(12345).permutation(len(items))
+    result = split_dataset(items, train=0.6, validation=0.2, rng=rng)
+
+    expected_train = tuple(items[int(i)] for i in expected_indices[:6])
+    expected_validation = tuple(items[int(i)] for i in expected_indices[6:8])
+    expected_test = tuple(items[int(i)] for i in expected_indices[8:])
+    assert result.train == expected_train
+    assert result.validation == expected_validation
+    assert result.test == expected_test
+
+
+def test_ordering_is_not_resorted_to_source_order() -> None:
+    items = list(range(30))
+    result = split_dataset(items, train=1.0, rng=_make_generator(123))
+    assert list(result.train) != sorted(result.train) or list(result.train) == list(range(30))
+    # A weaker, seed-independent check that does not assume any specific permutation outcome:
+    # if the implementation ever resorted to source order, train would always equal
+    # list(range(30)) for every seed -- assert that at least one of several seeds disagrees.
+    outcomes = {
+        split_dataset(items, train=1.0, rng=_make_generator(seed)).train for seed in range(10)
+    }
+    assert any(outcome != tuple(range(30)) for outcome in outcomes)
+
+
+# --- ImageMaskPair composability ---
+
+
+def test_image_mask_pair_never_separated_across_splits() -> None:
+    pairs = tuple(ImageMaskPair(image=Path(f"{i}.jpg"), mask=Path(f"{i}.png")) for i in range(20))
+    result = split_dataset(pairs, train=0.6, validation=0.2, rng=_make_generator(0))
+    for pair in list(result.train) + list(result.validation) + list(result.test):
+        assert isinstance(pair, ImageMaskPair)
+        # Each pair is drawn as one atomic unit -- its own image/mask fields are always
+        # consistent with each other, never recombined with a different pair's fields.
+        stem = pair.image.stem
+        assert pair.mask.stem == stem
+
+
+def test_no_split_image_mask_pairs_function_exists() -> None:
+    assert not hasattr(dataset_module, "split_image_mask_pairs")
+    assert not hasattr(im, "split_image_mask_pairs")
+
+
+# --- result type ---
+
+
+def test_dataset_split_is_frozen() -> None:
+    result = DatasetSplit(train=(1,), validation=(), test=())
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.train = (2,)  # type: ignore[misc]
+
+
+def test_dataset_split_uses_slots() -> None:
+    assert DatasetSplit.__slots__ == ("train", "validation", "test")
+    result = DatasetSplit(train=(), validation=(), test=())
+    assert not hasattr(result, "__dict__")
+
+
+def test_dataset_split_equality() -> None:
+    a = DatasetSplit(train=(1, 2), validation=(3,), test=())
+    b = DatasetSplit(train=(1, 2), validation=(3,), test=())
+    c = DatasetSplit(train=(1,), validation=(3,), test=())
+    assert a == b
+    assert a != c
+
+
+def test_dataset_split_repr_is_default_dataclass_repr() -> None:
+    result = DatasetSplit(train=(1,), validation=(2,), test=(3,))
+    assert repr(result) == "DatasetSplit(train=(1,), validation=(2,), test=(3,))"
+
+
+def test_dataset_split_field_order() -> None:
+    fields = dataclasses.fields(DatasetSplit)
+    assert [field.name for field in fields] == ["train", "validation", "test"]
+
+
+def test_dataset_split_has_no_custom_post_init() -> None:
+    assert "__post_init__" not in DatasetSplit.__dict__
+
+
+def test_dataset_split_manual_construction() -> None:
+    result = DatasetSplit(train=("a",), validation=("b",), test=("c",))
+    assert result.train == ("a",)
+    assert result.validation == ("b",)
+    assert result.test == ("c",)
+
+
+def test_dataset_split_is_generic() -> None:
+    # Runtime smoke: subscripting a Generic dataclass must not raise.
+    DatasetSplit[int]
+    DatasetSplit[Path]
+
+
+# --- purity: no filesystem I/O, no mutation ---
+
+
+def test_split_dataset_performs_no_filesystem_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("split_dataset must not touch the filesystem")
+
+    monkeypatch.setattr(os, "stat", _boom)
+    monkeypatch.setattr(os, "scandir", _boom)
+    monkeypatch.setattr(Path, "open", _boom)
+    monkeypatch.setattr("builtins.open", _boom)
+
+    non_existent_paths = tuple(Path(f"/does/not/exist/{i}.png") for i in range(5))
+    result = split_dataset(non_existent_paths, train=0.6, validation=0.2, rng=_make_generator(0))
+    assert len(result.train) + len(result.validation) + len(result.test) == 5
+
+
+def test_split_dataset_does_not_mutate_items() -> None:
+    items = [1, 2, 3, 4, 5]
+    original = list(items)
+    split_dataset(items, train=0.6, validation=0.2, rng=_make_generator(0))
+    assert items == original
+
+
+def test_split_dataset_does_not_mutate_a_tuple_of_paths() -> None:
+    items = tuple(Path(f"{i}.png") for i in range(5))
+    original = tuple(items)
+    split_dataset(items, train=0.6, rng=_make_generator(0))
+    assert items == original
+
+
+# --- randomized / differential property test (no Hypothesis dependency) ---
+
+
+class _Sample:
+    """A plain object with no `__hash__`/meaningful `__eq__`, used to prove the property test
+    does not rely on hashability or value equality -- only index identity."""
+
+    __slots__ = ("tag",)
+
+    def __init__(self, tag: int) -> None:
+        self.tag = tag
+
+
+def _reference_largest_remainder(n: int, train: float, validation: float) -> tuple[int, int, int]:
+    """Independent reference implementation of the Largest Remainder Method (design doc section 7),
+    written separately from `improcv.dataset._largest_remainder_counts` so the property test below
+    checks the function under test against independently-derived logic, not its own internals."""
+    import math as _math
+
+    test_ratio = 1.0 - train - validation
+    ideal = {"train": n * train, "validation": n * validation, "test": n * test_ratio}
+    floors = {key: _math.floor(value) for key, value in ideal.items()}
+    remaining = n - sum(floors.values())
+    fracs = {key: ideal[key] - floors[key] for key in ideal}
+    priority = ["train", "validation", "test"]
+    order = sorted(priority, key=lambda key: (-fracs[key], priority.index(key)))
+    counts = dict(floors)
+    for key in order[:remaining]:
+        counts[key] += 1
+    return counts["train"], counts["validation"], counts["test"]
+
+
+def test_split_dataset_differential_property() -> None:
+    seed = 20260807
+    rng_for_cases = random.Random(seed)
+    n_cases = 2000
+
+    matched = 0
+    for case_index in range(n_cases):
+        n = rng_for_cases.choice([0, 1, 2, 3, 5, 10, 11, 25, 50, 100])
+        train = rng_for_cases.choice(
+            [0.0, 0.1, 0.15, 1 / 3, 0.5, 0.7, 0.8, 0.9999, 1.0, rng_for_cases.random()]
+        )
+        remaining_budget = max(0.0, 1.0 - train)
+        validation = rng_for_cases.choice(
+            [0.0, min(0.1, remaining_budget), min(1 / 3, remaining_budget), remaining_budget]
+        )
+        validation = min(validation, remaining_budget)
+
+        use_duplicates = rng_for_cases.random() < 0.3
+        if use_duplicates and n > 0:
+            distinct_count = max(1, n // 2)
+            values = [rng_for_cases.randrange(distinct_count) for _ in range(n)]
+        else:
+            values = list(range(n))
+        items: list[object] = (
+            [_Sample(tag) for tag in values] if case_index % 5 == 0 else list(values)
+        )
+
+        split_rng = np.random.default_rng(case_index)
+        result = split_dataset(items, train=train, validation=validation, rng=split_rng)
+
+        expected_counts = _reference_largest_remainder(n, train, validation)
+        actual_counts = (len(result.train), len(result.validation), len(result.test))
+        assert actual_counts == expected_counts, (
+            f"case {case_index}: n={n} train={train} validation={validation} "
+            f"expected={expected_counts} actual={actual_counts}"
+        )
+        assert sum(actual_counts) == n
+
+        # Occurrence coverage, checked by identity (works for both plain ints, which have
+        # meaningful equality, and _Sample instances, which do not).
+        combined = list(result.train) + list(result.validation) + list(result.test)
+        assert len(combined) == n
+        combined_ids = sorted(id(element) for element in combined)
+        source_ids = sorted(id(element) for element in items)
+        assert combined_ids == source_ids
+
+        matched += 1
+
+    assert matched == n_cases

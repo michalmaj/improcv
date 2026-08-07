@@ -66,7 +66,10 @@ version decided at the time each is actually published, rather than mechanically
   implemented; perspective canvas expansion remains planned, not started), and
   dataset discovery (deterministic,
   extension-based image discovery implemented; deterministic image/mask pairing implemented;
-  manifests, dataset splits, and batching/loading remain planned, not started), and
+  deterministic train/validation/test dataset splitting (`improcv.dataset.split_dataset`,
+  `DatasetSplit`) implemented on the `0.4.0a2` development line -- occurrence-based partitioning of
+  any `Sequence[T]` via the Largest Remainder Method, with no stratification/grouping/leakage
+  guarantee; manifests and batching/loading remain planned, not started), and
   dataset image similarity (deterministic pairwise similarity search over precomputed perceptual
   hashes -- `improcv.similarity.find_similar_image_pairs` -- implemented, shipping in `0.3.0a1`;
   portable, deterministic perceptual-hash manifests (`improcv.manifest.PerceptualHashManifest`)

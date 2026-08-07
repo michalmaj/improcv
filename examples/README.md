@@ -1,10 +1,10 @@
 # improcv examples
 
-Six small, self-contained, runnable recipes for the main first-use workflows. Each script is
+Seven small, self-contained, runnable recipes for the main first-use workflows. Each script is
 deterministic, needs no network access, no GUI, no Matplotlib, and no external data files -- it
 creates whatever tiny input it needs (in a temporary directory it cleans up itself, except
-`manifest_comparison.py`, which needs no files at all) and prints a short, stable summary. All six
-run identically on Windows, Linux, and macOS.
+`manifest_comparison.py`/`dataset_split.py`, which need no files at all) and prints a short, stable
+summary. All seven run identically on Windows, Linux, and macOS.
 
 ## Installation
 
@@ -27,6 +27,7 @@ uv run python examples/image_similarity.py
 uv run python examples/image_similarity_manifest.py
 uv run python examples/dataset_manifest_builder.py
 uv run python examples/manifest_comparison.py
+uv run python examples/dataset_split.py
 ```
 
 (Without `uv`, `python examples/discovery_and_augmentation.py` works too, as long as `improcv` and
@@ -91,6 +92,12 @@ helpers, are all `(width, height)` -- the reverse of `array.shape[:2]`.
   here, both manifests are built directly from hand-constructed hash mappings -- no files, no
   `cv2`, no NumPy, no temporary directory -- since the comparison itself needs no filesystem
   access at all.
+- [`dataset_split.py`](dataset_split.py) -- a deterministic, in-memory train/validation/test split
+  of ten synthetic `Path` values with `split_dataset`, using an explicit, seeded
+  `np.random.default_rng` exactly like `sample_flip`/`sample_affine` already require. Like
+  `manifest_comparison.py`, this needs no files and no `cv2` -- `split_dataset` never touches the
+  filesystem. A short comment shows a `discover_image_mask_pairs(...)` result composing directly
+  as `split_dataset`'s input, with each `ImageMaskPair` treated as one atomic sample.
 
 ## DNN preprocessing as a supporting layer
 
