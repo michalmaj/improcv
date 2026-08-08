@@ -5895,13 +5895,16 @@ def test_multiclass_curve_result_labels_property_read_only(
     curve_func, binary_func, wrapper_type, curve_type
 ) -> None:
     result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
-    # Assigning to a no-setter property on a frozen(+slots) dataclass raises TypeError here
-    # (CPython's frozen-dataclass __setattr__ closes over the pre-slots class object; for a name
-    # that is not a dataclass field, it defers to `super(cls, self).__setattr__`, which fails
-    # because `self`'s actual runtime type is the slots-rewritten class, not `cls`) rather than a
-    # plain AttributeError -- verified directly against a minimal frozen+slots+property class with
-    # the exact same shape.
-    with pytest.raises(TypeError):
+    # Assigning to a no-setter property on a frozen(+slots) dataclass is always rejected, but the
+    # exact exception is a CPython dataclasses implementation detail that has changed across
+    # patch releases, not part of improcv's own contract: on CPython <= 3.13.11 (and 3.11/3.12),
+    # the generated frozen __setattr__ closes over the pre-slots class object and raises a
+    # confusing TypeError ("obj must be an instance or subtype of type") when self's runtime type
+    # is the slots-rewritten class; a later CPython dataclasses fix (present by 3.13.14 and in
+    # 3.14) instead raises the clean dataclasses.FrozenInstanceError (an AttributeError subclass)
+    # -- verified directly against a minimal frozen+slots+property class with the exact same shape
+    # on CPython 3.11/3.12/3.13.11 (TypeError) and 3.14.6 (FrozenInstanceError). Accept either.
+    with pytest.raises((TypeError, AttributeError)):
         result.labels = (0, 1, 2)
 
 
