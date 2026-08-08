@@ -1633,12 +1633,15 @@ stabilization -- bug fixes, contract and typing corrections, documentation corre
 feedback from real-world usage. `0.4.0a1` opened a new, additive feature line on top of that
 stabilized `0.3.0` scope: it was the first alpha of `0.4.0`, containing exactly one slice --
 deterministic, in-memory comparison of two `PerceptualHashManifest` snapshots
-(`compare_perceptual_hash_manifests`). `0.4.0a2` is the current, second alpha of that same line,
-adding deterministic train/validation/test dataset splitting (`split_dataset`, `DatasetSplit`).
-The `aN` in `0.4.0aN` describes how far along `0.4.0` itself is in its own release cycle, not a
-reversion of the whole project's maturity classifier back to alpha -- the project as a whole
-remains Beta. `0.4.0a2` is not a claim that `0.4.0` is feature-complete, and no further feature is
-assigned to the rest of the `0.4.x` line yet. See
+(`compare_perceptual_hash_manifests`). `0.4.0a2` was the second alpha of that same line, adding
+deterministic train/validation/test dataset splitting (`split_dataset`, `DatasetSplit`). `0.4.0a3`
+is the current, third alpha of that same line, adding multiclass per-class one-vs-rest ROC/
+precision-recall curves (`multiclass_roc_curve`/`multiclass_precision_recall_curve`, returning
+`MulticlassRocCurve`/`MulticlassPrecisionRecallCurve`). The `aN` in `0.4.0aN` describes how far
+along `0.4.0` itself is in its own release cycle, not a reversion of the whole project's maturity
+classifier back to alpha -- the project as a whole remains Beta. `0.4.0a3` is not a claim that
+`0.4.0` is feature-complete or stable, and no further feature is assigned to the rest of the
+`0.4.x` line yet. See
 [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for published
 releases and the exact contents of the current development line. `0.1.0a1` was the project's
 first public release and covered the accumulated scope of Phases 0-3 (see
@@ -1647,10 +1650,11 @@ and why it doesn't match the project's original one-phase-per-minor-version plan
 
 **Compatibility policy before `1.0.0`:**
 - Releases through `0.3.0a3` were alpha releases; `0.3.0b1` began the beta line for the `0.3.0`
-  scope, which remains in beta stabilization. `0.4.0a1`/`0.4.0a2` are alpha releases of the new,
-  additive `0.4.x` feature line specifically. Beta means the planned functional scope for that
-  line has settled and the focus has shifted to stabilization; alpha means the opposite -- neither
-  status means the public API is declared stable.
+  scope, which remains in beta stabilization. `0.4.0a1`/`0.4.0a2`/`0.4.0a3` are alpha releases of
+  the new, additive `0.4.x` feature line specifically. Beta means the planned functional scope for
+  that line has settled and the focus has shifted to stabilization; alpha means the opposite --
+  neither status means the public API is declared stable, and a backwards-incompatible change may
+  still land in any `0.4.x` release before that line reaches beta.
 - Before `1.0.0`, the public API may still change, including in backwards-incompatible ways, in any
   `0.MINOR` release. While in alpha or beta, this also applies between consecutive prereleases of
   the same version (e.g. `0.1.0a1` → `0.1.0a2`, or a later `0.3.0b1` → `0.3.0b2`).

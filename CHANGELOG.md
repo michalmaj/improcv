@@ -10,17 +10,26 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.4.0a3] - 2026-08-08
+
 ### Added
 - `multiclass_roc_curve`/`multiclass_precision_recall_curve`, returning `MulticlassRocCurve`/
   `MulticlassPrecisionRecallCurve`: one binary, per-class one-vs-rest `RocCurve`/
-  `PrecisionRecallCurve` per label, in exactly the caller's explicit `labels` order (never sorted).
-  Each result stores only `curves`; `labels` is a read-only property derived from the nested
-  curves' own `positive_label`, never a separately stored field. `sample_weight` follows the same
-  contract as the existing binary ranking functions. Each returned curve is bit-for-bit identical
-  to calling the existing public `roc_curve`/`precision_recall_curve` directly on the matching
-  `y_score` column -- these two functions reuse that existing binary curve core unchanged, adding
-  no new ranking arithmetic. No `average` parameter and no macro/weighted/micro aggregate curve in
-  this slice (see `docs/design/0.4.0a3-multiclass-curves.md`). No new dependency.
+  `PrecisionRecallCurve` per label, in exactly the caller's explicit `labels` order (never sorted,
+  never inferred). Each result stores only `curves`; `labels` is a read-only property derived from
+  the nested curves' own `positive_label`, never a separately stored field. Input accepted with
+  full parity to `multiclass_roc_auc_score`/`multiclass_average_precision_score` (`y_true`,
+  `y_score`, `labels`, `sample_weight`), including the same requirement that every named label have
+  positive effective support before any curve is built. `sample_weight` follows the same contract
+  as the existing binary ranking functions. Each returned curve is bit-for-bit identical to calling
+  the existing public `roc_curve`/`precision_recall_curve` directly on the matching `y_score`
+  column -- these two functions reuse that existing binary curve core unchanged, adding no new
+  ranking arithmetic; for ROC, `auc(curve.false_positive_rate, curve.true_positive_rate)` is
+  bit-for-bit identical to `multiclass_roc_auc_score(..., average=None)[i]`, while for
+  precision-recall the trapezoidal area under the curve remains a distinct quantity from
+  `multiclass_average_precision_score`, never interchangeable with it. No `average` parameter and
+  no macro/weighted/micro aggregate curve in this slice (see
+  `docs/design/0.4.0a3-multiclass-curves.md`). No new dependency.
 
 ## [0.4.0a2] - 2026-08-07
 
