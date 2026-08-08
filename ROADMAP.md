@@ -59,8 +59,8 @@ version decided at the time each is actually published, rather than mechanically
   precision (`multiclass_roc_auc_score`/`multiclass_average_precision_score`,
   `average=None`/`"macro"`/`"weighted"`/`"micro"`) implemented; multiclass one-vs-rest per-class
   ROC/precision-recall curve types (`multiclass_roc_curve`/`multiclass_precision_recall_curve`,
-  returning `MulticlassRocCurve`/`MulticlassPrecisionRecallCurve`) implemented on the `0.4.0a3`
-  development line, with no `average` parameter and no macro/weighted/micro aggregate curve; a
+  returning `MulticlassRocCurve`/`MulticlassPrecisionRecallCurve`) released in `0.4.0a3`, with no
+  `average` parameter and no macro/weighted/micro aggregate curve; a
   micro curve is mathematically well-defined via the same flattening `average="micro"` already
   uses above but remains a separate, later API decision, not started; one-vs-one mode, a
   classification-report public API, and a public plotting API also remain planned, not started,
