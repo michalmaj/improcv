@@ -57,9 +57,14 @@ version decided at the time each is actually published, rather than mechanically
   `sample_weight` for the four binary ranking functions and for `confusion_matrix`/
   `classification_metrics` implemented; multiclass one-vs-rest score-level ROC AUC/average
   precision (`multiclass_roc_auc_score`/`multiclass_average_precision_score`,
-  `average=None`/`"macro"`/`"weighted"`/`"micro"`) implemented; one-vs-one and public multiclass
-  ROC/PR curve types remain planned, not started, see
-  [CHANGELOG.md](CHANGELOG.md)), image augmentation
+  `average=None`/`"macro"`/`"weighted"`/`"micro"`) implemented; multiclass one-vs-rest per-class
+  ROC/precision-recall curve types (`multiclass_roc_curve`/`multiclass_precision_recall_curve`,
+  returning `MulticlassRocCurve`/`MulticlassPrecisionRecallCurve`) implemented on the `0.4.0a3`
+  development line, with no `average` parameter and no macro/weighted/micro aggregate curve; a
+  micro curve is mathematically well-defined via the same flattening `average="micro"` already
+  uses above but remains a separate, later API decision, not started; one-vs-one mode, a
+  classification-report public API, and a public plotting API also remain planned, not started,
+  see [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-and-anisotropic-scale sampling/replay implemented;
   affine canvas expansion (`expand_affine_canvas`) implemented; perspective sampling/replay

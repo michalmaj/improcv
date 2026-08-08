@@ -350,6 +350,27 @@ def test_compute_classification_report_ranking_metrics(
     assert report.ap_micro == pytest.approx(0.9658120, abs=1e-6)
 
 
+def test_compute_classification_report_roc_curves(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+    report = classification_module.compute_classification_report(inputs)
+
+    roc_curves = report.roc_curves
+    assert isinstance(roc_curves, im.MulticlassRocCurve)
+    assert roc_curves.labels == (20, 10, 30)
+    assert len(roc_curves.curves) == 3
+    for index, curve in enumerate(roc_curves.curves):
+        assert isinstance(curve, im.RocCurve)
+        assert curve.positive_label == inputs.labels[index]
+
+    # ROC AUC from the curves themselves is bit-for-bit identical to the already-verified
+    # per-class multiclass_roc_auc_score(average=None) entries.
+    for index, curve in enumerate(roc_curves.curves):
+        area = im.auc(curve.false_positive_rate, curve.true_positive_rate)
+        assert area == report.auc_per_class[index]
+
+
 def test_score_column_mapping_comes_from_a_real_enumeration_of_labels(
     classification_module: types.ModuleType,
 ) -> None:
@@ -417,6 +438,35 @@ def test_classification_report_text_contains_the_required_terms(
         "micro",
     ):
         assert expected in combined, expected
+
+
+def test_classification_report_figure_renders_real_per_class_roc_curves(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+    report = classification_module.compute_classification_report(inputs)
+
+    fig, _panel_texts = classification_module.build_classification_figure(inputs, report)
+    try:
+        roc_axes = fig.axes[2]  # confusion matrix, ROC curves, then the report column's axes
+        assert roc_axes.get_title(loc="left") == "Per-class ROC curves"
+
+        # One line per label plus the diagonal reference line -- drawn directly from
+        # report.roc_curves.curves, never through improcv.visualization.
+        lines = roc_axes.get_lines()
+        assert len(lines) == len(report.roc_curves.curves) + 1
+
+        legend_labels = [text.get_text() for text in roc_axes.get_legend().get_texts()]
+        assert legend_labels == [f"label {label}" for label in report.roc_curves.labels]
+
+        for index, curve in enumerate(report.roc_curves.curves):
+            line = lines[index]
+            np.testing.assert_array_equal(line.get_xdata(), curve.false_positive_rate)
+            np.testing.assert_array_equal(line.get_ydata(), curve.true_positive_rate)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
 
 
 def test_classification_report_panel_text_never_overflows_its_axes(

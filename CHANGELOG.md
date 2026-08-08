@@ -10,6 +10,18 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `multiclass_roc_curve`/`multiclass_precision_recall_curve`, returning `MulticlassRocCurve`/
+  `MulticlassPrecisionRecallCurve`: one binary, per-class one-vs-rest `RocCurve`/
+  `PrecisionRecallCurve` per label, in exactly the caller's explicit `labels` order (never sorted).
+  Each result stores only `curves`; `labels` is a read-only property derived from the nested
+  curves' own `positive_label`, never a separately stored field. `sample_weight` follows the same
+  contract as the existing binary ranking functions. Each returned curve is bit-for-bit identical
+  to calling the existing public `roc_curve`/`precision_recall_curve` directly on the matching
+  `y_score` column -- these two functions reuse that existing binary curve core unchanged, adding
+  no new ranking arithmetic. No `average` parameter and no macro/weighted/micro aggregate curve in
+  this slice (see `docs/design/0.4.0a3-multiclass-curves.md`). No new dependency.
+
 ## [0.4.0a2] - 2026-08-07
 
 ### Added

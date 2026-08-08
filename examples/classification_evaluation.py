@@ -1,15 +1,20 @@
-"""Classification predictions -> confusion matrix + multiclass ranking evaluation.
+"""Classification predictions -> confusion matrix + multiclass ranking evaluation + curves.
 
 Uses a small, fully explicit, hand-written multiclass example (three classes,
 nine samples, no files, no model, no scikit-learn) to show
 `improcv.confusion_matrix`/`improcv.classification_metrics` for label-based
-evaluation, then `improcv.multiclass_roc_auc_score`/
+evaluation, `improcv.multiclass_roc_auc_score`/
 `improcv.multiclass_average_precision_score` for score-based ranking
-evaluation across every supported `average` mode.
+evaluation across every supported `average` mode, and
+`improcv.multiclass_roc_curve`/`improcv.multiclass_precision_recall_curve`
+for the per-class curves themselves.
 
 `labels` is deliberately given in a non-sorted order (`[20, 10, 30]`) to show
 that column order in `y_score` -- and row/column order in the confusion
 matrix -- is controlled entirely by the `labels` you pass, not by sorting.
+`multiclass_roc_curve`/`multiclass_precision_recall_curve` preserve that same
+order in `result.curves`/`result.labels`, with no `average` parameter and no
+macro/weighted/micro aggregate curve (see each function's own docstring).
 
 Run with:
 
@@ -98,6 +103,34 @@ def main() -> None:
     for scalar in (auc_macro, auc_weighted, auc_micro, ap_macro, ap_weighted, ap_micro):
         assert math.isfinite(scalar)
 
+    # `multiclass_roc_curve`/`multiclass_precision_recall_curve` return one binary curve per
+    # label, in exactly `labels`' own order -- no `average`, no macro/weighted/micro aggregate
+    # curve. `result.labels` is derived from the nested curves' own `positive_label`, never a
+    # separately stored field.
+    roc_curves = im.multiclass_roc_curve(y_true, y_score, labels=labels)
+    pr_curves = im.multiclass_precision_recall_curve(y_true, y_score, labels=labels)
+
+    assert roc_curves.labels == tuple(labels)
+    assert pr_curves.labels == tuple(labels)
+    assert len(roc_curves.curves) == len(labels)
+    assert len(pr_curves.curves) == len(labels)
+    for curve, label in zip(roc_curves.curves, labels, strict=True):
+        assert curve.positive_label == label
+
+    # ROC relationship: the trapezoidal area under each per-class ROC curve is bit-for-bit
+    # identical to that class's own multiclass_roc_auc_score(..., average=None) entry.
+    roc_auc_from_curves = [
+        im.auc(curve.false_positive_rate, curve.true_positive_rate) for curve in roc_curves.curves
+    ]
+    for from_curve, from_score in zip(roc_auc_from_curves, auc_per_class, strict=True):
+        assert from_curve == from_score
+
+    # PR relationship: the trapezoidal area under a per-class PR curve is NOT average precision --
+    # they are different definitions (non-interpolated average precision vs. trapezoidal area),
+    # never guaranteed equal or guaranteed different, so this only computes both, it does not
+    # assert they diverge on this particular dataset.
+    pr_trapezoidal_area = [im.auc(curve.recall, curve.precision) for curve in pr_curves.curves]
+
     print(f"labels: {labels}")
     print("confusion matrix (rows=true, columns=predicted):")
     print(cm.matrix)
@@ -108,6 +141,17 @@ def main() -> None:
     print(f"ROC AUC macro/weighted/micro: {auc_macro:.3f}/{auc_weighted:.3f}/{auc_micro:.3f}")
     print(f"AP per class: {[round(float(v), 3) for v in ap_per_class]}")
     print(f"AP macro/weighted/micro: {ap_macro:.3f}/{ap_weighted:.3f}/{ap_micro:.3f}")
+    print(f"ROC curve count: {len(roc_curves.curves)}, labels: {roc_curves.labels}")
+    print(f"ROC AUC from curves (auc(FPR, TPR)): {[round(v, 3) for v in roc_auc_from_curves]}")
+    print(f"PR curve count: {len(pr_curves.curves)}, labels: {pr_curves.labels}")
+    print(
+        "PR trapezoidal area (auc(recall, precision)): "
+        f"{[round(v, 3) for v in pr_trapezoidal_area]}"
+    )
+    print(
+        f"AP per class (a different quantity from PR trapezoidal area): "
+        f"{[round(float(v), 3) for v in ap_per_class]}"
+    )
 
 
 if __name__ == "__main__":
