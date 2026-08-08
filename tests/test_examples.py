@@ -69,6 +69,11 @@ def test_classification_evaluation_example_runs_cleanly() -> None:
     assert "ROC AUC macro/weighted/micro:" in result.stdout
     assert "AP per class:" in result.stdout
     assert "AP macro/weighted/micro:" in result.stdout
+    assert "ROC curve count: 3, labels: (20, 10, 30)" in result.stdout
+    assert "ROC AUC from curves (auc(FPR, TPR)):" in result.stdout
+    assert "PR curve count: 3, labels: (20, 10, 30)" in result.stdout
+    assert "PR trapezoidal area (auc(recall, precision)):" in result.stdout
+    assert "AP per class (a different quantity from PR trapezoidal area):" in result.stdout
 
 
 def test_image_similarity_example_runs_cleanly() -> None:

@@ -1,4 +1,5 @@
 import dataclasses
+import inspect
 import itertools
 import math
 import warnings
@@ -15,6 +16,8 @@ import improcv as im
 from improcv.evaluation import (
     ClassificationMetrics,
     ConfusionMatrixResult,
+    MulticlassPrecisionRecallCurve,
+    MulticlassRocCurve,
     PrecisionRecallCurve,
     RocCurve,
     auc,
@@ -23,7 +26,9 @@ from improcv.evaluation import (
     classification_metrics_from_confusion_matrix,
     confusion_matrix,
     multiclass_average_precision_score,
+    multiclass_precision_recall_curve,
     multiclass_roc_auc_score,
+    multiclass_roc_curve,
     precision_recall_curve,
     roc_auc_score,
     roc_curve,
@@ -5302,3 +5307,739 @@ def test_multiclass_micro_does_not_mutate_inputs(func) -> None:
     assert_array_equal(y_score, y_score_copy)
     assert labels == labels_copy
     assert sample_weight == sample_weight_copy
+
+
+# --- multiclass_roc_curve / multiclass_precision_recall_curve ---
+
+_CURVE_FUNCTIONS = (
+    (multiclass_roc_curve, roc_curve, MulticlassRocCurve, RocCurve),
+    (
+        multiclass_precision_recall_curve,
+        precision_recall_curve,
+        MulticlassPrecisionRecallCurve,
+        PrecisionRecallCurve,
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_type_and_curve_count(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    assert isinstance(result, wrapper_type)
+    assert isinstance(result.curves, tuple)
+    assert len(result.curves) == len(_MULTICLASS_LABELS)
+    for curve in result.curves:
+        assert isinstance(curve, curve_type)
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+@pytest.mark.parametrize("n_classes", [2, 3, 4, 5])
+def test_multiclass_curve_class_count(
+    curve_func, binary_func, wrapper_type, curve_type, n_classes
+) -> None:
+    rng = np.random.default_rng(0)
+    n_samples = 30
+    labels = tuple(range(n_classes))
+    extra = rng.integers(0, n_classes, size=n_samples).tolist()
+    y_true = list(labels) + extra  # guarantee every label has at least one sample
+    y_score = rng.random((len(y_true), n_classes))
+
+    result = curve_func(y_true, y_score, labels=labels)
+    assert result.labels == labels
+    assert len(result.curves) == n_classes
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_unsorted_labels(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    labels = (20, 10, 30)
+    y_true = [20, 10, 30, 20, 10, 30, 20]
+    y_score = np.array(
+        [
+            [0.90, 0.50, 0.30],
+            [0.20, 0.50, 0.55],
+            [0.10, 0.55, 0.20],
+            [0.85, 0.30, 0.60],
+            [0.30, 0.60, 0.45],
+            [0.05, 0.20, 0.10],
+            [0.75, 0.10, 0.65],
+        ]
+    )
+
+    result = curve_func(y_true, y_score, labels=labels)
+
+    assert result.labels == (20, 10, 30)
+    assert result.curves[0].positive_label == 20
+    assert result.curves[1].positive_label == 10
+    assert result.curves[2].positive_label == 30
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_sparse_large_labels(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    labels = (10_000_000, -5, 999)
+    y_true = [10_000_000, -5, 999, 10_000_000, -5, 999]
+    y_score = np.array(
+        [
+            [0.9, 0.2, 0.1],
+            [0.1, 0.9, 0.2],
+            [0.2, 0.1, 0.9],
+            [0.8, 0.3, 0.2],
+            [0.2, 0.8, 0.3],
+            [0.3, 0.2, 0.8],
+        ]
+    )
+    result = curve_func(y_true, y_score, labels=labels)
+    assert result.labels == labels
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_accepts_sequence_and_ndarray_y_true(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    as_list = curve_func(list(_MULTICLASS_Y_TRUE), _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    as_tuple = curve_func(tuple(_MULTICLASS_Y_TRUE), _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    as_array = curve_func(
+        np.array(_MULTICLASS_Y_TRUE, dtype=np.int64), _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    for result in (as_list, as_tuple, as_array):
+        assert result.labels == _MULTICLASS_LABELS
+        assert len(result.curves) == len(_MULTICLASS_LABELS)
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int32])
+def test_multiclass_curve_y_score_dtypes(
+    curve_func, binary_func, wrapper_type, curve_type, dtype
+) -> None:
+    if np.issubdtype(dtype, np.integer):
+        y_true = [0, 1, 0, 1]
+        y_score = np.array([[9, 1], [2, 8], [7, 3], [1, 9]], dtype=dtype)
+    else:
+        y_true = [0, 1, 0, 1]
+        y_score = np.array([[0.9, 0.1], [0.2, 0.8], [0.7, 0.3], [0.1, 0.9]], dtype=dtype)
+    labels = (0, 1)
+
+    result = curve_func(y_true, y_score, labels=labels)
+    assert len(result.curves) == 2
+
+
+# --- direct per-class binary equivalence (the central invariant) ---
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_per_class_bit_identical_to_binary(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    for index, label in enumerate(_MULTICLASS_LABELS):
+        expected = binary_func(
+            _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE[:, index].tolist(), positive_label=label
+        )
+        assert result.curves[index] == expected
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_unsorted_labels_per_class_bit_identical_to_binary(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    labels = (20, 10, 30)
+    y_true = [20, 10, 30, 20, 10, 30, 20]
+    y_score = np.array(
+        [
+            [0.90, 0.50, 0.30],
+            [0.20, 0.50, 0.55],
+            [0.10, 0.55, 0.20],
+            [0.85, 0.30, 0.60],
+            [0.30, 0.60, 0.45],
+            [0.05, 0.20, 0.10],
+            [0.75, 0.10, 0.65],
+        ]
+    )
+
+    result = curve_func(y_true, y_score, labels=labels)
+    for index, label in enumerate(labels):
+        expected = binary_func(y_true, y_score[:, index], positive_label=label)
+        assert result.curves[index] == expected
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_sample_weight_per_class_bit_identical_to_binary(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    result = curve_func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    for index, label in enumerate(_MULTICLASS_LABELS):
+        expected = binary_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE[:, index],
+            positive_label=label,
+            sample_weight=sample_weight,
+        )
+        assert result.curves[index] == expected
+
+
+def test_multiclass_roc_curve_auc_bit_identical_to_multiclass_roc_auc_score() -> None:
+    result = multiclass_roc_curve(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    per_class_scores = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average=None
+    )
+    assert isinstance(per_class_scores, np.ndarray)
+    for index in range(len(_MULTICLASS_LABELS)):
+        curve = result.curves[index]
+        area = auc(curve.false_positive_rate, curve.true_positive_rate)
+        assert area == per_class_scores[index]
+
+
+def test_multiclass_roc_curve_auc_bit_identical_with_sample_weight() -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    result = multiclass_roc_curve(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    per_class_scores = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        average=None,
+        sample_weight=sample_weight,
+    )
+    assert isinstance(per_class_scores, np.ndarray)
+    for index in range(len(_MULTICLASS_LABELS)):
+        curve = result.curves[index]
+        area = auc(curve.false_positive_rate, curve.true_positive_rate)
+        assert area == per_class_scores[index]
+
+
+def test_multiclass_precision_recall_curve_trapezoidal_auc_is_not_average_precision() -> None:
+    """Trapezoidal PR-curve area and average precision are different definitions -- shown here on
+    a dataset (column 1 reuses the module's own existing binary divergence example,
+    `test_auc_trapezoidal_pr_curve_area_example_trapezoid_larger_than_ap`) where they numerically
+    diverge, not asserted to differ on every dataset (the contract is "different definitions", not
+    "never numerically equal").
+    """
+    y_true = [0, 1, 0]
+    labels = (0, 1)
+    # Column 1 (label 1) is exactly y_true=[0, 1, 0], y_score=[3, 3, 2] from the binary example,
+    # where average_precision_score == 1/2 and the trapezoidal PR-curve area == 3/4.
+    y_score = np.array([[1, 3], [2, 3], [3, 2]])
+
+    result = multiclass_precision_recall_curve(y_true, y_score, labels=labels)
+    ap_per_class = multiclass_average_precision_score(y_true, y_score, labels=labels, average=None)
+    assert isinstance(ap_per_class, np.ndarray)
+
+    curve = result.curves[1]
+    trapezoidal_area = auc(curve.recall, curve.precision)
+    assert ap_per_class[1] == 1 / 2
+    assert trapezoidal_area == 3 / 4
+    assert trapezoidal_area != ap_per_class[1]
+
+
+# --- labels/validation ---
+
+
+def test_multiclass_curve_labels_empty() -> None:
+    with pytest.raises(ValueError, match="labels must not be empty"):
+        multiclass_roc_curve([0, 1], np.zeros((2, 0)), labels=[])
+    with pytest.raises(ValueError, match="labels must not be empty"):
+        multiclass_precision_recall_curve([0, 1], np.zeros((2, 0)), labels=[])
+
+
+def test_multiclass_curve_labels_one() -> None:
+    with pytest.raises(ValueError, match="at least 2 labels"):
+        multiclass_roc_curve([0, 0], np.zeros((2, 1)), labels=[0])
+    with pytest.raises(ValueError, match="at least 2 labels"):
+        multiclass_precision_recall_curve([0, 0], np.zeros((2, 1)), labels=[0])
+
+
+def test_multiclass_curve_labels_duplicate() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        multiclass_roc_curve([0, 1], np.zeros((2, 2)), labels=[0, 0])
+    with pytest.raises(ValueError, match="duplicate"):
+        multiclass_precision_recall_curve([0, 1], np.zeros((2, 2)), labels=[0, 0])
+
+
+def test_multiclass_curve_y_true_empty() -> None:
+    with pytest.raises(ValueError, match="y_true must not be empty"):
+        multiclass_roc_curve([], np.zeros((0, 2)), labels=[0, 1])
+    with pytest.raises(ValueError, match="y_true must not be empty"):
+        multiclass_precision_recall_curve([], np.zeros((0, 2)), labels=[0, 1])
+
+
+def test_multiclass_curve_y_true_outside_labels() -> None:
+    with pytest.raises(ValueError, match=r"y_true\[2\] = 99 is not present in labels"):
+        multiclass_roc_curve([0, 1, 99], np.zeros((3, 2)), labels=[0, 1])
+    with pytest.raises(ValueError, match=r"y_true\[2\] = 99 is not present in labels"):
+        multiclass_precision_recall_curve([0, 1, 99], np.zeros((3, 2)), labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_wrong_container(curve_func) -> None:
+    with pytest.raises(TypeError, match="nested"):
+        curve_func([0, 1], [[0.9, 0.1], [0.2, 0.8]], labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_wrong_ndim(curve_func) -> None:
+    with pytest.raises(ValueError, match="must be 2-D"):
+        curve_func([0, 1], np.array([0.9, 0.1]), labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_wrong_row_count(curve_func) -> None:
+    with pytest.raises(ValueError, match="must have shape"):
+        curve_func([0, 1, 0], np.zeros((2, 2)), labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_wrong_column_count(curve_func) -> None:
+    with pytest.raises(ValueError, match="must have shape"):
+        curve_func([0, 1], np.zeros((2, 3)), labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_nan(curve_func) -> None:
+    y_score = np.array([[0.9, 0.1], [np.nan, 0.8]])
+    with pytest.raises(ValueError, match="finite"):
+        curve_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_positive_inf(curve_func) -> None:
+    y_score = np.array([[0.9, 0.1], [np.inf, 0.8]])
+    with pytest.raises(ValueError, match="finite"):
+        curve_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_negative_inf(curve_func) -> None:
+    y_score = np.array([[0.9, 0.1], [-np.inf, 0.8]])
+    with pytest.raises(ValueError, match="finite"):
+        curve_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_y_score_non_exact_integer(curve_func) -> None:
+    y_score = np.array([[2**53 + 1, 1], [1, 2]], dtype=np.int64)
+    with pytest.raises(ValueError, match="not exactly representable"):
+        curve_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_sample_weight_wrong_container(curve_func) -> None:
+    with pytest.raises(TypeError):
+        curve_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight="not a sequence",
+        )
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_sample_weight_wrong_dtype(curve_func) -> None:
+    with pytest.raises(TypeError):
+        curve_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=np.array([True] * len(_MULTICLASS_Y_TRUE)),
+        )
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_sample_weight_wrong_length(curve_func) -> None:
+    with pytest.raises(ValueError, match="length"):
+        curve_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=[1.0, 2.0],
+        )
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_sample_weight_negative(curve_func) -> None:
+    sample_weight = [1.0] * (len(_MULTICLASS_Y_TRUE) - 1) + [-1.0]
+    with pytest.raises(ValueError, match="non-negative"):
+        curve_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=sample_weight,
+        )
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_sample_weight_all_zero(curve_func) -> None:
+    sample_weight = [0.0] * len(_MULTICLASS_Y_TRUE)
+    with pytest.raises(ValueError, match="at least one positive value"):
+        curve_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=sample_weight,
+        )
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_sample_weight_non_exact_integer(curve_func) -> None:
+    sample_weight = np.array([2**53 + 1] + [1] * (len(_MULTICLASS_Y_TRUE) - 1), dtype=np.int64)
+    with pytest.raises(ValueError, match="not exactly representable"):
+        curve_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=sample_weight,
+        )
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_zero_effective_support_one_class(curve_func) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = np.zeros((4, 3))
+    with pytest.raises(ValueError, match=r"missing labels: \(2,\)"):
+        curve_func(y_true, y_score, labels=(0, 1, 2))
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_zero_effective_support_multiple_classes(curve_func) -> None:
+    y_true = [0, 0, 0, 0]
+    y_score = np.zeros((4, 3))
+    with pytest.raises(ValueError, match=r"missing labels: \(1, 2\)"):
+        curve_func(y_true, y_score, labels=(0, 1, 2))
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_validation_order_labels_before_y_true(curve_func) -> None:
+    # Both labels (duplicate) and y_true (empty) are invalid; labels is validated first.
+    with pytest.raises(ValueError, match="duplicate"):
+        curve_func([], np.zeros((0, 2)), labels=[0, 0])
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_validation_order_y_score_before_sample_weight(curve_func) -> None:
+    # Both y_score (wrong shape) and sample_weight (wrong length) are invalid; y_score first.
+    with pytest.raises(ValueError, match="must have shape"):
+        curve_func([0, 1], np.zeros((2, 5)), labels=[0, 1], sample_weight=[1.0])
+
+
+# --- sample_weight variants ---
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+@pytest.mark.parametrize(
+    "sample_weight",
+    [
+        None,
+        [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0],
+        np.array([2, 1, 3, 1, 2, 1, 4], dtype=np.int64),
+        np.array([2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0], dtype=np.float64),
+    ],
+)
+def test_multiclass_curve_sample_weight_variants(
+    curve_func, binary_func, wrapper_type, curve_type, sample_weight
+) -> None:
+    result = curve_func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    for index, label in enumerate(_MULTICLASS_LABELS):
+        expected = binary_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE[:, index],
+            positive_label=label,
+            sample_weight=sample_weight,
+        )
+        assert result.curves[index] == expected
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_zero_weight_row_identical_across_curves(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    sample_weight = [1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+    with_zero = curve_func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    for index, label in enumerate(_MULTICLASS_LABELS):
+        expected = binary_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE[:, index],
+            positive_label=label,
+            sample_weight=sample_weight,
+        )
+        assert with_zero.curves[index] == expected
+
+
+# --- result type semantics ---
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_is_frozen(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.curves = ()
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_has_no_dict(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    assert not hasattr(result, "__dict__")
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_default_repr(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    representation = repr(result)
+    assert wrapper_type.__name__ in representation
+    assert "curves=" in representation
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_equality(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    first = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    second = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    assert first == second
+    assert first is not second
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_inequality_when_one_curve_differs(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    first = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    second = curve_func(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    assert first != second
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_unhashable(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    with pytest.raises(TypeError):
+        hash(result)
+
+
+@pytest.mark.parametrize(
+    ("curve_func", "binary_func", "wrapper_type", "curve_type"), _CURVE_FUNCTIONS
+)
+def test_multiclass_curve_result_labels_property_read_only(
+    curve_func, binary_func, wrapper_type, curve_type
+) -> None:
+    result = curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    # Assigning to a no-setter property on a frozen(+slots) dataclass is always rejected, but the
+    # exact exception is a CPython dataclasses implementation detail that has changed across
+    # patch releases, not part of improcv's own contract: on CPython <= 3.13.11 (and 3.11/3.12),
+    # the generated frozen __setattr__ closes over the pre-slots class object and raises a
+    # confusing TypeError ("obj must be an instance or subtype of type") when self's runtime type
+    # is the slots-rewritten class; a later CPython dataclasses fix (present by 3.13.14 and in
+    # 3.14) instead raises the clean dataclasses.FrozenInstanceError (an AttributeError subclass)
+    # -- verified directly against a minimal frozen+slots+property class with the exact same shape
+    # on CPython 3.11/3.12/3.13.11 (TypeError) and 3.14.6 (FrozenInstanceError). Accept either.
+    with pytest.raises((TypeError, AttributeError)):
+        result.labels = (0, 1, 2)
+
+
+@pytest.mark.parametrize(
+    ("wrapper_type", "curve_type"),
+    [(MulticlassRocCurve, RocCurve), (MulticlassPrecisionRecallCurve, PrecisionRecallCurve)],
+)
+def test_multiclass_curve_manual_construction_zero_curves(wrapper_type, curve_type) -> None:
+    result = wrapper_type(curves=())
+    assert result.curves == ()
+    assert result.labels == ()
+
+
+@pytest.mark.parametrize(
+    ("wrapper_type", "curve_type"),
+    [(MulticlassRocCurve, RocCurve), (MulticlassPrecisionRecallCurve, PrecisionRecallCurve)],
+)
+def test_multiclass_curve_manual_construction_one_curve(wrapper_type, curve_type) -> None:
+    if curve_type is RocCurve:
+        single = roc_curve([0, 1], [0.2, 0.8], positive_label=1)
+    else:
+        single = precision_recall_curve([0, 1], [0.2, 0.8], positive_label=1)
+    result = wrapper_type(curves=(single,))
+    assert result.curves == (single,)
+    assert result.labels == (1,)
+
+
+@pytest.mark.parametrize(
+    ("wrapper_type", "curve_type"),
+    [(MulticlassRocCurve, RocCurve), (MulticlassPrecisionRecallCurve, PrecisionRecallCurve)],
+)
+def test_multiclass_curve_manual_construction_duplicate_positive_label(
+    wrapper_type, curve_type
+) -> None:
+    if curve_type is RocCurve:
+        first = roc_curve([0, 1], [0.2, 0.8], positive_label=1)
+        second = roc_curve([0, 1], [0.7, 0.3], positive_label=1)
+    else:
+        first = precision_recall_curve([0, 1], [0.2, 0.8], positive_label=1)
+        second = precision_recall_curve([0, 1], [0.7, 0.3], positive_label=1)
+    # Not rejected -- MulticlassRocCurve/MulticlassPrecisionRecallCurve are result containers,
+    # not self-validating domain objects (see the type's own docstring and the design doc, §9).
+    result = wrapper_type(curves=(first, second))
+    assert result.labels == (1, 1)
+
+
+# --- isolation ---
+
+
+def test_evaluation_module_does_not_import_matplotlib() -> None:
+    import improcv.evaluation as evaluation_module
+
+    source = inspect.getsource(evaluation_module)
+    assert "matplotlib" not in source
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_no_filesystem_io(curve_func, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def _forbid_open(*args, **kwargs):
+        raise AssertionError("multiclass curve functions must not perform filesystem I/O")
+
+    monkeypatch.setattr("builtins.open", _forbid_open)
+    curve_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+
+
+# --- randomized differential test (no Hypothesis, no scikit-learn oracle) ---
+
+
+def _random_multiclass_curve_case(rng: np.random.Generator):
+    n_classes = int(rng.integers(2, 9))
+    labels = list(range(100, 100 + n_classes))
+    rng.shuffle(labels)
+    labels = tuple(labels)
+
+    samples_per_class = int(rng.integers(2, 6))
+    y_true: list[int] = []
+    for label in labels:
+        y_true.extend([label] * samples_per_class)
+
+    score_kind = int(rng.integers(0, 4))
+    n_samples = len(y_true)
+    if score_kind == 0:
+        y_score = rng.integers(-3, 4, size=(n_samples, len(labels))).astype(np.float64)
+    elif score_kind == 1:
+        y_score = rng.choice([-1.0, -0.5, 0.0, 0.5, 1.0], size=(n_samples, len(labels)))
+    elif score_kind == 2:
+        y_score = rng.uniform(-1e6, 1e6, size=(n_samples, len(labels)))
+    else:
+        y_score = rng.normal(size=(n_samples, len(labels)))
+
+    if rng.integers(0, 2) == 0:
+        sample_weight = None
+    else:
+        candidate = rng.uniform(0.0, 5.0, size=n_samples)
+        if rng.integers(0, 2) == 0:
+            zero_index = int(rng.integers(0, n_samples))
+            label_at_zero = y_true[zero_index]
+            trial = candidate.copy()
+            trial[zero_index] = 0.0
+            remaining = sum(
+                1
+                for value, weight in zip(y_true, trial, strict=True)
+                if value == label_at_zero and weight > 0.0
+            )
+            candidate = trial if remaining > 0 else candidate
+        sample_weight = candidate
+
+    return y_true, y_score, labels, sample_weight
+
+
+def test_multiclass_curve_randomized_differential() -> None:
+    rng = np.random.default_rng(20260808)
+    n_cases = 2000
+    checked = 0
+    for _ in range(n_cases):
+        y_true, y_score, labels, sample_weight = _random_multiclass_curve_case(rng)
+
+        roc_result = multiclass_roc_curve(
+            y_true, y_score, labels=labels, sample_weight=sample_weight
+        )
+        pr_result = multiclass_precision_recall_curve(
+            y_true, y_score, labels=labels, sample_weight=sample_weight
+        )
+
+        for index, label in enumerate(labels):
+            expected_roc = roc_curve(
+                y_true, y_score[:, index], positive_label=label, sample_weight=sample_weight
+            )
+            expected_pr = precision_recall_curve(
+                y_true, y_score[:, index], positive_label=label, sample_weight=sample_weight
+            )
+            assert roc_result.curves[index] == expected_roc
+            assert pr_result.curves[index] == expected_pr
+            checked += 1
+
+    assert checked >= n_cases * 2

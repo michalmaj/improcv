@@ -24,11 +24,14 @@ this module deliberately does not expose under a separate name (see `auc`'s docs
 scores across classes. `average=None`/`"macro"`/`"weighted"` compose the binary functions
 above independently per class; `average="micro"` instead flattens the one-hot target and
 score matrix into one shared binary ranking problem, so its score columns must use a
-common, comparable scale. The API is one-vs-rest only -- there is no one-vs-one mode and
-no public multiclass curve types (a single class's own curve is already available from
-`roc_curve`/`precision_recall_curve` given the matching score column). Does not cover
-plotting, multilabel classification, or `average="binary"` -- those are separate, later
-concerns, not part of this core.
+common, comparable scale. `multiclass_roc_curve`/`multiclass_precision_recall_curve` give the
+per-class curves themselves -- one binary `RocCurve`/`PrecisionRecallCurve` per label, in
+`labels`' own order, wrapped in `MulticlassRocCurve`/`MulticlassPrecisionRecallCurve` -- with no
+`average` parameter of their own and no macro/weighted/micro aggregate curve (a micro curve is
+mathematically well-defined via the same flattening `average="micro"` already uses, but is a
+separate, later API decision, not part of this slice). The API is one-vs-rest only -- there is no
+one-vs-one mode. Does not cover plotting, multilabel classification, or `average="binary"` --
+those are separate, later concerns, not part of this core.
 
 Several deliberate departures from `scikit-learn.metrics`'s well-known behavior (documented at
 the call sites that enforce them): a duplicate value in an explicit `labels` sequence raises
@@ -59,6 +62,8 @@ from improcv._validation import require_integral, require_one_of
 __all__ = [
     "ClassificationMetrics",
     "ConfusionMatrixResult",
+    "MulticlassPrecisionRecallCurve",
+    "MulticlassRocCurve",
     "PrecisionRecallCurve",
     "RocCurve",
     "auc",
@@ -67,7 +72,9 @@ __all__ = [
     "classification_metrics_from_confusion_matrix",
     "confusion_matrix",
     "multiclass_average_precision_score",
+    "multiclass_precision_recall_curve",
     "multiclass_roc_auc_score",
+    "multiclass_roc_curve",
     "precision_recall_curve",
     "roc_auc_score",
     "roc_curve",
@@ -2216,6 +2223,319 @@ def multiclass_average_precision_score(
         return _canonical_mean(per_class)
     total_support = _canonical_flat_sum(class_support, "total effective class support")
     return _weighted_average(per_class, class_support, total_support)
+
+
+@dataclass(frozen=True, slots=True)
+class MulticlassRocCurve:
+    """The result of `multiclass_roc_curve`: one binary, one-vs-rest `RocCurve` per label.
+
+    `curves[i]` is the label `labels[i]`'s own one-vs-rest `RocCurve`, in exactly the order the
+    `labels` argument was given -- never sorted, never deduplicated. `labels` is not stored
+    separately; it is a read-only property derived from `curves` itself
+    (`tuple(curve.positive_label for curve in curves)`), so there is no second copy of the label
+    order that could ever disagree with `curves`.
+
+    Equality (`==`) and `repr` use the plain, dataclass-generated defaults -- correct here because
+    `RocCurve.__eq__` already returns a plain `bool` (never NumPy's "truth value of an array is
+    ambiguous" error), so tuple equality over `curves` delegates to that per-element comparison
+    without any special handling. Instances are unhashable (`hash()` raises `TypeError`), for
+    consistency with `RocCurve`/`PrecisionRecallCurve`/`ConfusionMatrixResult`/
+    `ClassificationMetrics`, all of which are explicitly unhashable in this module.
+
+    This is a result container, not a self-validating domain object -- manual construction (e.g.
+    `MulticlassRocCurve(curves=())`) is never rejected, even with zero curves, one curve, or
+    duplicate `positive_label` values across curves. Only `multiclass_roc_curve` itself guarantees
+    the full contract (at least 2 curves, unique `positive_label` values, `curves[i].positive_label
+    == labels[i]`) for the value it returns; see that function's docstring for the exact contract.
+    """
+
+    curves: tuple[RocCurve, ...]
+
+    @property
+    def labels(self) -> tuple[int, ...]:
+        """The `positive_label` of each curve in `curves`, in the same order -- never stored."""
+        return tuple(curve.positive_label for curve in self.curves)
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True, slots=True)
+class MulticlassPrecisionRecallCurve:
+    """The result of `multiclass_precision_recall_curve`: one binary, one-vs-rest
+    `PrecisionRecallCurve` per label.
+
+    Same shape and the same guarantees as `MulticlassRocCurve`, over
+    `PrecisionRecallCurve` instead of `RocCurve` -- see that type's docstring for the full
+    contract (derived `labels`, default equality, explicit unhashability, and manual-construction
+    semantics all apply identically here).
+    """
+
+    curves: tuple[PrecisionRecallCurve, ...]
+
+    @property
+    def labels(self) -> tuple[int, ...]:
+        """The `positive_label` of each curve in `curves`, in the same order -- never stored."""
+        return tuple(curve.positive_label for curve in self.curves)
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def _check_multiclass_curve_postconditions(
+    curves: Sequence[RocCurve] | Sequence[PrecisionRecallCurve], labels_tuple: tuple[int, ...]
+) -> None:
+    """Verify the wrapper-level invariants `multiclass_roc_curve`/`multiclass_precision_recall_
+    curve` promise about their own return value.
+
+    Each nested `RocCurve`/`PrecisionRecallCurve` has already passed its own binary postcondition
+    check (`_check_roc_curve_postconditions`/`_check_pr_curve_postconditions`) inside the
+    `roc_curve`/`precision_recall_curve` call that produced it; this only checks the wrapper-level
+    structural invariants those calls cannot see on their own. Never used to validate a hand-built
+    `MulticlassRocCurve`/`MulticlassPrecisionRecallCurve` -- see those types' own docstrings for
+    why manual construction is not re-validated.
+    """
+    if len(curves) != len(labels_tuple):
+        raise RuntimeError(
+            f"internal error: multiclass curve count {len(curves)} does not match label count "
+            f"{len(labels_tuple)}"
+        )
+    if len(curves) < 2:
+        raise RuntimeError(
+            f"internal error: multiclass curve count {len(curves)} is below the required "
+            "minimum of 2"
+        )
+    positive_labels = tuple(curve.positive_label for curve in curves)
+    if positive_labels != labels_tuple:
+        raise RuntimeError(
+            f"internal error: multiclass curve positive_label order {positive_labels} does not "
+            f"match labels {labels_tuple}"
+        )
+    if len(set(positive_labels)) != len(positive_labels):
+        raise RuntimeError(
+            "internal error: multiclass curve positive_label values are not unique: "
+            f"{positive_labels}"
+        )
+
+
+def multiclass_roc_curve(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    labels: Sequence[int] | npt.NDArray[np.integer],
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
+) -> MulticlassRocCurve:
+    """Compute one binary, one-vs-rest `RocCurve` per label, in `labels`' own order.
+
+    `y_score` is a 2-D `(n_samples, len(labels))` score matrix -- column `i` is the one-vs-rest
+    ranking score for class `labels[i]`, exactly the same input shape and meaning
+    `multiclass_roc_auc_score` already accepts (an arbitrary finite ranking score, not required to
+    lie in `[0, 1]` or to sum to `1.0` across a row). `labels` is required (no inference from
+    `y_true`) and fixes the exact column order and the exact order of `result.curves` -- `labels`
+    does not need to be sorted, and is never sorted or deduplicated by this function.
+
+    There is no `average` parameter: this always returns the full per-class collection, one curve
+    per label, never an aggregate. There is no macro/weighted curve (averaging multiple curves'
+    points would need a shared axis/interpolation policy this module does not define) and no
+    micro curve in this function (mathematically well-defined via the same flattening
+    `multiclass_roc_auc_score(..., average="micro")` uses, but a separate, later API decision).
+
+    Every label named in `labels` must have positive effective support (present in `y_true` with
+    at least one sample whose `sample_weight`, if given, is positive) -- checked unconditionally,
+    raising `ValueError` naming every label with zero effective support at once, never a silent
+    skip or a degenerate curve. Once every named label has positive effective support and there
+    are at least 2 of them (guaranteed by the checks above), every label also has positive
+    effective *negative* support automatically (the other labels' effective samples) -- the same
+    reasoning `multiclass_roc_auc_score` already documents for its own non-micro path;
+    `roc_curve`'s own per-class negative-support check remains in place as a second line of
+    defense but is never expected to trigger here.
+
+    `result.curves[i]` is bit-for-bit identical to calling
+    `roc_curve(y_true, y_score[:, i], positive_label=labels[i], sample_weight=sample_weight)`
+    directly -- this function computes each class's curve by calling that same public function
+    once per column on already-validated inputs, rather than reimplementing or duplicating its
+    sorting/threshold/cumulative-weight arithmetic, so every existing tie/overflow/underflow/
+    `np.seterr`-isolation guarantee already documented for `roc_curve` applies here unchanged.
+    `result.curves[i].false_positive_rate`/`true_positive_rate` integrated via `auc` are therefore
+    also bit-for-bit identical to `multiclass_roc_auc_score(..., average=None)[i]` on the same
+    input, since both are built from the same per-column `roc_curve`-equivalent computation.
+
+    `sample_weight` follows the same contract as the binary ranking functions' `sample_weight`
+    (keyword-only, `Sequence`/1-D `ndarray`, length `n_samples`, non-negative, at least one
+    positive value, `bool` rejected, exact-integer-to-`float64`) -- the same weight for a sample
+    is used identically across every one-vs-rest curve.
+
+    For `N` samples and `C = len(labels)`: `O(C * N log N)` time (`C` independent per-column
+    sorts), `O(C * N)` memory (the `(N, C)` normalized score-matrix copy, plus `C` curves whose
+    combined output size is bounded by `C * (N + 1)`).
+
+    Raises
+    ------
+    TypeError
+        Same as `multiclass_roc_auc_score`.
+    ValueError
+        If `labels` is empty, contains a duplicate, or has fewer than 2 entries; if any raw
+        `y_true` value is not present in `labels`; if `y_score`'s shape does not match
+        `(len(y_true), len(labels))`; if `y_score` contains NaN/Inf or an integer not exactly
+        representable as `float64`; if `sample_weight`'s length does not match `y_true`, contains
+        a negative value, or sums to zero; or if any label in `labels` has zero effective support.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> y_true = [20, 10, 30, 20, 10, 30]
+    >>> y_score = np.array([
+    ...     [0.9, 0.3, 0.2], [0.2, 0.8, 0.3], [0.1, 0.2, 0.9],
+    ...     [0.7, 0.4, 0.3], [0.3, 0.6, 0.2], [0.2, 0.3, 0.8],
+    ... ])
+    >>> result = multiclass_roc_curve(y_true, y_score, labels=(20, 10, 30))
+    >>> result.labels
+    (20, 10, 30)
+    >>> len(result.curves)
+    3
+    """
+    labels_tuple = _normalize_explicit_labels(labels)
+    if len(labels_tuple) < 2:
+        raise ValueError("multiclass ranking scores require at least 2 labels")
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    allowed_labels = set(labels_tuple)
+    for index, value in enumerate(true_list):
+        if value not in allowed_labels:
+            raise ValueError(f"y_true[{index}] = {value} is not present in labels")
+
+    score_matrix = _normalize_score_matrix(y_score, len(true_list), len(labels_tuple))
+
+    weights = (
+        None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
+    )
+
+    _compute_effective_class_support(true_list, labels_tuple, weights, "multiclass_roc_curve")
+
+    curves_list: list[RocCurve] = []
+    for column, label in enumerate(labels_tuple):
+        try:
+            curves_list.append(
+                roc_curve(
+                    true_list,
+                    score_matrix[:, column],
+                    positive_label=label,
+                    sample_weight=weights,
+                )
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"failed to compute class label={label!r} from y_score column {column}: {exc}"
+            ) from exc
+    curves = tuple(curves_list)
+
+    _check_multiclass_curve_postconditions(curves, labels_tuple)
+    return MulticlassRocCurve(curves=curves)
+
+
+def multiclass_precision_recall_curve(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    labels: Sequence[int] | npt.NDArray[np.integer],
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
+) -> MulticlassPrecisionRecallCurve:
+    """Compute one binary, one-vs-rest `PrecisionRecallCurve` per label, in `labels`' own order.
+
+    See `multiclass_roc_curve` for the shared `y_score`/`labels`/`sample_weight`/effective-support/
+    complexity contract, which applies identically here. The one difference: unlike ROC, a
+    precision-recall curve does not require effective *negative* support for its label --
+    `precision_recall_curve` itself allows a `y_true` that is effectively all-positive for a given
+    class (precision is `1.0` at every real threshold). Both functions still share the exact same
+    positive-effective-support precheck (every label must have positive effective support);
+    `multiclass_precision_recall_curve` simply never adds ROC's additional negative-support
+    requirement on top of it, because the underlying `precision_recall_curve` call never needs it.
+
+    `result.curves[i]` is bit-for-bit identical to calling
+    `precision_recall_curve(y_true, y_score[:, i], positive_label=labels[i],
+    sample_weight=sample_weight)` directly, for the same structural reason `multiclass_roc_curve`
+    documents. Unlike ROC, this equivalence does **not** extend to `multiclass_average_precision_
+    score`: `auc(result.curves[i].recall, result.curves[i].precision)` computes the *trapezoidal*
+    area under the PR curve, a distinct quantity from `multiclass_average_precision_score(...,
+    average=None)[i]` (non-interpolated average precision) -- the same distinction `auc`'s own
+    docstring already documents for the binary case, unchanged per class here. The two are
+    different definitions; they are not guaranteed to differ numerically on every dataset, but
+    they must never be treated as interchangeable.
+
+    Raises
+    ------
+    TypeError
+        Same as `multiclass_roc_curve`.
+    ValueError
+        Same as `multiclass_roc_curve`, except no label needs effective negative support.
+    RuntimeError
+        If the computed result fails this function's own postconditions.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> y_true = [20, 10, 30, 20, 10, 30]
+    >>> y_score = np.array([
+    ...     [0.9, 0.3, 0.2], [0.2, 0.8, 0.3], [0.1, 0.2, 0.9],
+    ...     [0.7, 0.4, 0.3], [0.3, 0.6, 0.2], [0.2, 0.3, 0.8],
+    ... ])
+    >>> result = multiclass_precision_recall_curve(y_true, y_score, labels=(20, 10, 30))
+    >>> result.labels
+    (20, 10, 30)
+    >>> len(result.curves)
+    3
+    """
+    labels_tuple = _normalize_explicit_labels(labels)
+    if len(labels_tuple) < 2:
+        raise ValueError("multiclass ranking scores require at least 2 labels")
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    allowed_labels = set(labels_tuple)
+    for index, value in enumerate(true_list):
+        if value not in allowed_labels:
+            raise ValueError(f"y_true[{index}] = {value} is not present in labels")
+
+    score_matrix = _normalize_score_matrix(y_score, len(true_list), len(labels_tuple))
+
+    weights = (
+        None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
+    )
+
+    _compute_effective_class_support(
+        true_list, labels_tuple, weights, "multiclass_precision_recall_curve"
+    )
+
+    curves_list: list[PrecisionRecallCurve] = []
+    for column, label in enumerate(labels_tuple):
+        try:
+            curves_list.append(
+                precision_recall_curve(
+                    true_list,
+                    score_matrix[:, column],
+                    positive_label=label,
+                    sample_weight=weights,
+                )
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"failed to compute class label={label!r} from y_score column {column}: {exc}"
+            ) from exc
+    curves = tuple(curves_list)
+
+    _check_multiclass_curve_postconditions(curves, labels_tuple)
+    return MulticlassPrecisionRecallCurve(curves=curves)
 
 
 def auc(

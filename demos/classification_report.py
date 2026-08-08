@@ -7,19 +7,24 @@ Runs the existing public classification workflow --
     -> classification_metrics
     -> multiclass_roc_auc_score
     -> multiclass_average_precision_score
+    -> multiclass_roc_curve
 
 on a small, fully explicit, hand-written multiclass example (the same one
 used by `examples/classification_evaluation.py`, duplicated here so this
-script stays self-contained), and renders a report showing two contracts
+script stays self-contained), and renders a report showing three contracts
 this workflow depends on: rows/columns of the confusion matrix are
-`(true labels, predicted labels)`, and `y_score[:, i]` corresponds to
+`(true labels, predicted labels)`, `y_score[:, i]` corresponds to
 `labels[i]` -- in exactly the (deliberately unsorted) order `labels` is
-given, never a sorted one.
+given, never a sorted one -- and `multiclass_roc_curve`'s own `result.curves[i]`
+follows that same order, rendered here as real per-class ROC curves.
 
-This script does not call `roc_curve`/`precision_recall_curve` and does not
-render any curve -- `improcv` does not yet have a public multiclass curve
-result type, and this demo shows the stable score-based API, not a design
-for API that does not exist yet.
+This script does not call `multiclass_precision_recall_curve` or render a
+precision-recall curve -- one rendered curve type is enough to demonstrate the
+new API without turning this demo into a general plotting surface; the
+distinction between a PR curve's trapezoidal area and average precision is
+already demonstrated in `examples/classification_evaluation.py`. This remains
+a demo script rendering one fixed report figure, not a public plotting API --
+`improcv.visualization` is not extended by this file.
 
 This script is the source of truth for `docs/assets/classification-report.png`;
 the PNG must never be edited by hand. Run with:
@@ -53,6 +58,12 @@ _FIGURE_DPI = 150
 _NEUTRAL_ACCENT = "#4C72B0"
 _CLASSIFICATION_ACCENT = "#009E73"
 _RANKING_ACCENT = "#CC79A7"
+_ROC_ACCENT = "#D55E00"
+
+# A small, fixed, deterministic color cycle for per-class ROC curves -- not Matplotlib's own
+# default cycle, whose exact colors are not part of this module's own contract. Reused (wrapping
+# around) if there are ever more labels than colors, a legibility trade-off, not a bug.
+_ROC_CURVE_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9")
 
 # Minimum on-screen gap (in pixels, at the figure's own render resolution) required between a
 # panel's text bounding box and its axes' bounding box on every side; see find_text_overflow.
@@ -84,6 +95,7 @@ class ClassificationReport(NamedTuple):
     ap_macro: float
     ap_weighted: float
     ap_micro: float
+    roc_curves: im.MulticlassRocCurve
 
 
 def build_classification_inputs() -> ClassificationInputs:
@@ -164,6 +176,8 @@ def compute_classification_report(inputs: ClassificationInputs) -> Classificatio
         inputs.y_true, inputs.y_score, labels=labels, average="micro"
     )
 
+    roc_curves = im.multiclass_roc_curve(inputs.y_true, inputs.y_score, labels=labels)
+
     assert confusion.labels == inputs.labels
     assert confusion.matrix.shape == (3, 3)
     assert np.array_equal(
@@ -195,6 +209,16 @@ def compute_classification_report(inputs: ClassificationInputs) -> Classificatio
     for scalar in (auc_macro, auc_weighted, auc_micro, ap_macro, ap_weighted, ap_micro):
         assert np.isfinite(scalar)
 
+    # multiclass_roc_curve preserves labels' own (unsorted) order, and each curve's trapezoidal
+    # area is bit-for-bit identical to that same class's multiclass_roc_auc_score(average=None)
+    # entry -- both real, load-bearing contracts of the new API, not just rendering conveniences.
+    assert roc_curves.labels == inputs.labels
+    assert len(roc_curves.curves) == 3
+    for index, curve in enumerate(roc_curves.curves):
+        assert curve.positive_label == inputs.labels[index]
+        area = im.auc(curve.false_positive_rate, curve.true_positive_rate)
+        assert area == auc_per_class[index]
+
     return ClassificationReport(
         confusion=confusion,
         per_class=per_class,
@@ -207,6 +231,7 @@ def compute_classification_report(inputs: ClassificationInputs) -> Classificatio
         ap_macro=float(ap_macro),
         ap_weighted=float(ap_weighted),
         ap_micro=float(ap_micro),
+        roc_curves=roc_curves,
     )
 
 
@@ -366,6 +391,32 @@ def _render_confusion_matrix(
     )
 
 
+def _render_roc_curves(ax: Axes, roc_curves: im.MulticlassRocCurve) -> None:
+    """Draw one one-vs-rest ROC curve per label, directly from `roc_curves.curves`.
+
+    Curves are drawn in `roc_curves.labels`' own order (never sorted) -- the same order
+    `multiclass_roc_curve` itself preserves from the caller's `labels` argument. Never goes
+    through `improcv.visualization`, which this demo does not extend.
+    """
+    for index, curve in enumerate(roc_curves.curves):
+        color = _ROC_CURVE_COLORS[index % len(_ROC_CURVE_COLORS)]
+        ax.plot(
+            curve.false_positive_rate,
+            curve.true_positive_rate,
+            color=color,
+            linewidth=1.6,
+            label=f"label {roc_curves.labels[index]}",
+        )
+    ax.plot([0.0, 1.0], [0.0, 1.0], color="gray", linewidth=0.8, linestyle="--")
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_xlabel("false positive rate", fontsize=8)
+    ax.set_ylabel("true positive rate", fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.set_title("Per-class ROC curves", fontsize=10, loc="left")
+    ax.legend(loc="lower right", fontsize=7, framealpha=0.9)
+
+
 def find_text_overflow(
     panel_texts: Sequence[tuple[Axes, Text]],
     renderer: RendererBase,
@@ -455,11 +506,20 @@ def build_classification_figure(
     panel_texts.append((contract_ax, contract_text))
     _add_border(contract_ax, _NEUTRAL_ACCENT)
 
-    main = outer[1].subgridspec(1, 2, width_ratios=(1.0, 1.35), wspace=0.16)
+    # 3 columns instead of the original 2: confusion matrix, the new per-class ROC curve panel,
+    # and the report column -- widened overall (0.9 + 0.95 + 1.25 vs. the original 1.0 + 1.35) so
+    # the confusion matrix and report column keep essentially their original on-figure width at
+    # 1920x1080, with the new ROC panel fit into the freed middle space rather than shrinking
+    # either existing panel.
+    main = outer[1].subgridspec(1, 3, width_ratios=(0.9, 0.95, 1.25), wspace=0.16)
     cm_ax = fig.add_subplot(main[0])
     _render_confusion_matrix(cm_ax, report.confusion, labels)
 
-    report_grid = main[1].subgridspec(4, 1, height_ratios=(0.28, 0.30, 0.22, 0.20), hspace=0.12)
+    roc_ax = fig.add_subplot(main[1])
+    _render_roc_curves(roc_ax, report.roc_curves)
+    _add_border(roc_ax, _ROC_ACCENT)
+
+    report_grid = main[2].subgridspec(4, 1, height_ratios=(0.28, 0.30, 0.22, 0.20), hspace=0.12)
 
     report_contract_ax = fig.add_subplot(report_grid[0])
     report_contract_ax.axis("off")

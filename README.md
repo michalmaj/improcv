@@ -41,8 +41,9 @@ Three workflows cover most first uses of `improcv`:
    `sample_perspective`, apply it identically to an image and its segmentation mask, and replay it
    later (see "Augmentation sampling and replay" below).
 3. **Classification evaluation** -- confusion matrices and per-class metrics
-   (`confusion_matrix`/`classification_metrics`), plus multiclass one-vs-rest ranking evaluation
-   (`multiclass_roc_auc_score`/`multiclass_average_precision_score`) (see "Classification
+   (`confusion_matrix`/`classification_metrics`), multiclass one-vs-rest ranking evaluation
+   (`multiclass_roc_auc_score`/`multiclass_average_precision_score`), and the per-class curves
+   themselves (`multiclass_roc_curve`/`multiclass_precision_recall_curve`) (see "Classification
    evaluation" below).
 
 Two runnable, self-contained recipes cover all three end to end -- no extra data, no network, no
@@ -1210,10 +1211,41 @@ im.multiclass_roc_auc_score(y_true_partial, y_score_partial, labels=[0, 1, 2], a
 ```
 
 `sample_weight` for `"micro"` is repeated once per class (`np.repeat`, not `np.tile`) before
-flattening, since each sample now contributes `len(labels)` cells instead of one. No public
-multiclass curve types are introduced -- `roc_curve`/`precision_recall_curve` already give a single
-class's own curve when called with the matching score column and `positive_label`. No one-vs-one
+flattening, since each sample now contributes `len(labels)` cells instead of one. No one-vs-one
 mode, no multilabel support.
+
+Multiclass, one-vs-rest curves -- `multiclass_roc_curve`/`multiclass_precision_recall_curve`:
+
+```python
+roc = im.multiclass_roc_curve(y_true, y_score, labels=labels)
+pr = im.multiclass_precision_recall_curve(y_true, y_score, labels=labels)
+
+roc.labels == tuple(labels)  # derived from each curve's own positive_label, never sorted
+len(roc.curves) == len(labels)  # one binary RocCurve per label, in labels' own order
+```
+
+These give the per-class curves themselves, not just the scalar scores above:
+`result.curves[i]` is `labels[i]`'s own binary `RocCurve`/`PrecisionRecallCurve` -- bit-for-bit
+identical to calling `roc_curve(y_true, y_score[:, i], positive_label=labels[i],
+sample_weight=sample_weight)`/`precision_recall_curve(...)` directly. `MulticlassRocCurve`/
+`MulticlassPrecisionRecallCurve` each store only `curves`; `labels` is a read-only property
+derived from `tuple(curve.positive_label for curve in curves)`, never a separately stored field,
+so there is nothing that could disagree with `curves`' own order. Neither function accepts
+`average`: they always return the full per-class collection, with no macro/weighted/micro
+aggregate curve in this API -- a macro/weighted curve would need a shared axis/interpolation
+policy this module does not define, and a micro curve (well-defined via the same flattening
+`average="micro"` already uses above) is a separate, later API decision, not part of this one.
+
+For ROC, `auc(result.curves[i].false_positive_rate, result.curves[i].true_positive_rate)` is
+bit-for-bit identical to `multiclass_roc_auc_score(..., average=None)[i]` on the same input --
+the same relationship `roc_auc_score`/`auc(*roc_curve's rate arrays)` already have for a single
+class. **For precision-recall, this equivalence does not hold**:
+`auc(result.curves[i].recall, result.curves[i].precision)` is the *trapezoidal* area under the PR
+curve, a distinct quantity from `multiclass_average_precision_score(..., average=None)[i]`
+(non-interpolated average precision) -- the same distinction `auc`'s own docstring already makes
+for the binary case, never guaranteed equal or guaranteed to differ, just never the same
+definition. No plotting API is added here -- `demos/classification_report.py` renders real
+per-class ROC curves with plain Matplotlib calls, not through a public `improcv` plotting surface.
 
 Augmentation sampling and replay -- flip:
 
