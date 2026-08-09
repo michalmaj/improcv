@@ -10,7 +10,7 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
-## [0.4.0a3] - 2026-08-08
+## [0.4.0a3] - 2026-08-09
 
 ### Added
 - `multiclass_roc_curve`/`multiclass_precision_recall_curve`, returning `MulticlassRocCurve`/
