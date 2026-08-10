@@ -92,6 +92,21 @@ image = cv2.imread("photo.jpg")
 resized = im.resize(image, width=640)
 ```
 
+Loading images -- Unicode-safe on Windows, via `Path.read_bytes` + `cv2.imdecode`, never
+`cv2.imread`:
+
+```python
+import improcv as im
+
+image = im.load_image("photo.jpg")                    # color: 3-channel BGR uint8 (default)
+gray = im.load_image("photo.jpg", mode="grayscale")    # 2-D uint8 OpenCV grayscale decode
+raw = im.load_image("image16.png", mode="unchanged")   # OpenCV's IMREAD_UNCHANGED decode;
+                                                         # dtype/channel count may vary
+```
+
+`load_image` has no mask-specific semantics for any mode -- `mode="unchanged"` is not a
+general-purpose mask loader.
+
 Finding and sorting contours:
 
 ```python

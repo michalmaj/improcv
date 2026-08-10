@@ -62,10 +62,12 @@ def main() -> None:
             assert pair.image.stem == pair.mask.stem
 
         first_pair = pairs[0]
-        image = cv2.imread(str(first_pair.image), cv2.IMREAD_COLOR)
-        mask = cv2.imread(str(first_pair.mask), cv2.IMREAD_UNCHANGED)
+        image = im.load_image(first_pair.image)
+        # This example wrote this specific mask itself, moments earlier, as a known,
+        # single-channel synthetic PNG -- mode="unchanged" here is not a general
+        # segmentation-mask semantic guarantee (see load_image's own docstring).
+        mask = im.load_image(first_pair.mask, mode="unchanged")
 
-        assert image is not None and mask is not None
         assert image.dtype == np.uint8 and mask.dtype == np.uint8
         assert image.shape[:2] == mask.shape[:2]
 

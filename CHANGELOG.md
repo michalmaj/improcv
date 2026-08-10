@@ -10,6 +10,20 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `ImageReadMode` (`Literal["color", "grayscale", "unchanged"]`) and
+  `load_image(path, *, mode="color")`, the first `0.4.x` single-image loading slice: reads a
+  file's bytes through `Path.read_bytes()` and decodes them with `cv2.imdecode` -- never
+  `cv2.imread` -- so a path containing characters outside a Windows machine's active code page
+  still decodes correctly. `mode="color"`/`"grayscale"` always return `uint8` (3-channel BGR /
+  2-D respectively, with automatic JPEG EXIF-orientation applied); `mode="unchanged"` returns
+  whatever `cv2.IMREAD_UNCHANGED` produces (dtype/channel count vary by source, no EXIF
+  orientation applied, no mask-loading guarantee). For any mode, `load_image(path, mode=X)` is
+  `np.array_equal` to `cv2.imdecode` applied directly to the same bytes with the corresponding
+  flag -- typed per mode via `@overload` (`ImageU8` for `color`/`grayscale`, `Image` for
+  `unchanged`). See `docs/design/0.4.0a4-load-image.md` for the full frozen contract. No new
+  dependency.
+
 ## [0.4.0a3] - 2026-08-09
 
 ### Added

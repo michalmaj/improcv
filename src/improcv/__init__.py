@@ -154,6 +154,7 @@ from improcv.hough import (
     hough_line_segments,
     hough_lines,
 )
+from improcv.io import ImageReadMode, load_image
 from improcv.manifest import (
     PerceptualHashManifest,
     PerceptualHashManifestChange,
@@ -251,6 +252,7 @@ __all__ = [
     "Image",
     "ImageFloat32",
     "ImageMaskPair",
+    "ImageReadMode",
     "ImageU8",
     "InpaintMethod",
     "Labels",
@@ -355,6 +357,7 @@ __all__ = [
     "inpaint",
     "invert",
     "laplacian_edge",
+    "load_image",
     "load_onnx_network",
     "load_onnx_network_from_bytes",
     "match_features",
