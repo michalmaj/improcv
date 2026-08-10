@@ -683,6 +683,11 @@ def test_matches_direct_cv2_imdecode_exactly(
 
     result = load_image(path, mode=mode)
     oracle = cv2.imdecode(np.frombuffer(encoded_bytes, dtype=np.uint8), flag)
+    # cv2.imdecode's stubs type the result as MatLike | None (OpenCV 4.x stubs; OpenCV 5.x
+    # types it as non-optional) -- these bytes are known-good, so this narrows for Pyright
+    # while also catching a genuinely broken test fixture with a clear message instead of
+    # a confusing np.array_equal failure.
+    assert oracle is not None
     assert np.array_equal(result, oracle)
 
 
@@ -702,6 +707,7 @@ def test_unicode_str_path(tmp_path: Path) -> None:
     # The oracle is direct in-memory cv2.imdecode, never cv2.imread -- cv2.imread's
     # filename-based handling is exactly what this whole design avoids.
     oracle = cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert oracle is not None
     result = load_image(str(path))
     assert np.array_equal(result, oracle)
 
@@ -712,6 +718,7 @@ def test_unicode_path_object(tmp_path: Path) -> None:
     path.write_bytes(_encode_png(_uint8_bgr(rng)))
 
     oracle = cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert oracle is not None
     result = load_image(path)
     assert np.array_equal(result, oracle)
 
@@ -722,6 +729,7 @@ def test_unicode_custom_pathlike(tmp_path: Path) -> None:
     path.write_bytes(_encode_png(_uint8_bgr(rng)))
 
     oracle = cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert oracle is not None
     result = load_image(_CustomPathLikeStr(str(path)))
     assert np.array_equal(result, oracle)
 
@@ -760,6 +768,7 @@ def test_differential_against_direct_cv2_imdecode(tmp_path: Path) -> None:
             for mode, flag in flags_by_mode.items():
                 total_comparisons += 1
                 oracle = cv2.imdecode(buffer, flag)
+                assert oracle is not None, "oracle decode of a known-good generated fixture failed"
                 result = load_image(path, mode=mode)
                 if np.array_equal(result, oracle):
                     matched_comparisons += 1
