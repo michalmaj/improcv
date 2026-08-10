@@ -214,7 +214,10 @@ def test_rejects_empty_string_path() -> None:
 
 
 def test_rejects_embedded_nul_in_path() -> None:
-    with pytest.raises(ValueError, match="null byte"):
+    # CPython's own message differs by platform: "embedded null byte" (POSIX) vs.
+    # "embedded null character" (Windows) -- both come straight from Path.read_bytes()'s
+    # underlying open(), unmodified by load_image, so the match here covers both.
+    with pytest.raises(ValueError, match="null (byte|character)"):
         load_image("abc\x00def.png")
 
 
@@ -240,8 +243,13 @@ def test_missing_file_raises_file_not_found_error(tmp_path: Path) -> None:
         load_image(tmp_path / "does-not-exist.png")
 
 
-def test_directory_path_raises_is_a_directory_error(tmp_path: Path) -> None:
-    with pytest.raises(IsADirectoryError):
+def test_directory_path_raises_native_os_error(tmp_path: Path) -> None:
+    # Native, unwrapped OSError either way (design doc §11/§8) -- but the exact subclass
+    # differs by platform: opening a directory for reading raises IsADirectoryError on
+    # POSIX, and PermissionError on Windows (there is no EISDIR there; CreateFile just
+    # denies access) -- both are Path.read_bytes()'s own behavior, not load_image's.
+    expected = PermissionError if sys.platform.startswith("win") else IsADirectoryError
+    with pytest.raises(expected):
         load_image(tmp_path)
 
 
@@ -361,7 +369,10 @@ def test_empty_file_raises_value_error_naming_path(tmp_path: Path) -> None:
     path.write_bytes(b"")
     with pytest.raises(ValueError, match=r"empty\.png") as exc_info:
         load_image(path)
-    assert str(path) in str(exc_info.value)
+    # The message embeds str(source)!r (a repr), which escapes backslashes on Windows --
+    # comparing against repr(str(path)) instead of str(path) keeps this assertion accurate
+    # on every platform, not just POSIX ones where the two happen to coincide.
+    assert repr(str(path)) in str(exc_info.value)
 
 
 def test_empty_file_never_reaches_cv2_imdecode(
@@ -383,7 +394,7 @@ def test_corrupt_file_raises_value_error_naming_path(tmp_path: Path) -> None:
     path.write_bytes(b"this is not a real image file, just some bytes")
     with pytest.raises(ValueError, match=r"corrupt\.png") as exc_info:
         load_image(path)
-    assert str(path) in str(exc_info.value)
+    assert repr(str(path)) in str(exc_info.value)
 
 
 def test_empty_file_and_corrupt_file_share_the_same_semantic_message(tmp_path: Path) -> None:
