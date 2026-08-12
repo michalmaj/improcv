@@ -36,7 +36,6 @@ import os
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 import cv2
 import numpy as np
@@ -108,12 +107,8 @@ def main() -> None:
         hash_size = 8
         hashes: dict[str | os.PathLike[str], im.PerceptualHash] = {}
         for path in paths:
-            decoded = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-            if decoded is None:
-                raise RuntimeError(f"could not decode {path}")
-            # cv2.imread's stubs type the result as the loose MatLike; IMREAD_GRAYSCALE always
-            # produces a uint8 array in practice.
-            hashes[path] = im.average_hash(cast(im.ImageU8, decoded), hash_size=hash_size)
+            decoded = im.load_image(path, mode="grayscale")
+            hashes[path] = im.average_hash(decoded, hash_size=hash_size)
 
         assert str(hashes[a_path]) == "55aa55aa55aa55aa"
         assert str(hashes[b_path]) == "95aa55aa55aa55aa"
