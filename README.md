@@ -85,12 +85,29 @@ Regenerate this image and see other demos in
 ## Usage
 
 ```python
-import cv2
 import improcv as im
 
-image = cv2.imread("photo.jpg")
+image = im.load_image("photo.jpg")
 resized = im.resize(image, width=640)
 ```
+
+`load_image` reads `path`'s bytes through Python's own filesystem handling and decodes them with
+`cv2.imdecode` -- never `cv2.imread(str(path), ...)`, whose filename-based handling is not
+reliable on Windows for paths containing characters outside the active code page. `mode` selects
+the decode policy:
+
+```python
+image = im.load_image("photo.jpg")                      # mode="color" (default): BGR, uint8
+gray = im.load_image("photo.jpg", mode="grayscale")      # 2-D, uint8, OpenCV's own gray decode
+raw = im.load_image("image16.png", mode="unchanged")     # OpenCV's IMREAD_UNCHANGED result --
+                                                           # dtype/channel count may vary by source
+```
+
+`mode="grayscale"` is OpenCV's own codec-level grayscale decode, not guaranteed identical to
+`ensure_gray(im.load_image(path))`. `mode="unchanged"` has no mask-specific semantics -- it is not
+a general segmentation-mask loader, and does not guarantee preserving a palette-indexed source as
+a class-index map. `load_image` reads a file's bytes exactly once and returns a new, independent
+array; see its docstring for the full path/error/decode contract.
 
 Finding and sorting contours:
 

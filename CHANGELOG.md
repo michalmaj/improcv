@@ -10,6 +10,16 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `load_image(path, *, mode="color"|"grayscale"|"unchanged") -> ImageU8 | Image` (`src/improcv/
+  io.py`, new module): Unicode-safe single-image loading -- reads `path`'s bytes via `Path.
+  read_bytes()` and decodes with `cv2.imdecode`, never `cv2.imread`, so paths with characters
+  outside a Windows machine's active code page are handled reliably. Guaranteed, for a successful
+  call, array-equal to `cv2.imdecode` applied directly to the same bytes with the corresponding
+  `cv2.IMREAD_*` flag. Typed via `@overload`: `mode="color"`/`"grayscale"` return `ImageU8`,
+  `mode="unchanged"` returns `Image` (its dtype/channel count follow the source). No dependency
+  added. See `docs/design/0.4.0a4-load-image.md`.
+
 ## [0.4.0a3] - 2026-08-09
 
 ### Added
