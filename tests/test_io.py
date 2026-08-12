@@ -242,7 +242,11 @@ def test_rejects_empty_string_path() -> None:
 
 
 def test_rejects_nul_byte_path() -> None:
-    with pytest.raises(ValueError, match="null byte"):
+    # Python's own filesystem layer raises ValueError for an embedded NUL, but its exact wording
+    # is platform-dependent -- verified via CI: "embedded null byte" on POSIX, "embedded null
+    # character" on Windows. `load_image` does not special-case this (design doc §8), so the test
+    # only pins the exception type, not platform-specific wording.
+    with pytest.raises(ValueError, match="null"):
         load_image("a\x00b.png")
 
 
@@ -266,10 +270,15 @@ def test_missing_file_raises_file_not_found_error(tmp_path: Path) -> None:
         load_image(tmp_path / "does_not_exist.png")
 
 
-def test_directory_path_raises_is_a_directory_error(tmp_path: Path) -> None:
+def test_directory_path_raises_os_error(tmp_path: Path) -> None:
+    # Which OSError subclass surfaces for a directory path is itself platform-dependent, verified
+    # via CI: POSIX's Path.open() raises IsADirectoryError, but Windows has no equivalent errno and
+    # raises PermissionError ([Errno 13]) instead. Both are real, native OSError subclasses from
+    # Path.read_bytes() itself, propagated unwrapped -- design doc §8/§11 only promises "a native
+    # OSError propagates unchanged", not one specific subclass across every platform.
     directory = tmp_path / "a_directory"
     directory.mkdir()
-    with pytest.raises(IsADirectoryError):
+    with pytest.raises((IsADirectoryError, PermissionError)):
         load_image(directory)
 
 
