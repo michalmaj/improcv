@@ -11,14 +11,18 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 ## [Unreleased]
 
 ### Added
-- `load_image(path, *, mode="color"|"grayscale"|"unchanged") -> ImageU8 | Image` (`src/improcv/
-  io.py`, new module): Unicode-safe single-image loading -- reads `path`'s bytes via `Path.
-  read_bytes()` and decodes with `cv2.imdecode`, never `cv2.imread`, so paths with characters
-  outside a Windows machine's active code page are handled reliably. Guaranteed, for a successful
-  call, array-equal to `cv2.imdecode` applied directly to the same bytes with the corresponding
-  `cv2.IMREAD_*` flag. Typed via `@overload`: `mode="color"`/`"grayscale"` return `ImageU8`,
-  `mode="unchanged"` returns `Image` (its dtype/channel count follow the source). No dependency
-  added. See `docs/design/0.4.0a4-load-image.md`.
+- `load_image(path, *, mode="color"|"grayscale"|"unchanged") -> ImageU8 | Image` and the
+  `ImageReadMode` type it takes (`src/improcv/io.py`, new module): Unicode-safe single-image
+  loading -- reads `path`'s bytes via `Path.read_bytes()` and decodes with `cv2.imdecode`, never
+  `cv2.imread`, so paths with characters outside a Windows machine's active code page are handled
+  reliably. Guaranteed, for a successful call, array-equal to `cv2.imdecode` applied directly to
+  the same bytes with the corresponding `cv2.IMREAD_*` flag. Typed via `@overload`:
+  `mode="color"`/`"grayscale"` return `ImageU8`; `mode="unchanged"` returns OpenCV's own
+  `IMREAD_UNCHANGED` decoded result as `Image` -- dtype and channel count may vary with the
+  encoded input and codec (e.g. a palette/indexed PNG source decodes to `uint8` BGR, not an index
+  map). A read failure (missing file, permission error) propagates as a native `OSError`; a decode
+  failure -- whether `cv2.imdecode` returns `None` or raises `cv2.error` -- raises `ValueError`
+  naming the source path. No dependency added. See `docs/design/0.4.0a4-load-image.md`.
 
 ## [0.4.0a3] - 2026-08-09
 

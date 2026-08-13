@@ -42,6 +42,18 @@ def _normalize_path(path: object) -> Path:
     return Path(raw_path)
 
 
+def _validate_mode(mode: object) -> None:
+    # `require_one_of`'s `value not in allowed` membership check is only safe once `value` is
+    # known to be a plain `str` -- a non-str object (e.g. a NumPy array) can make `==`/`bool()`
+    # raise or behave ambiguously (unhashable-type errors, "truth value of an array is ambiguous")
+    # instead of the controlled `ValueError` this API promises. Gating on `isinstance(mode, str)`
+    # first makes every runtime object -- comparable or not, hashable or not -- resolve to the
+    # same controlled `ValueError`.
+    if not isinstance(mode, str):
+        raise ValueError(f"mode must be one of {_MODES}, got {mode!r}")
+    require_one_of(mode, _MODES, "mode")
+
+
 @overload
 def load_image(path: str | os.PathLike[str], *, mode: Literal["color"] = "color") -> ImageU8: ...
 @overload
@@ -128,14 +140,17 @@ def load_image(path: str | os.PathLike[str], *, mode: ImageReadMode = "color") -
     OpenCV codec and the decoded image's own size, not characterized here.
     """
     source = _normalize_path(path)
-    require_one_of(mode, _MODES, "mode")
+    _validate_mode(mode)
 
     payload = source.read_bytes()
     if not payload:
         raise ValueError(f"failed to decode image from {str(source)!r}: file is empty")
 
     buffer = np.frombuffer(payload, dtype=np.uint8)
-    decoded = cv2.imdecode(buffer, _FLAGS[mode])
+    try:
+        decoded = cv2.imdecode(buffer, _FLAGS[mode])
+    except cv2.error as exc:
+        raise ValueError(f"failed to decode image from {str(source)!r}") from exc
     if decoded is None:
         raise ValueError(f"failed to decode image from {str(source)!r}")
 

@@ -1547,8 +1547,11 @@ pairs = im.discover_image_mask_pairs(
 )
 
 for pair in pairs:
-    image = cv2.imread(str(pair.image))
-    mask = cv2.imread(str(pair.mask), cv2.IMREAD_UNCHANGED)
+    image = im.load_image(pair.image)
+    # mode="unchanged" preserves OpenCV's decoded representation for that specific file; it does
+    # not provide segmentation-mask semantics or validation (no palette/class-index guarantee, no
+    # shape/dtype check against `image`) -- see `load_image`'s own docstring.
+    mask = im.load_image(pair.mask, mode="unchanged")
 ```
 
 `discover_image_mask_pairs` runs `discover_images` once for each root (its own `image_extensions`/
