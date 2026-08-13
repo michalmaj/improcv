@@ -98,10 +98,12 @@ def load_image(path: str | os.PathLike[str], *, mode: ImageReadMode = "color") -
         - ``"unchanged"`` (`cv2.IMREAD_UNCHANGED`): returns the ndarray produced by OpenCV's
           `IMREAD_UNCHANGED` decode policy; this is still a decoded representation, not the
           encoded file's raw pixel/storage representation or metadata. Dtype and channel count
-          follow the source (8-bit or 16-bit grayscale/BGR/BGRA are preserved exactly, verified
-          directly) -- **except** a palette/indexed source, which OpenCV expands to `uint8` BGR
-          rather than preserving as an index map (verified directly; do not assume otherwise).
-          EXIF orientation is **not** applied, even without `cv2.IMREAD_IGNORE_ORIENTATION` set --
+          **may vary with the encoded input and codec** -- not a fixed, universal guarantee for
+          every codec/build. Verified directly for PNG: 8-bit and 16-bit grayscale/BGR/BGRA
+          sources are preserved exactly, but a palette/indexed source is instead expanded by
+          OpenCV to `uint8` BGR rather than preserved as an index map (do not assume index-map
+          preservation for any other source/codec not verified here). EXIF orientation is **not**
+          applied, even without `cv2.IMREAD_IGNORE_ORIENTATION` set --
           a real, documented OpenCV exception to the other two modes' default. No metadata (EXIF,
           ICC profile, or otherwise) is ever returned, for any mode.
 

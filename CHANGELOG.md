@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.4.0a4] - 2026-08-13
+
 ### Added
 - `load_image(path, *, mode="color"|"grayscale"|"unchanged") -> ImageU8 | Image` and the
   `ImageReadMode` type it takes (`src/improcv/io.py`, new module): Unicode-safe single-image
@@ -22,7 +24,9 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   encoded input and codec (e.g. a palette/indexed PNG source decodes to `uint8` BGR, not an index
   map). A read failure (missing file, permission error) propagates as a native `OSError`; a decode
   failure -- whether `cv2.imdecode` returns `None` or raises `cv2.error` -- raises `ValueError`
-  naming the source path. No dependency added. See `docs/design/0.4.0a4-load-image.md`.
+  naming the source path. `load_image` has no mask-specific semantics for any mode -- it is a
+  generic single-image decoder, not a mask/label loader. No dependency added. See
+  `docs/design/0.4.0a4-load-image.md`.
 
 ## [0.4.0a3] - 2026-08-09
 
