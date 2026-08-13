@@ -72,6 +72,22 @@ def _build_indexed_png(indices: np.ndarray, palette: list[tuple[int, int, int]])
     )
 
 
+def _huge_declared_dimensions_png() -> bytes:
+    """Build a tiny (~70-byte) PNG whose IHDR declares dimensions far beyond OpenCV's own
+    `CV_IO_MAX_IMAGE_PIXELS` safety limit -- a real, deterministic, version-independent way to make
+    `cv2.imdecode` *raise* `cv2.error` rather than return `None`. The IDAT payload itself is a
+    handful of zero bytes; OpenCV's pixel-count assertion fires before any real decode work (and
+    thus before any real allocation) is attempted, so this fixture is safe to construct and decode
+    on every supported platform without allocating anything close to `100000 x 100000` pixels.
+    """
+    width, height = 100_000, 100_000
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit, color type 2 (RGB)
+    idat = zlib.compress(b"\x00" * 10, 9)
+    return (
+        b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", idat) + _chunk(b"IEND", b"")
+    )
+
+
 def _exif_orientation_app1(orientation: int) -> bytes:
     """Build a minimal JPEG APP1/EXIF segment carrying a single Orientation tag -- stdlib only."""
     tiff_header = b"II" + struct.pack("<H", 42) + struct.pack("<I", 8)
@@ -365,46 +381,37 @@ def test_unicode_filename_custom_pathlike(tmp_path: Path) -> None:
 # =====================================================================================
 
 
-def test_rejects_bad_mode_string(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["color", "grayscale", "unchanged"])
+def test_accepts_legal_modes(tmp_path: Path, mode: ImageReadMode) -> None:
+    p = tmp_path / "a.png"
+    _write_image(p, np.zeros((4, 4, 3), dtype=np.uint8))
+    result = load_image(p, mode=mode)
+    assert result is not None
+
+
+_INVALID_RUNTIME_MODES = [
+    pytest.param("bogus", id="bad_string"),
+    pytest.param(1, id="int"),
+    pytest.param(True, id="bool"),
+    pytest.param(None, id="none"),
+    pytest.param(cv2.IMREAD_COLOR, id="raw_cv2_flag"),
+    # A 0-d ndarray compares equal (via __eq__) to a matching string, so it must be rejected by
+    # type before any membership check runs, or it would silently be treated as a legal mode.
+    pytest.param(np.array("color"), id="ndarray_scalar_matching_value"),
+    # A multi-element ndarray makes `value in allowed`'s implicit bool() raise "truth value of an
+    # array is ambiguous" if it ever reaches a raw membership check unguarded.
+    pytest.param(np.array(["color", "x"]), id="ndarray_multi_element"),
+    pytest.param(object(), id="object"),
+    pytest.param(_Unrelated.A, id="unrelated_enum"),
+]
+
+
+@pytest.mark.parametrize("value", _INVALID_RUNTIME_MODES)
+def test_rejects_invalid_runtime_mode(tmp_path: Path, value: object) -> None:
     p = tmp_path / "a.png"
     _write_image(p, np.zeros((4, 4), dtype=np.uint8))
     with pytest.raises(ValueError, match="mode must be one of"):
-        load_image(p, mode="bogus")  # type: ignore[arg-type]
-
-
-def test_rejects_raw_cv2_flag_as_mode(tmp_path: Path) -> None:
-    p = tmp_path / "a.png"
-    _write_image(p, np.zeros((4, 4), dtype=np.uint8))
-    with pytest.raises(ValueError, match="mode must be one of"):
-        load_image(p, mode=cv2.IMREAD_COLOR)  # type: ignore[arg-type]
-
-
-def test_rejects_int_mode(tmp_path: Path) -> None:
-    p = tmp_path / "a.png"
-    _write_image(p, np.zeros((4, 4), dtype=np.uint8))
-    with pytest.raises(ValueError, match="mode must be one of"):
-        load_image(p, mode=1)  # type: ignore[arg-type]
-
-
-def test_rejects_bool_mode(tmp_path: Path) -> None:
-    p = tmp_path / "a.png"
-    _write_image(p, np.zeros((4, 4), dtype=np.uint8))
-    with pytest.raises(ValueError, match="mode must be one of"):
-        load_image(p, mode=True)  # type: ignore[arg-type]
-
-
-def test_rejects_none_mode(tmp_path: Path) -> None:
-    p = tmp_path / "a.png"
-    _write_image(p, np.zeros((4, 4), dtype=np.uint8))
-    with pytest.raises(ValueError, match="mode must be one of"):
-        load_image(p, mode=None)  # type: ignore[arg-type]
-
-
-def test_rejects_unrelated_enum_as_mode(tmp_path: Path) -> None:
-    p = tmp_path / "a.png"
-    _write_image(p, np.zeros((4, 4), dtype=np.uint8))
-    with pytest.raises(ValueError, match="mode must be one of"):
-        load_image(p, mode=_Unrelated.A)  # type: ignore[arg-type]
+        load_image(p, mode=value)  # type: ignore[arg-type]
 
 
 def test_mode_validated_before_filesystem_access(
@@ -460,6 +467,25 @@ def test_truncated_jpeg_raises_value_error(tmp_path: Path) -> None:
     p.write_bytes(truncated)
     with pytest.raises(ValueError, match="failed to decode image"):
         load_image(p)
+
+
+def test_cv2_error_during_decode_raises_value_error(tmp_path: Path) -> None:
+    # cv2.imdecode does not always signal a decode failure by returning None -- it can also raise
+    # cv2.error directly (e.g. OpenCV's own CV_IO_MAX_IMAGE_PIXELS safety assertion for a source
+    # whose declared dimensions are absurd). Both are public decode failures and must normalize to
+    # the same ValueError naming the source path, never leak a raw cv2.error.
+    p = tmp_path / "huge_declared_dimensions.png"
+    p.write_bytes(_huge_declared_dimensions_png())
+    with pytest.raises(ValueError, match="failed to decode image"):
+        load_image(p)
+
+
+def test_cv2_error_during_decode_is_chained_as_cause(tmp_path: Path) -> None:
+    p = tmp_path / "huge_declared_dimensions.png"
+    p.write_bytes(_huge_declared_dimensions_png())
+    with pytest.raises(ValueError) as exc_info:
+        load_image(p)
+    assert isinstance(exc_info.value.__cause__, cv2.error)
 
 
 def test_valid_png_bytes_under_wrong_extension(tmp_path: Path) -> None:
@@ -693,45 +719,50 @@ def test_direct_imdecode_equivalence_targeted(tmp_path: Path) -> None:
 
 
 def test_direct_imdecode_equivalence_differential(tmp_path: Path) -> None:
-    """Property/differential test: >=250 generated PNG cases, oracle is direct cv2.imdecode.
+    """Property/differential test: >=250 generated PNG *source cases*, oracle is direct
+    cv2.imdecode.
 
-    Deterministic, fixed seed, no Hypothesis. Every legal (dtype, channel) combination is
-    exercised against every mode where that combination is decodable; the oracle is always
-    ``cv2.imdecode`` applied directly to the exact same in-memory encoded bytes with the
-    corresponding flag -- never the pre-encode original array. JPEG/lossy formats are excluded
-    (PNG only), per the design's own property-test scope (§24).
+    Deterministic, fixed seed, no Hypothesis. Every generated (shape, dtype) PNG source case is
+    exercised against all 3 modes; the oracle is always ``cv2.imdecode`` applied directly to the
+    exact same in-memory encoded bytes with the corresponding flag -- never the pre-encode original
+    array. JPEG/lossy formats are excluded (PNG only), per the design's own property-test scope
+    (§24). The threshold is on the count of distinct *generated source cases*, not on the (larger)
+    count of decode-mode comparisons derived from them.
     """
     rng = _rng(2024)
     shapes: list[tuple[int, ...]] = [
         (h, w) if c is None else (h, w, c)
-        for h in (3, 6, 9, 16)
-        for w in (3, 8, 13, 16)
+        for h in (2, 3, 4, 5, 6, 7, 8)
+        for w in (2, 4, 6, 8, 10, 12)
         for c in (None, 3, 4)
     ]
     dtypes: list[type] = [np.uint8, np.uint16]
     modes: tuple[ImageReadMode, ...] = ("color", "grayscale", "unchanged")
+    flags = {
+        "color": cv2.IMREAD_COLOR,
+        "grayscale": cv2.IMREAD_GRAYSCALE,
+        "unchanged": cv2.IMREAD_UNCHANGED,
+    }
 
+    generated_cases = 0
     comparisons = 0
     for index, (shape, dtype) in enumerate((shape, dtype) for shape in shapes for dtype in dtypes):
         pixels = rng.integers(0, np.iinfo(dtype).max, size=shape, dtype=dtype)
         p = tmp_path / f"case_{index}.png"
         _write_image(p, pixels)
+        generated_cases += 1
         payload = p.read_bytes()
         buffer = np.frombuffer(payload, dtype=np.uint8)
 
         for mode in modes:
-            flag = {
-                "color": cv2.IMREAD_COLOR,
-                "grayscale": cv2.IMREAD_GRAYSCALE,
-                "unchanged": cv2.IMREAD_UNCHANGED,
-            }[mode]
-            expected = cv2.imdecode(buffer, flag)
+            expected = cv2.imdecode(buffer, flags[mode])
             actual = load_image(p, mode=mode)
             np.testing.assert_array_equal(actual, expected)
             comparisons += 1
 
-    assert comparisons >= 250, comparisons
-    print(f"{comparisons}/{comparisons} generated decode-mode comparisons matched")
+    assert generated_cases >= 250, generated_cases
+    print(f"generated PNG source cases: {generated_cases}")
+    print(f"decode-mode comparisons: {comparisons}")
 
 
 # =====================================================================================
