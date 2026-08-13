@@ -75,8 +75,10 @@ version decided at the time each is actually published, rather than mechanically
   `DatasetSplit`) released in `0.4.0a2` -- occurrence-based partitioning of any `Sequence[T]` via
   the Largest Remainder Method, with no stratification/grouping/leakage guarantee; manifests
   remain planned, not started; Unicode-safe single-image loading (`improcv.io.load_image`,
-  `ImageReadMode`) implemented on the `0.4.0a4` development line -- image/mask pair loading and
-  batch loading remain planned, not started), and
+  `ImageReadMode`, with no mask-specific semantics of any kind and no save/write counterpart)
+  released in `0.4.0a4` -- image/mask pair loading, batch loading, mask semantics, a dataset
+  iteration/loading framework, and image saving/writing all remain planned, not started, with no
+  version assigned yet), and
   dataset image similarity (deterministic pairwise similarity search over precomputed perceptual
   hashes -- `improcv.similarity.find_similar_image_pairs` -- implemented, shipping in `0.3.0a1`;
   portable, deterministic perceptual-hash manifests (`improcv.manifest.PerceptualHashManifest`)
