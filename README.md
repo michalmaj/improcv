@@ -1668,24 +1668,30 @@ and never decodes an image.
 ## Status
 
 `improcv`'s overall project maturity is beta development (`Development Status :: 4 - Beta`).
-`0.3.0b1` is the latest stable public prerelease: the first beta release of the `0.3.0` line,
-marking that its planned functional scope is complete and its focus has shifted to
-stabilization -- bug fixes, contract and typing corrections, documentation corrections, and
-feedback from real-world usage. `0.4.0a1` opened a new, additive feature line on top of that
-stabilized `0.3.0` scope: it was the first alpha of `0.4.0`, containing exactly one slice --
-deterministic, in-memory comparison of two `PerceptualHashManifest` snapshots
-(`compare_perceptual_hash_manifests`). `0.4.0a2` was the second alpha of that same line, adding
-deterministic train/validation/test dataset splitting (`split_dataset`, `DatasetSplit`). `0.4.0a3`
-added multiclass per-class one-vs-rest ROC/precision-recall curves (`multiclass_roc_curve`/
-`multiclass_precision_recall_curve`, returning `MulticlassRocCurve`/`MulticlassPrecisionRecallCurve`).
-`0.4.0a4` added Unicode-safe single-image loading (`load_image`, `ImageReadMode`). `0.4.0a5` is
-the current, fifth alpha of that same additive `0.4.x` feature line, adding micro-averaged
-multiclass ROC/precision-recall curves (`multiclass_roc_curve_micro`/
-`multiclass_precision_recall_curve_micro`, returning the existing `RocCurve`/
-`PrecisionRecallCurve` types). The `aN` in `0.4.0aN` describes how far along `0.4.0` itself is in
-its own release cycle, not a reversion of the whole project's maturity classifier back to alpha --
-the project as a whole remains Beta. `0.4.0a5` is not a claim that `0.4.0` is feature-complete or
-stable, and no further feature is assigned to the rest of the `0.4.x` line yet. See
+`0.3.0b1` was the first beta release of the `0.3.0` line, marking that its planned functional
+scope was complete and its focus had shifted to stabilization -- bug fixes, contract and typing
+corrections, documentation corrections, and feedback from real-world usage. `0.4.0a1` opened a
+new, additive feature line on top of that stabilized `0.3.0` scope: it was the first alpha of
+`0.4.0`, containing exactly one slice -- deterministic, in-memory comparison of two
+`PerceptualHashManifest` snapshots (`compare_perceptual_hash_manifests`). `0.4.0a2` was the
+second alpha of that same line, adding deterministic train/validation/test dataset splitting
+(`split_dataset`, `DatasetSplit`). `0.4.0a3` added multiclass per-class one-vs-rest ROC/
+precision-recall curves (`multiclass_roc_curve`/`multiclass_precision_recall_curve`, returning
+`MulticlassRocCurve`/`MulticlassPrecisionRecallCurve`). `0.4.0a4` added Unicode-safe single-image
+loading (`load_image`, `ImageReadMode`). `0.4.0a5` was the fifth and final public alpha of that
+same additive `0.4.x` feature line, adding micro-averaged multiclass ROC/precision-recall curves
+(`multiclass_roc_curve_micro`/`multiclass_precision_recall_curve_micro`, returning the existing
+`RocCurve`/`PrecisionRecallCurve` types). `0.4.0b1` is the current public prerelease: the first
+beta release of the `0.4.0` line. It introduces no sixth feature slice -- it freezes that
+five-slice scope for stabilization, the same shift `0.3.0b1` made for `0.3.0`: bug fixes,
+compatibility corrections, typing corrections, documentation corrections, portability/test
+corrections, and feedback from real-world usage take priority over new features, which are
+deferred to a later development line. The `aN`/`bN` in `0.4.0aN`/`0.4.0bN` describes how far along
+`0.4.0` itself is in its own release cycle, separate from the project's overall maturity
+classifier, which was already Beta before `0.4.0b1` (set at the `0.3.0b1` transition) and remains
+Beta now -- `0.4.0b1` marks that `0.4.0`'s own planned functional scope has settled and `0.4.0`
+itself has entered stabilization; it does **not** mean the public API is declared stable, and the
+pre-1.0 compatibility policy below still applies in full. See
 [CHANGELOG.md](https://github.com/michalmaj/improcv/blob/main/CHANGELOG.md) for published
 releases and the exact contents of the current development line. `0.1.0a1` was the project's
 first public release and covered the accumulated scope of Phases 0-3 (see
@@ -1694,12 +1700,12 @@ and why it doesn't match the project's original one-phase-per-minor-version plan
 
 **Compatibility policy before `1.0.0`:**
 - Releases through `0.3.0a3` were alpha releases; `0.3.0b1` began the beta line for the `0.3.0`
-  scope, which remains in beta stabilization. `0.4.0a1`/`0.4.0a2`/`0.4.0a3`/`0.4.0a4`/`0.4.0a5` are
-  alpha releases of the new, additive `0.4.x` feature line specifically. Beta means the planned
+  scope, which remains in beta stabilization. `0.4.0a1`-`0.4.0a5` were the alpha phase of the new,
+  additive `0.4.x` feature line; `0.4.0b1` is the first beta of that line. Beta means the planned
   functional scope for that line has settled and the focus has shifted to stabilization; alpha
   means the opposite -- neither status means the public API is declared stable, and a
-  backwards-incompatible change may still land in any `0.4.x` release before that line reaches
-  beta.
+  backwards-incompatible change may still land in any `0.4.x` release before `1.0.0`, including
+  during beta stabilization.
 - Before `1.0.0`, the public API may still change, including in backwards-incompatible ways, in any
   `0.MINOR` release. While in alpha or beta, this also applies between consecutive prereleases of
   the same version (e.g. `0.1.0a1` → `0.1.0a2`, or a later `0.3.0b1` → `0.3.0b2`).
