@@ -97,7 +97,10 @@ version decided at the time each is actually published, rather than mechanically
   alone via a linear merge-join, with a rename always reported as `removed` + `added`, no
   filesystem I/O, and no manifest schema-v1 changes; incremental caching/freshness validation,
   duplicate groups/clustering, indexed/subquadratic search, and parallel hashing/search remain
-  planned, not started, with no version assigned yet). Bounding boxes/
+  planned, not started, with no version assigned yet). `0.4.0b1` begins beta stabilization after
+  completion of the planned `0.4.0` functional scope described above -- the five slices released
+  across `0.4.0a1`-`0.4.0a5` -- no additional independent feature slice is planned for `0.4` beta;
+  it is stabilization-focused, the same shift `0.3.0b1` made for `0.3.0`. Bounding boxes/
   keypoints/polygons in augmentation, a
   `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as

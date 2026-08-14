@@ -10,6 +10,24 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.4.0b1] - 2026-08-14
+
+### Changed
+- `improcv 0.4.0b1` is the first beta release of the `0.4.0` line: the planned functional scope
+  for `0.4.0` -- five additive slices, `compare_perceptual_hash_manifests` (`0.4.0a1`),
+  `split_dataset`/`DatasetSplit` (`0.4.0a2`), `multiclass_roc_curve`/
+  `multiclass_precision_recall_curve` (`0.4.0a3`), `load_image`/`ImageReadMode` (`0.4.0a4`), and
+  `multiclass_roc_curve_micro`/`multiclass_precision_recall_curve_micro` (`0.4.0a5`) -- is now
+  settled, and this release makes no runtime changes relative to `0.4.0a5`: zero new public
+  symbols, zero changed public signatures or defaults, zero new runtime behavior, zero dependency
+  changes, zero schema changes. The beta phase shifts focus to stabilization: bug fixes,
+  compatibility corrections, typing corrections, documentation corrections, portability/test
+  corrections, and incorporating feedback from real-world usage, rather than a sixth independent
+  feature slice, which is deferred to a later development line. Project metadata already declared
+  `Development Status :: 4 - Beta` before this release (set at the `0.3.0b1` transition); this
+  release does not change the project-wide maturity classifier -- it moves `0.4.0`'s own
+  prerelease stage from alpha to beta.
+
 ## [0.4.0a5] - 2026-08-14
 
 ### Added
