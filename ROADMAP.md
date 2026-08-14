@@ -64,7 +64,7 @@ version decided at the time each is actually published, rather than mechanically
   themselves; a micro-averaged curve pair (`multiclass_roc_curve_micro`/
   `multiclass_precision_recall_curve_micro`, returning the existing `RocCurve`/
   `PrecisionRecallCurve` types, built via the same flattening `average="micro"` already uses
-  above) is implemented on the `0.4.0a5` development line, see
+  above) released in `0.4.0a5`, see
   `docs/design/0.4.0a5-multiclass-micro-curves.md`; macro/weighted curve aggregates, one-vs-one
   mode, a classification-report public API, and a public plotting API remain planned, not started,
   see [CHANGELOG.md](CHANGELOG.md)), image augmentation

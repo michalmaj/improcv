@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.4.0a5] - 2026-08-14
+
 ### Added
 - `multiclass_roc_curve_micro`/`multiclass_precision_recall_curve_micro`: micro-averaged
   multiclass ranking curves, returning the existing `RocCurve`/`PrecisionRecallCurve` types
