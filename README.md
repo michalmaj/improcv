@@ -1250,8 +1250,7 @@ derived from `tuple(curve.positive_label for curve in curves)`, never a separate
 so there is nothing that could disagree with `curves`' own order. Neither function accepts
 `average`: they always return the full per-class collection, with no macro/weighted/micro
 aggregate curve in this API -- a macro/weighted curve would need a shared axis/interpolation
-policy this module does not define, and a micro curve (well-defined via the same flattening
-`average="micro"` already uses above) is a separate, later API decision, not part of this one.
+policy this module does not define. A micro curve is instead its own pair of functions, below.
 
 For ROC, `auc(result.curves[i].false_positive_rate, result.curves[i].true_positive_rate)` is
 bit-for-bit identical to `multiclass_roc_auc_score(..., average=None)[i]` on the same input --
@@ -1263,6 +1262,28 @@ curve, a distinct quantity from `multiclass_average_precision_score(..., average
 for the binary case, never guaranteed equal or guaranteed to differ, just never the same
 definition. No plotting API is added here -- `demos/classification_report.py` renders real
 per-class ROC curves with plain Matplotlib calls, not through a public `improcv` plotting surface.
+
+Micro-averaged curves -- `multiclass_roc_curve_micro`/`multiclass_precision_recall_curve_micro`:
+
+```python
+micro_roc = im.multiclass_roc_curve_micro(y_true, y_score, labels=labels)
+micro_pr = im.multiclass_precision_recall_curve_micro(y_true, y_score, labels=labels)
+
+im.auc(micro_roc.false_positive_rate, micro_roc.true_positive_rate) == im.multiclass_roc_auc_score(
+    y_true, y_score, labels=labels, average="micro"
+)  # True -- bit-for-bit, the same relationship auc()/roc_curve() already have for one class
+```
+
+These are plain functions that return the existing `RocCurve`/`PrecisionRecallCurve` types --
+there is no `MicroRocCurve` or similar -- built by flattening the one-hot target and score matrix
+exactly as `average="micro"` does above, then delegating directly to `roc_curve`/
+`precision_recall_curve` with `positive_label=1` (the flattened problem's own positive marker, not
+one of the caller's original `labels`). They therefore inherit `average="micro"`'s own relaxed
+requirement: no per-class effective support is needed, only at least one effectively present
+sample overall. As with `average="micro"`, this assumes a common comparable score scale across
+columns, not a probability simplex. `auc(micro_pr.recall, micro_pr.precision)` is the trapezoidal
+PR-curve area, not average precision -- the same distinction the per-class curves above already
+make, now for the micro-averaged case.
 
 Augmentation sampling and replay -- flip:
 

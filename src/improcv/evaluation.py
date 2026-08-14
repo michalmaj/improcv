@@ -73,8 +73,10 @@ __all__ = [
     "confusion_matrix",
     "multiclass_average_precision_score",
     "multiclass_precision_recall_curve",
+    "multiclass_precision_recall_curve_micro",
     "multiclass_roc_auc_score",
     "multiclass_roc_curve",
+    "multiclass_roc_curve_micro",
     "precision_recall_curve",
     "roc_auc_score",
     "roc_curve",
@@ -2536,6 +2538,213 @@ def multiclass_precision_recall_curve(
 
     _check_multiclass_curve_postconditions(curves, labels_tuple)
     return MulticlassPrecisionRecallCurve(curves=curves)
+
+
+def multiclass_roc_curve_micro(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    labels: Sequence[int] | npt.NDArray[np.integer],
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
+) -> RocCurve:
+    """Compute the micro-averaged multiclass ROC curve: one binary `RocCurve` for the flattened
+    one-vs-rest ranking problem `multiclass_roc_auc_score(..., average="micro")` already
+    summarizes as a scalar.
+
+    "Micro" here is not an average of per-class curves -- it flattens the one-hot target and the
+    `(n_samples, len(labels))` score matrix into one shared binary ranking problem in C-order
+    (row-major): sample `i`'s `j`th class occupies flat position `i * len(labels) + j`, positive
+    exactly when `y_true[i] == labels[j]`, negative otherwise. `y_score`'s column `i` is the
+    one-vs-rest ranking score for class `labels[i]`, exactly the same shape and meaning
+    `multiclass_roc_auc_score` already accepts (an arbitrary finite ranking score, not required to
+    lie in `[0, 1]` or to sum to `1.0` across a row). `labels` is required (no inference from
+    `y_true`), fixes the exact column order, and is never sorted or deduplicated.
+
+    Because this flattening compares raw score values across different `y_score` columns directly
+    (rather than reducing each column's own ranking to a single number first, as `None`/`"macro"`/
+    `"weighted"` do), it assumes those columns share a common, comparable ranking scale -- unlike
+    the per-class/macro/weighted forms, which tolerate an independent strictly increasing
+    transform per column, this is only invariant to a single strictly increasing transform applied
+    to the whole matrix at once. This does not require a probability simplex (no row is required
+    to sum to `1.0`) -- only a shared scale, which arbitrary decision scores or logits can have
+    without summing to 1.
+
+    Unlike `multiclass_roc_curve`, this function does **not** require positive effective support
+    for every individual label -- a class absent from `y_true` (or present only in zero-weight
+    rows) simply contributes purely negative cells to the flattened problem, which is
+    mathematically well defined as long as `y_true` is non-empty, `labels` has at least 2 entries,
+    and every `y_true` value is one of `labels` (all required unconditionally below); a single
+    effectively present class is likewise legal. The flattened problem itself, not any individual
+    original class, is the unit of support validation for micro.
+
+    `sample_weight` follows the same contract as the binary ranking functions' `sample_weight`
+    (keyword-only, `Sequence`/1-D `ndarray`, length `n_samples`, non-negative, at least one
+    positive value, `bool` rejected, exact-integer-to-`float64`), but each sample's weight is
+    repeated once per class (`np.repeat`, not `np.tile`) before flattening, so it applies
+    identically to every one of the `len(labels)` cells that sample contributes.
+
+    The result's `positive_label` is always `1` -- the positive label of the *derived, flattened*
+    binary problem, not one of the caller's original multiclass labels: it means "this flattened
+    cell corresponds to the sample's true class." It must not be interpreted as, or confused with,
+    any value in `labels`.
+
+    The result is bit-for-bit identical to calling `roc_curve(flat_true, flat_score,
+    positive_label=1, sample_weight=flat_weight)` directly on the same independently-built
+    flatten -- this function computes it by flattening then calling that same public function
+    once, rather than reimplementing or duplicating its sorting/threshold/cumulative-weight
+    arithmetic. Consequently, `auc(result.false_positive_rate, result.true_positive_rate)` is also
+    bit-for-bit identical to `multiclass_roc_auc_score(..., average="micro")` on the same input,
+    since both are built from the same flatten through the same underlying ranking core.
+
+    For `N` samples and `C = len(labels)`: flattening the one-hot target and repeating
+    `sample_weight` is `O(N * C)` time and `O(N * C)` additional memory (the score matrix itself
+    is only viewed, not copied, during flattening). The binary curve computed over the `N * C`
+    flattened observations then dominates: `O((N * C) log(N * C))` time overall, from that curve's
+    own internal sort.
+
+    Raises
+    ------
+    TypeError
+        Same as `multiclass_roc_auc_score`.
+    ValueError
+        If `labels` is empty, contains a duplicate, or has fewer than 2 entries; if any raw
+        `y_true` value is not present in `labels`; if `y_score`'s shape does not match
+        `(len(y_true), len(labels))`; if `y_score` contains NaN/Inf or an integer not exactly
+        representable as `float64`; if `sample_weight`'s length does not match `y_true`, contains
+        a negative value, or sums to zero; or if the flattened binary ROC computation itself fails
+        (wrapped with micro-specific context) -- structurally not expected once the checks above
+        pass, since a non-empty `y_true`, at least 2 labels, and (when given) a `sample_weight`
+        with at least one positive value together already guarantee the flattened problem has at
+        least one effective positive and one effective negative cell.
+    RuntimeError
+        If the computed result fails `roc_curve`'s own postconditions.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> y_true = [20, 10, 30, 20, 10, 30]
+    >>> y_score = np.array([
+    ...     [0.9, 0.3, 0.2], [0.2, 0.8, 0.3], [0.1, 0.2, 0.9],
+    ...     [0.7, 0.4, 0.3], [0.3, 0.6, 0.2], [0.2, 0.3, 0.8],
+    ... ])
+    >>> result = multiclass_roc_curve_micro(y_true, y_score, labels=(20, 10, 30))
+    >>> result.positive_label
+    1
+    """
+    labels_tuple = _normalize_explicit_labels(labels)
+    if len(labels_tuple) < 2:
+        raise ValueError("multiclass ranking scores require at least 2 labels")
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    allowed_labels = set(labels_tuple)
+    for index, value in enumerate(true_list):
+        if value not in allowed_labels:
+            raise ValueError(f"y_true[{index}] = {value} is not present in labels")
+
+    score_matrix = _normalize_score_matrix(y_score, len(true_list), len(labels_tuple))
+
+    weights = (
+        None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
+    )
+
+    flat_true, flat_score, flat_weight = _flatten_multiclass_ovr(
+        true_list, labels_tuple, score_matrix, weights
+    )
+    try:
+        return roc_curve(flat_true, flat_score, positive_label=1, sample_weight=flat_weight)
+    except ValueError as exc:
+        raise ValueError(f"failed to compute micro-averaged multiclass ROC curve: {exc}") from exc
+
+
+def multiclass_precision_recall_curve_micro(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_score: npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    *,
+    labels: Sequence[int] | npt.NDArray[np.integer],
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
+) -> PrecisionRecallCurve:
+    """Compute the micro-averaged multiclass precision-recall curve: one binary
+    `PrecisionRecallCurve` for the flattened one-vs-rest ranking problem
+    `multiclass_average_precision_score(..., average="micro")` already summarizes as a scalar.
+
+    See `multiclass_roc_curve_micro` for the shared flattening/`labels`/common-score-scale/
+    `sample_weight`-repetition/no-per-class-support/`positive_label`/complexity contract, which
+    applies identically here. The one difference: unlike ROC, the flattened binary computation
+    here only requires at least one effective positive cell (never an effective negative one) --
+    `precision_recall_curve` itself allows a flattened target with no effective negatives
+    (precision is `1.0` at every real threshold in that case).
+
+    The result is bit-for-bit identical to calling `precision_recall_curve(flat_true, flat_score,
+    positive_label=1, sample_weight=flat_weight)` directly on the same independently-built
+    flatten, for the same structural reason `multiclass_roc_curve_micro` documents. **This
+    equivalence does not extend to `multiclass_average_precision_score`**:
+    `auc(result.recall, result.precision)` computes the *trapezoidal* area under this curve, a
+    distinct quantity from `multiclass_average_precision_score(..., average="micro")` -- the same
+    distinction `average_precision_score`'s own docstring already documents for the binary case,
+    unchanged here. The two are different definitions; they are not guaranteed to differ
+    numerically on every dataset, but they must never be treated as interchangeable.
+
+    Raises
+    ------
+    TypeError
+        Same as `multiclass_roc_curve_micro`.
+    ValueError
+        Same as `multiclass_roc_curve_micro`, except the flattened binary computation only
+        requires an effective positive cell, never an effective negative one.
+    RuntimeError
+        If the computed result fails `precision_recall_curve`'s own postconditions.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> y_true = [20, 10, 30, 20, 10, 30]
+    >>> y_score = np.array([
+    ...     [0.9, 0.3, 0.2], [0.2, 0.8, 0.3], [0.1, 0.2, 0.9],
+    ...     [0.7, 0.4, 0.3], [0.3, 0.6, 0.2], [0.2, 0.3, 0.8],
+    ... ])
+    >>> result = multiclass_precision_recall_curve_micro(y_true, y_score, labels=(20, 10, 30))
+    >>> result.positive_label
+    1
+    """
+    labels_tuple = _normalize_explicit_labels(labels)
+    if len(labels_tuple) < 2:
+        raise ValueError("multiclass ranking scores require at least 2 labels")
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    if len(true_list) == 0:
+        raise ValueError("y_true must not be empty")
+
+    allowed_labels = set(labels_tuple)
+    for index, value in enumerate(true_list):
+        if value not in allowed_labels:
+            raise ValueError(f"y_true[{index}] = {value} is not present in labels")
+
+    score_matrix = _normalize_score_matrix(y_score, len(true_list), len(labels_tuple))
+
+    weights = (
+        None if sample_weight is None else _normalize_sample_weight(sample_weight, len(true_list))
+    )
+
+    flat_true, flat_score, flat_weight = _flatten_multiclass_ovr(
+        true_list, labels_tuple, score_matrix, weights
+    )
+    try:
+        return precision_recall_curve(
+            flat_true, flat_score, positive_label=1, sample_weight=flat_weight
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"failed to compute micro-averaged multiclass precision-recall curve: {exc}"
+        ) from exc
 
 
 def auc(

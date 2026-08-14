@@ -10,6 +10,27 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `multiclass_roc_curve_micro`/`multiclass_precision_recall_curve_micro`: micro-averaged
+  multiclass ranking curves, returning the existing `RocCurve`/`PrecisionRecallCurve` types
+  unchanged -- no new result type. Built by flattening the one-hot target and score matrix into
+  one shared binary ranking problem (row-major/C-order, exactly as `multiclass_roc_auc_score`'s/
+  `multiclass_average_precision_score`'s own `average="micro"` already does) and delegating
+  directly to the existing public `roc_curve`/`precision_recall_curve` with `positive_label=1` --
+  the flattened problem's own positive marker, not one of the caller's original `labels`.
+  `sample_weight` is repeated once per class via `np.repeat` (never `np.tile`) before flattening.
+  Unlike the per-class `multiclass_roc_curve`/`multiclass_precision_recall_curve`, these two do
+  not require positive effective support for every named label individually -- a class absent
+  from `y_true`, or present only in zero-weight rows, is legal, since the flattened problem's own
+  support only depends on at least one effectively present sample overall. For ROC,
+  `auc(curve.false_positive_rate, curve.true_positive_rate)` is bit-for-bit identical to
+  `multiclass_roc_auc_score(..., average="micro")` on the same input; for precision-recall, the
+  trapezoidal area under the curve remains a distinct quantity from
+  `multiclass_average_precision_score(..., average="micro")`, never interchangeable with it -- the
+  same distinction already made for the per-class curves. No macro/weighted curves, no reports, no
+  plotting in this slice (see `docs/design/0.4.0a5-multiclass-micro-curves.md`). No new
+  dependency, no changes to any existing public signature or dataclass.
+
 ## [0.4.0a4] - 2026-08-13
 
 ### Added

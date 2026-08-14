@@ -60,10 +60,13 @@ version decided at the time each is actually published, rather than mechanically
   `average=None`/`"macro"`/`"weighted"`/`"micro"`) implemented; multiclass one-vs-rest per-class
   ROC/precision-recall curve types (`multiclass_roc_curve`/`multiclass_precision_recall_curve`,
   returning `MulticlassRocCurve`/`MulticlassPrecisionRecallCurve`) released in `0.4.0a3`, with no
-  `average` parameter and no macro/weighted/micro aggregate curve; a
-  micro curve is mathematically well-defined via the same flattening `average="micro"` already
-  uses above but remains a separate, later API decision, not started; one-vs-one mode, a
-  classification-report public API, and a public plotting API also remain planned, not started,
+  `average` parameter and no macro/weighted/micro aggregate curve on those two functions
+  themselves; a micro-averaged curve pair (`multiclass_roc_curve_micro`/
+  `multiclass_precision_recall_curve_micro`, returning the existing `RocCurve`/
+  `PrecisionRecallCurve` types, built via the same flattening `average="micro"` already uses
+  above) is implemented on the `0.4.0a5` development line, see
+  `docs/design/0.4.0a5-multiclass-micro-curves.md`; macro/weighted curve aggregates, one-vs-one
+  mode, a classification-report public API, and a public plotting API remain planned, not started,
   see [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-and-anisotropic-scale sampling/replay implemented;
