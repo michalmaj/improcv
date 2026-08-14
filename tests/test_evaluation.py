@@ -7,8 +7,10 @@ from collections.abc import Sequence
 from decimal import Decimal
 from enum import IntEnum
 from fractions import Fraction
+from typing import assert_type, cast
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 from numpy.testing import assert_array_equal
 
@@ -27,8 +29,10 @@ from improcv.evaluation import (
     confusion_matrix,
     multiclass_average_precision_score,
     multiclass_precision_recall_curve,
+    multiclass_precision_recall_curve_micro,
     multiclass_roc_auc_score,
     multiclass_roc_curve,
+    multiclass_roc_curve_micro,
     precision_recall_curve,
     roc_auc_score,
     roc_curve,
@@ -6043,3 +6047,760 @@ def test_multiclass_curve_randomized_differential() -> None:
             checked += 1
 
     assert checked >= n_cases * 2
+
+
+# =====================================================================================
+# multiclass_roc_curve_micro / multiclass_precision_recall_curve_micro
+# =====================================================================================
+
+_MICRO_CURVE_FUNCTIONS = (
+    (multiclass_roc_curve_micro, roc_curve, RocCurve),
+    (multiclass_precision_recall_curve_micro, precision_recall_curve, PrecisionRecallCurve),
+)
+
+
+# --- basic contract: return type, positive_label, labels handling ---
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_result_type(micro_func, binary_func, curve_type) -> None:
+    result = micro_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    assert isinstance(result, curve_type)
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_positive_label_is_one(micro_func, binary_func, curve_type) -> None:
+    result = micro_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    assert result.positive_label == 1
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_unsorted_labels_still_positive_label_one(
+    micro_func, binary_func, curve_type
+) -> None:
+    labels = (20, 10, 30)
+    y_true = [20, 10, 30, 20, 10, 30, 20]
+    y_score = np.array(
+        [
+            [0.90, 0.50, 0.30],
+            [0.20, 0.50, 0.55],
+            [0.10, 0.55, 0.20],
+            [0.85, 0.30, 0.60],
+            [0.30, 0.60, 0.45],
+            [0.05, 0.20, 0.10],
+            [0.75, 0.10, 0.65],
+        ]
+    )
+    result = micro_func(y_true, y_score, labels=labels)
+    assert result.positive_label == 1
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_accepts_sequence_and_ndarray_y_true(
+    micro_func, binary_func, curve_type
+) -> None:
+    as_list = micro_func(list(_MULTICLASS_Y_TRUE), _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    as_tuple = micro_func(tuple(_MULTICLASS_Y_TRUE), _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+    as_array = micro_func(
+        np.array(_MULTICLASS_Y_TRUE, dtype=np.int64), _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    for result in (as_list, as_tuple, as_array):
+        assert isinstance(result, curve_type)
+        assert result.positive_label == 1
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64, np.int32])
+def test_multiclass_micro_curve_y_score_dtypes(micro_func, binary_func, curve_type, dtype) -> None:
+    y_true = [0, 1, 0, 1]
+    labels = (0, 1)
+    if np.issubdtype(dtype, np.integer):
+        y_score = np.array([[9, 1], [2, 8], [7, 3], [1, 9]], dtype=dtype)
+    else:
+        y_score = np.array([[0.9, 0.1], [0.2, 0.8], [0.7, 0.3], [0.1, 0.9]], dtype=dtype)
+    result = micro_func(y_true, y_score, labels=labels)
+    assert isinstance(result, curve_type)
+
+
+# --- direct binary equivalence against an independent flatten oracle (central invariant) ---
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_bit_identical_to_independent_flatten_oracle(
+    micro_func, binary_func, curve_type
+) -> None:
+    flat_true, flat_score, _ = _independent_flatten_oracle(
+        _MICRO_TIE_Y_TRUE, _MICRO_TIE_LABELS, _MICRO_TIE_Y_SCORE, None
+    )
+    expected = binary_func(flat_true, flat_score, positive_label=1)
+    result = micro_func(_MICRO_TIE_Y_TRUE, _MICRO_TIE_Y_SCORE, labels=_MICRO_TIE_LABELS)
+    assert result == expected
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_bit_identical_to_independent_flatten_oracle_weighted(
+    micro_func, binary_func, curve_type
+) -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.5]
+    flat_true, flat_score, flat_weight = _independent_flatten_oracle(
+        _MICRO_TIE_Y_TRUE, _MICRO_TIE_LABELS, _MICRO_TIE_Y_SCORE, sample_weight
+    )
+    expected = binary_func(flat_true, flat_score, positive_label=1, sample_weight=flat_weight)
+    result = micro_func(
+        _MICRO_TIE_Y_TRUE, _MICRO_TIE_Y_SCORE, labels=_MICRO_TIE_LABELS, sample_weight=sample_weight
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_unsorted_labels_bit_identical_to_independent_flatten_oracle(
+    micro_func, binary_func, curve_type
+) -> None:
+    labels = (20, 10, 30)
+    y_true = [20, 10, 30, 20, 10, 30, 20]
+    y_score = np.array(
+        [
+            [0.90, 0.50, 0.30],
+            [0.20, 0.50, 0.55],
+            [0.10, 0.55, 0.20],
+            [0.85, 0.30, 0.60],
+            [0.30, 0.60, 0.45],
+            [0.05, 0.20, 0.10],
+            [0.75, 0.10, 0.65],
+        ]
+    )
+    flat_true, flat_score, _ = _independent_flatten_oracle(y_true, labels, y_score, None)
+    expected = binary_func(flat_true, flat_score, positive_label=1)
+    result = micro_func(y_true, y_score, labels=labels)
+    assert result == expected
+
+
+# --- ROC scalar exact relationship ---
+
+
+def test_multiclass_roc_curve_micro_auc_bit_identical_to_multiclass_roc_auc_score_micro() -> None:
+    result = multiclass_roc_curve_micro(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    micro_score = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS, average="micro"
+    )
+    area = auc(result.false_positive_rate, result.true_positive_rate)
+    assert area == micro_score
+
+
+def test_multiclass_roc_curve_micro_auc_bit_identical_with_sample_weight() -> None:
+    sample_weight = [2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0]
+    result = multiclass_roc_curve_micro(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    micro_score = multiclass_roc_auc_score(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        average="micro",
+        sample_weight=sample_weight,
+    )
+    area = auc(result.false_positive_rate, result.true_positive_rate)
+    assert area == micro_score
+
+
+# --- PR / average-precision distinction ---
+
+
+def test_multiclass_precision_recall_curve_micro_trapezoidal_auc_is_not_average_precision() -> None:
+    """Mirrors `test_multiclass_precision_recall_curve_trapezoidal_auc_is_not_average_precision`'s
+    own already-diverging dataset, applied to the flattened micro problem instead of a per-class
+    one -- shown to diverge here, not asserted to differ on every dataset.
+    """
+    y_true = [0, 1, 0]
+    labels = (0, 1)
+    y_score = np.array([[1, 3], [2, 3], [3, 2]])
+
+    result = multiclass_precision_recall_curve_micro(y_true, y_score, labels=labels)
+    micro_ap = multiclass_average_precision_score(y_true, y_score, labels=labels, average="micro")
+
+    trapezoidal_area = auc(result.recall, result.precision)
+    assert trapezoidal_area != micro_ap
+
+
+def test_multiclass_average_precision_score_micro_bit_identical_to_independent_flatten_oracle() -> (
+    None
+):
+    """The existing scalar micro contract, re-verified fresh against an independent flatten,
+    since it is the direct evidence the new curve function's own analogous relationship
+    (`test_multiclass_micro_curve_bit_identical_to_independent_flatten_oracle`) relies on.
+    """
+    flat_true, flat_score, _ = _independent_flatten_oracle(
+        _MICRO_TIE_Y_TRUE, _MICRO_TIE_LABELS, _MICRO_TIE_Y_SCORE, None
+    )
+    expected = average_precision_score(flat_true, flat_score, positive_label=1)
+    result = multiclass_average_precision_score(
+        _MICRO_TIE_Y_TRUE, _MICRO_TIE_Y_SCORE, labels=_MICRO_TIE_LABELS, average="micro"
+    )
+    assert result == expected
+
+
+# --- explicit np.repeat-vs-np.tile weight-expansion trap ---
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_weight_expansion_uses_repeat_not_tile(
+    micro_func, binary_func, curve_type
+) -> None:
+    """A small, hand-checkable sentinel where `np.repeat(weights, 3)` and `np.tile(weights, 3)`
+    produce genuinely different curves. Two properties are both required for the divergence to
+    show up in the *curve*, not just in the flattened weight array: the true label per row must
+    not sit on the diagonal (`y_true[i] == labels[i]`) -- on the diagonal, `floor(idx / C)` and
+    `idx % C` coincide, so repeat and tile assign the same weight to every positive cell -- and
+    per-cell scores must be pairwise distinct, so that redistributing weight across cells actually
+    changes the cumulative sums at each threshold instead of just permuting weight within a single
+    tied score group. Verified empirically (not just asserted) that this dataset makes the two
+    expansions diverge, via the `assert ... != ...` sentinel checks below. Tested against the
+    public new API and an independently-built oracle -- not against the private helper directly --
+    so a regression that silently swapped `np.repeat` for `np.tile` inside the implementation would
+    be caught here.
+    """
+    y_true = [1, 2, 0]
+    labels = (0, 1, 2)
+    y_score = np.array(
+        [
+            [0.10, 0.90, 0.50],
+            [0.20, 0.40, 0.95],
+            [0.99, 0.30, 0.15],
+        ]
+    )
+    sample_weight = [10.0, 20.0, 30.0]
+
+    repeat_weight = np.repeat(sample_weight, len(labels))
+    tile_weight = np.tile(sample_weight, len(labels))
+    assert not np.array_equal(repeat_weight, tile_weight), "sentinel must make repeat != tile"
+
+    flat_true, flat_score, _ = _independent_flatten_oracle(y_true, labels, y_score, None)
+    expected_with_repeat = binary_func(
+        flat_true, flat_score, positive_label=1, sample_weight=repeat_weight.tolist()
+    )
+    unexpected_with_tile = binary_func(
+        flat_true, flat_score, positive_label=1, sample_weight=tile_weight.tolist()
+    )
+    assert expected_with_repeat != unexpected_with_tile, "sentinel must make the two curves differ"
+
+    result = micro_func(y_true, y_score, labels=labels, sample_weight=sample_weight)
+    assert result == expected_with_repeat
+    assert result != unexpected_with_tile
+
+
+# --- labels/validation (pre-flattening errors reused verbatim, never repackaged) ---
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_labels_empty(micro_func) -> None:
+    with pytest.raises(ValueError, match="labels must not be empty"):
+        micro_func([0, 1], np.zeros((2, 0)), labels=[])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_labels_one(micro_func) -> None:
+    with pytest.raises(ValueError, match="at least 2 labels"):
+        micro_func([0, 0], np.zeros((2, 1)), labels=[0])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_labels_duplicate(micro_func) -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        micro_func([0, 1], np.zeros((2, 2)), labels=[0, 0])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_true_empty(micro_func) -> None:
+    with pytest.raises(ValueError, match="y_true must not be empty"):
+        micro_func([], np.zeros((0, 2)), labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_true_outside_labels(micro_func) -> None:
+    with pytest.raises(ValueError, match=r"y_true\[2\] = 99 is not present in labels"):
+        micro_func([0, 1, 99], np.zeros((3, 2)), labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_wrong_container(micro_func) -> None:
+    with pytest.raises(TypeError, match="nested"):
+        micro_func([0, 1], [[0.9, 0.1], [0.2, 0.8]], labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_wrong_ndim(micro_func) -> None:
+    with pytest.raises(ValueError, match="must be 2-D"):
+        micro_func([0, 1], np.array([0.9, 0.1]), labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_wrong_row_count(micro_func) -> None:
+    with pytest.raises(ValueError, match="must have shape"):
+        micro_func([0, 1, 0], np.zeros((2, 2)), labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_wrong_column_count(micro_func) -> None:
+    with pytest.raises(ValueError, match="must have shape"):
+        micro_func([0, 1], np.zeros((2, 3)), labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_nan(micro_func) -> None:
+    y_score = np.array([[0.9, 0.1], [np.nan, 0.8]])
+    with pytest.raises(ValueError, match="finite"):
+        micro_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_positive_inf(micro_func) -> None:
+    y_score = np.array([[0.9, 0.1], [np.inf, 0.8]])
+    with pytest.raises(ValueError, match="finite"):
+        micro_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_negative_inf(micro_func) -> None:
+    y_score = np.array([[0.9, 0.1], [-np.inf, 0.8]])
+    with pytest.raises(ValueError, match="finite"):
+        micro_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_y_score_non_exact_integer(micro_func) -> None:
+    y_score = np.array([[2**53 + 1, 1], [1, 2]], dtype=np.int64)
+    with pytest.raises(ValueError, match="not exactly representable"):
+        micro_func([0, 1], y_score, labels=[0, 1])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_sample_weight_wrong_container(micro_func) -> None:
+    with pytest.raises(TypeError):
+        micro_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight="not a sequence",
+        )
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_sample_weight_wrong_dtype(micro_func) -> None:
+    with pytest.raises(TypeError):
+        micro_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=np.array([True] * len(_MULTICLASS_Y_TRUE)),
+        )
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_sample_weight_wrong_length(micro_func) -> None:
+    with pytest.raises(ValueError, match="length"):
+        micro_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=[1.0, 2.0],
+        )
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_sample_weight_negative(micro_func) -> None:
+    sample_weight = [1.0] * (len(_MULTICLASS_Y_TRUE) - 1) + [-1.0]
+    with pytest.raises(ValueError, match="non-negative"):
+        micro_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=sample_weight,
+        )
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_sample_weight_all_zero(micro_func) -> None:
+    sample_weight = [0.0] * len(_MULTICLASS_Y_TRUE)
+    with pytest.raises(ValueError, match="at least one positive value"):
+        micro_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=sample_weight,
+        )
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_sample_weight_non_exact_integer(micro_func) -> None:
+    sample_weight = np.array([2**53 + 1] + [1] * (len(_MULTICLASS_Y_TRUE) - 1), dtype=np.int64)
+    with pytest.raises(ValueError, match="not exactly representable"):
+        micro_func(
+            _MULTICLASS_Y_TRUE,
+            _MULTICLASS_Y_SCORE,
+            labels=_MULTICLASS_LABELS,
+            sample_weight=sample_weight,
+        )
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_validation_order_labels_before_y_true(micro_func) -> None:
+    # Both labels (duplicate) and y_true (empty) are invalid; labels is validated first.
+    with pytest.raises(ValueError, match="duplicate"):
+        micro_func([], np.zeros((0, 2)), labels=[0, 0])
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_validation_order_y_score_before_sample_weight(micro_func) -> None:
+    # Both y_score (wrong shape) and sample_weight (wrong length) are invalid; y_score first.
+    with pytest.raises(ValueError, match="must have shape"):
+        micro_func([0, 1], np.zeros((2, 5)), labels=[0, 1], sample_weight=[1.0])
+
+
+# --- no per-class effective-support requirement (the key behavioral difference vs. per-class) ---
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_class_absent_from_raw_y_true_is_legal(
+    micro_func, binary_func, curve_type
+) -> None:
+    y_true = [0, 1, 0, 1]
+    y_score = np.zeros((4, 3))
+    y_score[:, 2] = 0.5
+    result = micro_func(y_true, y_score, labels=(0, 1, 2))
+    assert isinstance(result, curve_type)
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_class_zeroed_by_weight_is_legal(
+    micro_func, binary_func, curve_type
+) -> None:
+    y_true = [0, 1, 2, 0, 1]
+    y_score = np.array(
+        [[0.9, 0.2, 0.1], [0.2, 0.8, 0.1], [0.1, 0.2, 0.9], [0.8, 0.3, 0.2], [0.3, 0.7, 0.1]]
+    )
+    sample_weight = [1.0, 1.0, 0.0, 1.0, 1.0]  # zeroes out the sole label=2 row
+    result = micro_func(y_true, y_score, labels=(0, 1, 2), sample_weight=sample_weight)
+    assert isinstance(result, curve_type)
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_single_effectively_present_class_is_legal(
+    micro_func, binary_func, curve_type
+) -> None:
+    y_true = [0, 0, 0, 0]
+    y_score = np.random.default_rng(0).random((4, 3))
+    result = micro_func(y_true, y_score, labels=(0, 1, 2))
+    assert isinstance(result, curve_type)
+
+
+@pytest.mark.parametrize("curve_func", [multiclass_roc_curve, multiclass_precision_recall_curve])
+def test_multiclass_curve_non_micro_still_rejects_what_micro_accepts(curve_func) -> None:
+    """Contrast test: the same input `test_multiclass_micro_curve_class_absent_from_raw_y_true_is_
+    legal` accepts must still be rejected by the existing per-class curve functions, confirming
+    the two families genuinely differ in support requirements rather than one being redundant."""
+    y_true = [0, 1, 0, 1]
+    y_score = np.zeros((4, 3))
+    y_score[:, 2] = 0.5
+    with pytest.raises(ValueError, match=r"missing labels: \(2,\)"):
+        curve_func(y_true, y_score, labels=(0, 1, 2))
+
+
+# --- error wrapping: binary-computation failure gets micro-specific context ---
+
+
+def test_multiclass_roc_curve_micro_wraps_binary_value_error(monkeypatch) -> None:
+    import improcv.evaluation as evaluation_module
+
+    def _boom(*args, **kwargs):
+        raise ValueError("sentinel binary failure")
+
+    monkeypatch.setattr(evaluation_module, "roc_curve", _boom)
+    with pytest.raises(
+        ValueError, match="failed to compute micro-averaged multiclass ROC curve"
+    ) as exc_info:
+        multiclass_roc_curve_micro(
+            _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+        )
+    assert "sentinel binary failure" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "sentinel binary failure"
+
+
+def test_multiclass_precision_recall_curve_micro_wraps_binary_value_error(monkeypatch) -> None:
+    import improcv.evaluation as evaluation_module
+
+    def _boom(*args, **kwargs):
+        raise ValueError("sentinel binary failure")
+
+    monkeypatch.setattr(evaluation_module, "precision_recall_curve", _boom)
+    with pytest.raises(
+        ValueError, match="failed to compute micro-averaged multiclass precision-recall curve"
+    ) as exc_info:
+        multiclass_precision_recall_curve_micro(
+            _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+        )
+    assert "sentinel binary failure" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "sentinel binary failure"
+
+
+# --- mutation ---
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_no_mutation(micro_func, binary_func, curve_type) -> None:
+    y_true = np.array(_MULTICLASS_Y_TRUE, dtype=np.int64)
+    y_score = _MULTICLASS_Y_SCORE.copy()
+    labels = np.array(_MULTICLASS_LABELS, dtype=np.int64)
+    sample_weight = np.array([2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 4.0])
+
+    y_true_before = y_true.copy()
+    y_score_before = y_score.copy()
+    labels_before = labels.copy()
+    sample_weight_before = sample_weight.copy()
+
+    micro_func(y_true, y_score, labels=labels, sample_weight=sample_weight)
+
+    assert_array_equal(y_true, y_true_before)
+    assert_array_equal(y_score, y_score_before)
+    assert_array_equal(labels, labels_before)
+    assert_array_equal(sample_weight, sample_weight_before)
+
+
+@pytest.mark.parametrize(("micro_func", "binary_func", "curve_type"), _MICRO_CURVE_FUNCTIONS)
+def test_multiclass_micro_curve_no_mutation_non_contiguous_view(
+    micro_func, binary_func, curve_type
+) -> None:
+    base = np.array(
+        [[0.9, 0.5, 0.3, 0.0], [0.2, 0.5, 0.55, 0.0], [0.1, 0.55, 0.2, 0.0], [0.85, 0.3, 0.6, 0.0]]
+    )
+    y_score = base[:, :3]  # a non-contiguous view (strided, extra trailing column dropped)
+    assert not y_score.flags.c_contiguous
+    y_score_before = y_score.copy()
+
+    micro_func([0, 1, 2, 0], y_score, labels=(0, 1, 2))
+
+    assert_array_equal(y_score, y_score_before)
+
+
+# --- isolation ---
+
+
+@pytest.mark.parametrize(
+    "micro_func", [multiclass_roc_curve_micro, multiclass_precision_recall_curve_micro]
+)
+def test_multiclass_micro_curve_no_filesystem_io(micro_func, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def _forbid_open(*args, **kwargs):
+        raise AssertionError("multiclass micro curve functions must not perform filesystem I/O")
+
+    monkeypatch.setattr("builtins.open", _forbid_open)
+    micro_func(_MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS)
+
+
+# --- differential sweep: >=3000 generated multiclass cases, dtype/layout/weight coverage ---
+
+_DIFFERENTIAL_SCORE_DTYPES = (np.float16, np.float32, np.float64, np.int32)
+
+
+def _random_multiclass_micro_case(
+    rng: np.random.Generator,
+) -> tuple[
+    list[int],
+    npt.NDArray[np.floating] | npt.NDArray[np.integer],
+    tuple[int, ...],
+    npt.NDArray[np.floating] | npt.NDArray[np.integer] | None,
+]:
+    """Generate one deterministic multiclass case covering label order, sample/class count, score
+    dtype, score memory layout, and sample-weight presence/dtype/zero-rows -- independent of
+    `_random_multiclass_curve_case` (used by the existing per-class differential test) since this
+    sweep needs to vary dtype/layout dimensions that generator does not.
+    """
+    n_classes = int(rng.integers(2, 6))
+    labels = list(range(n_classes))
+    rng.shuffle(labels)
+    labels = tuple(labels)
+
+    samples_per_class = int(rng.integers(1, 4))
+    y_true: list[int] = []
+    for label in labels:
+        y_true.extend([label] * samples_per_class)
+    n_samples = len(y_true)
+
+    dtype = _DIFFERENTIAL_SCORE_DTYPES[int(rng.integers(0, len(_DIFFERENTIAL_SCORE_DTYPES)))]
+    if np.issubdtype(dtype, np.integer):
+        base_score = rng.integers(-5, 6, size=(n_samples, n_classes)).astype(dtype)
+    else:
+        base_score = rng.uniform(-5.0, 5.0, size=(n_samples, n_classes)).astype(dtype)
+
+    layout_kind = int(rng.integers(0, 3))
+    if layout_kind == 0:
+        y_score = np.ascontiguousarray(base_score)
+    elif layout_kind == 1:
+        y_score = np.asfortranarray(base_score)
+    else:
+        # Non-contiguous view: pad one extra column, then slice it back off.
+        padded = np.zeros((n_samples, n_classes + 1), dtype=dtype)
+        padded[:, :n_classes] = base_score
+        y_score = padded[:, :n_classes]
+
+    weight_kind = int(rng.integers(0, 4))
+    if weight_kind == 0:
+        sample_weight = None
+    else:
+        weight_dtype = np.float64 if weight_kind == 1 else np.int32
+        if weight_dtype is np.float64:
+            candidate = rng.uniform(0.1, 5.0, size=n_samples)
+        else:
+            candidate = rng.integers(1, 6, size=n_samples).astype(np.int32)
+        if weight_kind == 3 and n_samples > 1:
+            # Zero out one row, but never all of them (ranking functions require >=1 positive).
+            zero_index = int(rng.integers(0, n_samples))
+            candidate = candidate.astype(np.float64 if weight_dtype is np.int32 else weight_dtype)
+            candidate[zero_index] = 0.0
+            if not np.any(candidate > 0.0):
+                candidate[(zero_index + 1) % n_samples] = 1.0
+        sample_weight = candidate
+
+    # `dtype` is picked at runtime from a tuple of scalar types, so Pyright infers a union
+    # dtype (e.g. `dtype[float16 | float32 | float64 | int32]`) for `y_score`/`sample_weight`
+    # that it cannot match against the plain `NDArray[floating] | NDArray[integer]` accepted
+    # by the functions under test, even though every concrete case is one of those dtypes.
+    return (
+        y_true,
+        cast("npt.NDArray[np.floating] | npt.NDArray[np.integer]", y_score),
+        labels,
+        cast("npt.NDArray[np.floating] | npt.NDArray[np.integer] | None", sample_weight),
+    )
+
+
+def test_multiclass_micro_curve_differential_sweep() -> None:
+    rng = np.random.default_rng(20260814)
+    n_cases = 3000
+    generated_cases = 0
+    roc_comparisons = 0
+    pr_comparisons = 0
+
+    for _ in range(n_cases):
+        y_true, y_score, labels, sample_weight = _random_multiclass_micro_case(rng)
+        generated_cases += 1
+
+        weight_list = None if sample_weight is None else sample_weight.tolist()
+        flat_true, flat_score, flat_weight = _independent_flatten_oracle(
+            y_true, labels, y_score, weight_list
+        )
+
+        roc_result = multiclass_roc_curve_micro(
+            y_true, y_score, labels=labels, sample_weight=sample_weight
+        )
+        expected_roc = roc_curve(flat_true, flat_score, positive_label=1, sample_weight=flat_weight)
+        assert roc_result == expected_roc
+        roc_comparisons += 1
+
+        roc_auc_from_curve = auc(roc_result.false_positive_rate, roc_result.true_positive_rate)
+        micro_auc_scalar = multiclass_roc_auc_score(
+            y_true, y_score, labels=labels, average="micro", sample_weight=sample_weight
+        )
+        assert roc_auc_from_curve == micro_auc_scalar
+
+        pr_result = multiclass_precision_recall_curve_micro(
+            y_true, y_score, labels=labels, sample_weight=sample_weight
+        )
+        expected_pr = precision_recall_curve(
+            flat_true, flat_score, positive_label=1, sample_weight=flat_weight
+        )
+        assert pr_result == expected_pr
+        pr_comparisons += 1
+
+    assert generated_cases >= 3000
+    assert roc_comparisons >= generated_cases
+    assert pr_comparisons >= generated_cases
+    print(f"generated multiclass cases: {generated_cases}")
+    print(f"ROC direct-binary comparisons: {roc_comparisons}")
+    print(f"PR direct-binary comparisons: {pr_comparisons}")
+
+
+# =====================================================================================
+# Typing regression (permanent Pyright coverage, checked via `uv run pyright tests`)
+# =====================================================================================
+
+
+def test_typing_multiclass_roc_curve_micro_return_type() -> None:
+    result = multiclass_roc_curve_micro(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    assert_type(result, RocCurve)
+
+
+def test_typing_multiclass_precision_recall_curve_micro_return_type() -> None:
+    result = multiclass_precision_recall_curve_micro(
+        _MULTICLASS_Y_TRUE, _MULTICLASS_Y_SCORE, labels=_MULTICLASS_LABELS
+    )
+    assert_type(result, PrecisionRecallCurve)
+
+
+def test_typing_multiclass_micro_curve_return_types_with_sample_weight() -> None:
+    sample_weight = [1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0]
+    roc_result = multiclass_roc_curve_micro(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    assert_type(roc_result, RocCurve)
+
+    pr_result = multiclass_precision_recall_curve_micro(
+        _MULTICLASS_Y_TRUE,
+        _MULTICLASS_Y_SCORE,
+        labels=_MULTICLASS_LABELS,
+        sample_weight=sample_weight,
+    )
+    assert_type(pr_result, PrecisionRecallCurve)
