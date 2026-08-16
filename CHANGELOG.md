@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.5.0a1] - 2026-08-16
+
 ### Added
 - `save_image(path, image) -> None` (`src/improcv/io.py`): Unicode-safe single-image writing --
   encodes `image` in memory via `cv2.imencode` and writes the result with `Path.write_bytes()`,
@@ -19,11 +21,14 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
   support is exactly whatever the installed OpenCV build provides. First slice accepts `uint8`
   2-D/3-D input only -- no dtype conversion, clipping, normalization, or color conversion of any
   kind. An existing file at `path` is overwritten; parent directories are never created. No
-  atomicity guarantee beyond "encoding finishes before the destination is touched" -- no temp
-  file, `fsync`, or atomic rename. Encoding failures (`cv2.error` or a false success flag) both
-  raise `ValueError` naming `path`; native filesystem errors (missing parent, permission, etc.)
-  propagate unchanged as `OSError`. No encoder parameters, quality/compression options, or new
-  dependency. See `docs/design/0.5.0a1-save-image.md`.
+  atomicity guarantee beyond "encoding finishes before the destination is touched" -- encoding
+  completes before the destination write begins, so an encode failure leaves an existing
+  destination byte-for-byte unchanged, but a filesystem-level write failure, crash, or
+  interruption during the write itself is not guaranteed to leave the destination unchanged; no
+  temp file, `fsync`, or atomic rename is used. Encoding failures (`cv2.error` or a false success
+  flag) both raise `ValueError` naming `path`; native filesystem errors (missing parent,
+  permission, etc.) propagate unchanged as `OSError`. No encoder parameters, quality/compression
+  options, or new dependency. See `docs/design/0.5.0a1-save-image.md`.
 
 ## [0.4.0b1] - 2026-08-14
 
