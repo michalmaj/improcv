@@ -81,9 +81,9 @@ version decided at the time each is actually published, rather than mechanically
   `ImageReadMode`, with no mask-specific semantics of any kind) released in `0.4.0a4`; its
   write-side counterpart (`improcv.io.save_image` -- `uint8` 2-D/3-D only, no dtype/color
   conversion, format selected from the destination suffix, no atomicity/overwrite-flag/parent-
-  creation machinery) implemented in `0.5.0a1.dev0`, targeted for `0.5.0a1`, not yet released --
-  image/mask pair loading, batch loading, mask semantics, and a dataset iteration/loading
-  framework all remain planned, not started, with no version assigned yet), and
+  creation machinery) released in `0.5.0a1` -- image/mask pair loading, batch loading, mask
+  semantics, and a dataset iteration/loading framework all remain planned, not started, with no
+  version assigned yet), and
   dataset image similarity (deterministic pairwise similarity search over precomputed perceptual
   hashes -- `improcv.similarity.find_similar_image_pairs` -- implemented, shipping in `0.3.0a1`;
   portable, deterministic perceptual-hash manifests (`improcv.manifest.PerceptualHashManifest`)
