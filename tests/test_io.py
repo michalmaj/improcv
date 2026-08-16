@@ -1048,7 +1048,7 @@ def test_save_image_dtype_rejected_before_filesystem_write(
 def test_save_image_unsupported_extension_raises_value_error(tmp_path: Path) -> None:
     pixels = np.zeros((4, 4, 3), dtype=np.uint8)
     p = tmp_path / "a.nosuchext"
-    with pytest.raises(ValueError, match=re.escape(str(p))):
+    with pytest.raises(ValueError, match=re.escape(repr(str(p)))):
         save_image(p, pixels)
     assert not p.exists()
 
@@ -1065,7 +1065,7 @@ def test_save_image_invalid_channel_count_raises_value_error(tmp_path: Path) -> 
     # 2 channels is not a layout any image codec supports -- a real cv2.error, not a synthetic one.
     pixels = np.zeros((4, 4, 2), dtype=np.uint8)
     p = tmp_path / "a.png"
-    with pytest.raises(ValueError, match=re.escape(str(p))):
+    with pytest.raises(ValueError, match=re.escape(repr(str(p)))):
         save_image(p, pixels)
     assert not p.exists()
 
@@ -1079,7 +1079,7 @@ def test_save_image_synthetic_false_success_flag_raises_value_error(
     monkeypatch.setattr(cv2, "imencode", fake_imencode)
     pixels = np.zeros((4, 4, 3), dtype=np.uint8)
     p = tmp_path / "a.png"
-    with pytest.raises(ValueError, match=re.escape(str(p))):
+    with pytest.raises(ValueError, match=re.escape(repr(str(p)))):
         save_image(p, pixels)
     assert not p.exists()
 
