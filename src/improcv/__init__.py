@@ -156,7 +156,7 @@ from improcv.hough import (
     hough_line_segments,
     hough_lines,
 )
-from improcv.io import ImageReadMode, load_image
+from improcv.io import ImageReadMode, load_image, save_image
 from improcv.manifest import (
     PerceptualHashManifest,
     PerceptualHashManifestChange,
@@ -400,6 +400,7 @@ __all__ = [
     "sample_crop",
     "sample_flip",
     "sample_perspective",
+    "save_image",
     "seamless_clone",
     "sobel_edge",
     "sort_contours",

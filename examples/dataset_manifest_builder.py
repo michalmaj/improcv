@@ -36,7 +36,6 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-import cv2
 import numpy as np
 
 import improcv as im
@@ -77,19 +76,19 @@ def build_similarity_images() -> dict[str, np.ndarray]:
 def write_dataset(root: Path, images: Mapping[str, np.ndarray]) -> Path:
     """Write `images` as PNGs under ``<root>/żółw-dataset/obrazy/``.
 
-    Writes path-safely (`cv2.imencode` + `Path.write_bytes`) rather than `cv2.imwrite`, since the
-    dataset root's name contains characters outside ASCII, and `cv2.imwrite`'s filename-based
-    handling is not reliable for such paths on Windows. Returns the created dataset root (the
-    ``żółw-dataset`` directory, not the ``obrazy`` subdirectory).
+    Writes via `im.save_image` rather than `cv2.imwrite`, since the dataset root's name contains
+    characters outside ASCII, and `cv2.imwrite`'s filename-based handling is not reliable for such
+    paths on Windows -- `im.save_image` owns that Unicode-safe write boundary (in-memory
+    `cv2.imencode` + `Path.write_bytes`) so this script doesn't have to. `save_image` does not
+    create parent directories itself, so `images_dir.mkdir(parents=True)` still happens here.
+    Returns the created dataset root (the ``żółw-dataset`` directory, not the ``obrazy``
+    subdirectory).
     """
     dataset_root = root / "żółw-dataset"
     images_dir = dataset_root / "obrazy"
     images_dir.mkdir(parents=True)
     for name, pixels in images.items():
-        ok, encoded = cv2.imencode(".png", pixels)
-        if not ok:
-            raise RuntimeError(f"failed to encode {name}")
-        (images_dir / name).write_bytes(encoded.tobytes())
+        im.save_image(images_dir / name, pixels)
     return dataset_root
 
 

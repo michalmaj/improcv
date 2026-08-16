@@ -109,6 +109,24 @@ a general segmentation-mask loader, and does not guarantee preserving a palette-
 a class-index map. `load_image` reads a file's bytes exactly once and returns a new, independent
 array; see its docstring for the full path/error/decode contract.
 
+`save_image` is `load_image`'s write-side counterpart, using the same Unicode-safe strategy in
+reverse: it encodes `image` in memory with `cv2.imencode` and writes the result with
+`Path.write_bytes()` -- never `cv2.imwrite(str(path), ...)`.
+
+```python
+image = im.load_image("photo.jpg")
+resized = im.resize(image, width=640)
+im.save_image("output.png", resized)
+```
+
+The destination's final suffix (`path.suffix`, case-insensitive) selects the encoder -- no
+allowlist, and codec support is whatever the installed OpenCV build provides. This first slice
+accepts `uint8` 2-D/3-D input only, with no dtype conversion or color conversion. An existing file
+at `path` is overwritten; parent directories are never created. There is no atomicity
+guarantee beyond "encoding finishes before the destination is touched" -- no temp file or atomic
+rename. Encode failures raise `ValueError` naming `path`; native filesystem errors (missing
+parent, permission, ...) propagate unchanged as `OSError`. See its docstring for the full contract.
+
 Finding and sorting contours:
 
 ```python

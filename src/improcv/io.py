@@ -1,4 +1,4 @@
-"""Unicode-safe single-image loading: filesystem path in, decoded ndarray out."""
+"""Unicode-safe single-image I/O: load a filesystem path into an ndarray, or save one back."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from typing import Literal, cast, overload
 import cv2
 import numpy as np
 
-from improcv._validation import require_one_of
+from improcv._validation import require_dtype, require_image_ndim, require_one_of
 from improcv.types import Image, ImageU8
 
-__all__ = ["ImageReadMode", "load_image"]
+__all__ = ["ImageReadMode", "load_image", "save_image"]
 
 ImageReadMode = Literal["color", "grayscale", "unchanged"]
 
@@ -159,3 +159,80 @@ def load_image(path: str | os.PathLike[str], *, mode: ImageReadMode = "color") -
     if mode == "unchanged":
         return cast(Image, decoded)
     return cast(ImageU8, decoded)
+
+
+def save_image(path: str | os.PathLike[str], image: Image) -> None:
+    """Encode `image` in memory and write the result to `path`, Unicode-safely.
+
+    Encodes `image` with `cv2.imencode`, never `cv2.imwrite`, then writes the encoded bytes to
+    `path` through Python's own filesystem path handling (`Path.write_bytes()`). `cv2.imwrite`'s
+    filename-based handling is not reliable on Windows for paths containing characters outside
+    the active code page; `cv2.imencode` never receives a filename at all, only an in-memory
+    buffer and an extension string, and `Path.write_bytes()` does not have that limitation.
+
+    For a successful call, this is exactly equivalent to calling
+    ``Path(path).write_bytes(cv2.imencode(Path(path).suffix, image)[1].tobytes())`` directly --
+    no additional transformation, resize, color conversion, or normalization is applied.
+
+    Parameters
+    ----------
+    path : str | os.PathLike[str]
+        A local filesystem destination. Never resolved, expanded (``~``), made absolute, or
+        Unicode-normalized -- used exactly as given. The parent directory is never created -- a
+        missing parent raises a native filesystem error (see Raises). An existing regular file at
+        `path` is overwritten; there is no `overwrite=False`/no-clobber option.
+    image : np.ndarray
+        Must be `dtype=np.uint8`, 2-D or 3-D, and non-empty. No dtype conversion, clipping,
+        normalization, or color conversion of any kind is applied -- channel order and layout are
+        passed through to `cv2.imencode` exactly as given. Channel-count validity beyond
+        dimensionality (e.g. 2 or 5 channels) is not pre-checked here -- an unsupported layout
+        surfaces as an encode failure (see Raises). A non-contiguous array is accepted and encodes
+        byte-identically to an equivalent contiguous copy.
+
+    Returns
+    -------
+    None
+        Never OpenCV's own success flag, a `Path`, `bytes`, or a result object.
+
+    Raises
+    ------
+    TypeError
+        If `path` is not a `str` or `os.PathLike[str]`, or resolves (via `os.fspath()`) to
+        something other than `str` (e.g. a `PathLike` whose ``__fspath__()`` returns `bytes`); or
+        if `image.dtype` is not `np.uint8`.
+    ValueError
+        If `path` is an empty string; if `image` does not have 2 or 3 dimensions or is empty; or
+        if encoding fails -- either because `cv2.imencode` raises `cv2.error` (chained as
+        ``__cause__``) or returns a false success flag. Both cases raise the same `ValueError`
+        naming `path`. The encoder is selected entirely from `path`'s final suffix (`Path.suffix`,
+        case-insensitive), with no allowlist, normalization, or content-based detection -- an
+        unrecognized or missing suffix is an encode failure like any other. Codec/format support
+        beyond what the installed OpenCV build provides is never promised by this function.
+    OSError
+        A native filesystem error writing `path` (`FileNotFoundError` for a missing parent,
+        `PermissionError`, `IsADirectoryError`, or any other `OSError`) propagates unchanged --
+        never wrapped into `ValueError`, since it is a different failure mode from an encode
+        failure.
+
+    Notes
+    -----
+    The only filesystem write is `Path.write_bytes()`, and it only happens after `cv2.imencode`
+    has already succeeded -- so a failed call leaves any pre-existing file at `path` byte-for-byte
+    unchanged. Beyond that ordering, no atomicity is guaranteed: no temporary file, `fsync`, or
+    atomic rename is used, so a crash or interruption during the write itself can still leave a
+    partially written file. `image` is never mutated. No encoder parameters (quality, compression
+    level, ...), metadata (EXIF, ICC profile, ...), or format-specific options are supported.
+    """
+    destination = _normalize_path(path)
+    require_image_ndim(image, ndims=(2, 3))
+    require_dtype(image, (np.uint8,), "image")
+
+    suffix = destination.suffix
+    try:
+        ok, encoded = cv2.imencode(suffix, image)
+    except cv2.error as exc:
+        raise ValueError(f"failed to encode image for {str(destination)!r}") from exc
+    if not ok:
+        raise ValueError(f"failed to encode image for {str(destination)!r}")
+
+    destination.write_bytes(encoded.tobytes())
