@@ -884,6 +884,18 @@ def test_save_image_rejects_empty_string_path() -> None:
         save_image("", pixels)
 
 
+def test_save_image_nul_byte_path_propagates_native_value_error() -> None:
+    # Python's own filesystem layer raises ValueError for an embedded NUL, but its exact wording
+    # is platform-dependent (e.g. "embedded null byte" on POSIX, "embedded null character" on
+    # Windows). save_image does not special-case this (design doc §10), so the test only pins the
+    # exception type, not platform-specific wording -- mirrors load_image's own
+    # test_rejects_nul_byte_path. Uses a valid uint8 2-D image so the failure is genuinely from the
+    # filesystem/path layer, not from image validation or encoding.
+    pixels = np.zeros((4, 4), dtype=np.uint8)
+    with pytest.raises(ValueError, match="null"):
+        save_image("a\x00b.png", pixels)
+
+
 def test_save_image_accepts_relative_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     pixels = np.zeros((4, 4, 3), dtype=np.uint8)
