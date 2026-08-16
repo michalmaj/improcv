@@ -208,6 +208,12 @@ def save_image(path: str | os.PathLike[str], image: Image) -> None:
         case-insensitive), with no allowlist, normalization, or content-based detection -- an
         unrecognized or missing suffix is an encode failure like any other. Codec/format support
         beyond what the installed OpenCV build provides is never promised by this function.
+
+        A path containing an embedded NUL byte is a distinct case: `save_image` does not
+        pre-validate for it, and it never reaches the encode step. Python's own path/filesystem
+        layer raises a native `ValueError` (exact wording is platform-dependent, e.g. "embedded
+        null byte" on POSIX) from within `Path.write_bytes()`, and it propagates unchanged --
+        never renamed, wrapped, or normalized -- exactly like the native `OSError` cases below.
     OSError
         A native filesystem error writing `path` (`FileNotFoundError` for a missing parent,
         `PermissionError`, `IsADirectoryError`, or any other `OSError`) propagates unchanged --
@@ -216,12 +222,15 @@ def save_image(path: str | os.PathLike[str], image: Image) -> None:
 
     Notes
     -----
-    The only filesystem write is `Path.write_bytes()`, and it only happens after `cv2.imencode`
-    has already succeeded -- so a failed call leaves any pre-existing file at `path` byte-for-byte
-    unchanged. Beyond that ordering, no atomicity is guaranteed: no temporary file, `fsync`, or
-    atomic rename is used, so a crash or interruption during the write itself can still leave a
-    partially written file. `image` is never mutated. No encoder parameters (quality, compression
-    level, ...), metadata (EXIF, ICC profile, ...), or format-specific options are supported.
+    `Path.write_bytes()` is called only after `cv2.imencode` has already succeeded, so an
+    **encode** failure leaves any pre-existing destination byte-for-byte unchanged. That guarantee
+    stops there: once the filesystem write itself begins, no atomicity is guaranteed -- no
+    temporary file, `fsync`, or atomic rename is used, so a filesystem-level write failure, crash,
+    or interruption during that write can still leave an existing destination truncated or
+    partially written. An ordinary successful overwrite is not atomic either -- it is a plain
+    `Path.write_bytes()` call, nothing more. `image` is never mutated. No encoder parameters
+    (quality, compression level, ...), metadata (EXIF, ICC profile, ...), or format-specific
+    options are supported.
     """
     destination = _normalize_path(path)
     require_image_ndim(image, ndims=(2, 3))
