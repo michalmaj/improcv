@@ -4,6 +4,7 @@ import binascii
 import inspect
 import os
 import platform
+import re
 import struct
 import zlib
 from enum import Enum
@@ -16,7 +17,7 @@ import pytest
 
 import improcv as im
 import improcv.io as io_module
-from improcv.io import ImageReadMode, load_image
+from improcv.io import ImageReadMode, load_image, save_image
 from improcv.types import Image, ImageU8
 
 # =====================================================================================
@@ -117,15 +118,18 @@ class _Unrelated(Enum):
 def test_top_level_export_is_the_same_object() -> None:
     assert im.load_image is load_image
     assert im.ImageReadMode is io_module.ImageReadMode
+    assert im.save_image is save_image
+    assert im.save_image is io_module.save_image
 
 
 def test_module_all_contains_exactly_the_public_symbols() -> None:
-    assert io_module.__all__ == ["ImageReadMode", "load_image"]
+    assert io_module.__all__ == ["ImageReadMode", "load_image", "save_image"]
 
 
 def test_top_level_all_contains_new_symbols_without_duplicates() -> None:
     assert im.__all__.count("load_image") == 1
     assert im.__all__.count("ImageReadMode") == 1
+    assert im.__all__.count("save_image") == 1
     assert len(im.__all__) == len(set(im.__all__))
 
 
@@ -149,6 +153,23 @@ def test_public_signature() -> None:
     assert parameters["path"].default is inspect.Parameter.empty
     assert parameters["mode"].kind == inspect.Parameter.KEYWORD_ONLY
     assert parameters["mode"].default == "color"
+
+
+def test_save_image_public_signature() -> None:
+    signature = inspect.signature(save_image, eval_str=True)
+    parameters = signature.parameters
+    assert list(parameters) == ["path", "image"]
+    assert parameters["path"].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["path"].default is inspect.Parameter.empty
+    assert parameters["image"].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["image"].default is inspect.Parameter.empty
+    assert signature.return_annotation is None
+
+
+def test_top_level_all_places_save_image_alphabetically() -> None:
+    index = im.__all__.index("save_image")
+    assert im.__all__[index - 1] == "sample_perspective"
+    assert im.__all__[index + 1] == "seamless_clone"
 
 
 # =====================================================================================
@@ -188,6 +209,13 @@ def test_typing_non_narrowed_mode_is_legal(tmp_path: Path) -> None:
     _write_image(p, np.zeros((4, 4, 3), dtype=np.uint8))
     result: Image = _load_with_runtime_mode(p, "color")
     assert result is not None
+
+
+def test_typing_save_image_returns_none(tmp_path: Path) -> None:
+    p = tmp_path / "x.png"
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+    result = save_image(p, image)
+    assert_type(result, None)
 
 
 # =====================================================================================
@@ -798,3 +826,391 @@ def test_unchanged_does_not_apply_exif_orientation(tmp_path: Path) -> None:
     result = load_image(p, mode="unchanged")
 
     assert result.shape[:2] == (12, 20)  # not rotated: orientation ignored
+
+
+# =====================================================================================
+# save_image: path contract (reuses load_image's _normalize_path unchanged)
+# =====================================================================================
+
+
+def test_save_image_accepts_str_path(tmp_path: Path) -> None:
+    p = tmp_path / "a.png"
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    save_image(str(p), pixels)
+    assert p.exists()
+
+
+def test_save_image_accepts_pathlib_path(tmp_path: Path) -> None:
+    p = tmp_path / "a.png"
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    save_image(p, pixels)
+    assert p.exists()
+
+
+def test_save_image_accepts_custom_pathlike_returning_str(tmp_path: Path) -> None:
+    p = tmp_path / "a.png"
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    class _StrPathLike:
+        def __fspath__(self) -> str:
+            return str(p)
+
+    save_image(_StrPathLike(), pixels)
+    assert p.exists()
+
+
+def test_save_image_rejects_custom_pathlike_returning_bytes(tmp_path: Path) -> None:
+    p = tmp_path / "a.png"
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    class _BytesPathLike:
+        def __fspath__(self) -> bytes:
+            return str(p).encode()
+
+    with pytest.raises(TypeError, match="resolve to a str"):
+        save_image(_BytesPathLike(), pixels)  # type: ignore[arg-type]
+    assert not p.exists()
+
+
+def test_save_image_rejects_bytes_path() -> None:
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    with pytest.raises(TypeError, match="resolve to a str"):
+        save_image(b"a.png", pixels)  # type: ignore[arg-type]
+
+
+def test_save_image_rejects_empty_string_path() -> None:
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    with pytest.raises(ValueError, match="must not be an empty string"):
+        save_image("", pixels)
+
+
+def test_save_image_accepts_relative_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    save_image("a.png", pixels)
+    assert (tmp_path / "a.png").exists()
+
+
+def test_save_image_unicode_destination_matches_direct_imencode_oracle(tmp_path: Path) -> None:
+    name = "zażółć_日本_🧪.png"
+    p = tmp_path / name
+    pixels = _rng(70).integers(0, 256, size=(6, 6, 3), dtype=np.uint8)
+
+    save_image(p, pixels)
+
+    ok, expected = cv2.imencode(p.suffix, pixels)
+    assert ok
+    assert p.read_bytes() == expected.tobytes()
+
+
+def test_save_image_missing_parent_raises_os_error(tmp_path: Path) -> None:
+    p = tmp_path / "missing_dir" / "a.png"
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    with pytest.raises(OSError):
+        save_image(p, pixels)
+
+
+def test_save_image_directory_destination_raises_os_error(tmp_path: Path) -> None:
+    # Named with a valid suffix so cv2.imencode succeeds and the failure is a genuine native
+    # filesystem error from Path.write_bytes(), not an encode failure from an empty suffix.
+    directory = tmp_path / "a_directory.png"
+    directory.mkdir()
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    with pytest.raises((IsADirectoryError, PermissionError)):
+        save_image(directory, pixels)
+
+
+# =====================================================================================
+# save_image: byte-level oracle (destination bytes == cv2.imencode(suffix, image))
+# =====================================================================================
+
+
+def _assert_byte_oracle(path: Path, image: np.ndarray) -> None:
+    ok, expected = cv2.imencode(path.suffix, image)
+    assert ok
+    save_image(path, image)
+    assert path.read_bytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize(
+    ("shape", "dtype"),
+    [
+        ((10, 12), np.uint8),
+        ((10, 12, 3), np.uint8),
+        ((10, 12, 4), np.uint8),
+        ((10, 12, 1), np.uint8),
+    ],
+    ids=["grayscale", "bgr", "bgra", "single_channel_3d"],
+)
+def test_save_image_png_byte_oracle(tmp_path: Path, shape: tuple[int, ...], dtype: type) -> None:
+    pixels = _rng(hash(shape) & 0xFFFF).integers(0, 256, size=shape, dtype=dtype)
+    _assert_byte_oracle(tmp_path / "out.png", pixels)
+
+
+def test_save_image_jpeg_byte_oracle(tmp_path: Path) -> None:
+    pixels = _rng(31).integers(0, 256, size=(20, 24, 3), dtype=np.uint8)
+    _assert_byte_oracle(tmp_path / "out.jpg", pixels)
+
+
+def test_save_image_jpeg_then_load_image_roundtrip_matches_shape_and_dtype(
+    tmp_path: Path,
+) -> None:
+    # Secondary roundtrip check (legal per design) -- JPEG is lossy, so this checks structural
+    # fidelity only, never pixel equality.
+    pixels = _rng(32).integers(0, 256, size=(20, 24, 3), dtype=np.uint8)
+    p = tmp_path / "out.jpg"
+    save_image(p, pixels)
+    result = load_image(p)
+    assert result.shape == pixels.shape
+    assert result.dtype == pixels.dtype
+
+
+def test_save_image_png_roundtrip_via_load_image(tmp_path: Path) -> None:
+    pixels = _rng(33).integers(0, 256, size=(10, 10, 3), dtype=np.uint8)
+    p = tmp_path / "roundtrip.png"
+    save_image(p, pixels)
+    result = load_image(p, mode="unchanged")
+    np.testing.assert_array_equal(result, pixels)
+
+
+def test_save_image_uppercase_extension_byte_oracle(tmp_path: Path) -> None:
+    pixels = _rng(34).integers(0, 256, size=(8, 8, 3), dtype=np.uint8)
+    _assert_byte_oracle(tmp_path / "out.PNG", pixels)
+
+
+def test_save_image_multi_dot_filename_byte_oracle(tmp_path: Path) -> None:
+    pixels = _rng(35).integers(0, 256, size=(8, 8, 3), dtype=np.uint8)
+    _assert_byte_oracle(tmp_path / "archive.v2.final.png", pixels)
+
+
+# =====================================================================================
+# save_image: rejected images (dtype/ndim validation, reused from _validation.py)
+# =====================================================================================
+
+
+def test_save_image_rejects_float32(tmp_path: Path) -> None:
+    pixels = np.zeros((4, 4, 3), dtype=np.float32)
+    p = tmp_path / "a.png"
+    with pytest.raises(TypeError, match="dtype"):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+def test_save_image_rejects_uint16(tmp_path: Path) -> None:
+    pixels = np.zeros((4, 4, 3), dtype=np.uint16)
+    p = tmp_path / "a.png"
+    with pytest.raises(TypeError, match="dtype"):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+def test_save_image_rejects_1d_array(tmp_path: Path) -> None:
+    pixels = np.zeros((16,), dtype=np.uint8)
+    p = tmp_path / "a.png"
+    with pytest.raises(ValueError, match="dimensions"):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+def test_save_image_rejects_0d_array(tmp_path: Path) -> None:
+    pixels = np.array(5, dtype=np.uint8)
+    p = tmp_path / "a.png"
+    with pytest.raises(ValueError, match="dimensions"):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+def test_save_image_rejects_empty_array(tmp_path: Path) -> None:
+    pixels = np.zeros((0, 0), dtype=np.uint8)
+    p = tmp_path / "a.png"
+    with pytest.raises(ValueError, match="empty"):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+def test_save_image_dtype_rejected_before_filesystem_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*args: object, **kwargs: object) -> int:
+        raise AssertionError("must not write before dtype validation")
+
+    monkeypatch.setattr(Path, "write_bytes", boom)
+    pixels = np.zeros((4, 4, 3), dtype=np.float32)
+    with pytest.raises(TypeError):
+        save_image(tmp_path / "a.png", pixels)
+
+
+# =====================================================================================
+# save_image: encode failure mapping (cv2.error -> ValueError, ok=False -> ValueError)
+# =====================================================================================
+
+
+def test_save_image_unsupported_extension_raises_value_error(tmp_path: Path) -> None:
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    p = tmp_path / "a.nosuchext"
+    with pytest.raises(ValueError, match=re.escape(repr(str(p)))):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+def test_save_image_cv2_error_is_chained_as_cause(tmp_path: Path) -> None:
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    p = tmp_path / "a.nosuchext"
+    with pytest.raises(ValueError) as exc_info:
+        save_image(p, pixels)
+    assert isinstance(exc_info.value.__cause__, cv2.error)
+
+
+def test_save_image_invalid_channel_count_raises_value_error(tmp_path: Path) -> None:
+    # 2 channels is not a layout any image codec supports -- a real cv2.error, not a synthetic one.
+    pixels = np.zeros((4, 4, 2), dtype=np.uint8)
+    p = tmp_path / "a.png"
+    with pytest.raises(ValueError, match=re.escape(repr(str(p)))):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+def test_save_image_synthetic_false_success_flag_raises_value_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_imencode(*args: object, **kwargs: object) -> tuple[bool, np.ndarray]:
+        return False, np.zeros((1,), dtype=np.uint8)
+
+    monkeypatch.setattr(cv2, "imencode", fake_imencode)
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    p = tmp_path / "a.png"
+    with pytest.raises(ValueError, match=re.escape(repr(str(p)))):
+        save_image(p, pixels)
+    assert not p.exists()
+
+
+# =====================================================================================
+# save_image: write-order invariant (encode fully before any filesystem write)
+# =====================================================================================
+
+
+def test_save_image_leaves_existing_destination_untouched_on_encode_failure(
+    tmp_path: Path,
+) -> None:
+    p = tmp_path / "a.nosuchext"
+    sentinel = b"sentinel-bytes-must-survive"
+    p.write_bytes(sentinel)
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError):
+        save_image(p, pixels)
+
+    assert p.read_bytes() == sentinel
+
+
+def test_save_image_never_calls_write_bytes_on_encode_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*args: object, **kwargs: object) -> int:
+        raise AssertionError("write_bytes must not be called when encoding fails")
+
+    monkeypatch.setattr(Path, "write_bytes", boom)
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        save_image(tmp_path / "a.nosuchext", pixels)
+
+
+# =====================================================================================
+# save_image: filesystem behavior (overwrite, native error propagation)
+# =====================================================================================
+
+
+def test_save_image_overwrites_existing_destination(tmp_path: Path) -> None:
+    p = tmp_path / "a.png"
+    old_pixels = _rng(40).integers(0, 256, size=(4, 4, 3), dtype=np.uint8)
+    save_image(p, old_pixels)
+    old_bytes = p.read_bytes()
+
+    new_pixels = _rng(41).integers(0, 256, size=(6, 6, 3), dtype=np.uint8)
+    save_image(p, new_pixels)
+
+    ok, expected = cv2.imencode(".png", new_pixels)
+    assert ok
+    assert p.read_bytes() == expected.tobytes()
+    assert p.read_bytes() != old_bytes
+
+
+def test_save_image_propagates_synthetic_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(self: Path, *args: object, **kwargs: object) -> int:
+        raise PermissionError("synthetic permission denial")
+
+    monkeypatch.setattr(Path, "write_bytes", boom)
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    with pytest.raises(PermissionError):
+        save_image(tmp_path / "a.png", pixels)
+
+
+# =====================================================================================
+# save_image: isolation (cv2.imwrite never called; only Path.write_bytes touches disk)
+# =====================================================================================
+
+
+def test_save_image_never_calls_cv2_imwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("save_image must never call cv2.imwrite")
+
+    monkeypatch.setattr(cv2, "imwrite", boom)
+    pixels = _rng(50).integers(0, 256, size=(6, 6, 3), dtype=np.uint8)
+    p = tmp_path / "a.png"
+    save_image(p, pixels)
+    assert p.exists()
+
+
+def test_save_image_writes_full_encoded_bytes_via_write_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+    original_write_bytes = Path.write_bytes
+
+    def spy(self: Path, data: bytes, *args: object, **kwargs: object) -> int:
+        captured["path"] = self
+        captured["data"] = data
+        return original_write_bytes(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", spy)
+    pixels = _rng(51).integers(0, 256, size=(6, 6, 3), dtype=np.uint8)
+    p = tmp_path / "a.png"
+
+    save_image(p, pixels)
+
+    ok, expected = cv2.imencode(".png", pixels)
+    assert ok
+    assert captured["path"] == p
+    assert captured["data"] == expected.tobytes()
+
+
+# =====================================================================================
+# save_image: no mutation, non-contiguous input
+# =====================================================================================
+
+
+def test_save_image_does_not_mutate_input(tmp_path: Path) -> None:
+    pixels = _rng(60).integers(0, 256, size=(6, 6, 3), dtype=np.uint8)
+    original = pixels.copy()
+    save_image(tmp_path / "a.png", pixels)
+    np.testing.assert_array_equal(pixels, original)
+
+
+def test_save_image_accepts_non_contiguous_input_matching_direct_imencode(
+    tmp_path: Path,
+) -> None:
+    base = _rng(61).integers(0, 256, size=(20, 20, 3), dtype=np.uint8)
+    non_contiguous = base[::2, ::2, :]
+    assert not non_contiguous.flags["C_CONTIGUOUS"]
+
+    ok, expected = cv2.imencode(".png", non_contiguous)
+    assert ok
+
+    p = tmp_path / "a.png"
+    save_image(p, non_contiguous)
+
+    assert p.read_bytes() == expected.tobytes()
