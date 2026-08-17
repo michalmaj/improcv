@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.5.0a2] - 2026-08-17
+
 ### Added
 - `expand_perspective_canvas(params) -> PerspectiveParameters` (`src/improcv/augmentation.py`):
   deterministic, RNG-free, grow-only canvas expansion for `PerspectiveParameters`, the
