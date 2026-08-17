@@ -18,6 +18,7 @@ from improcv.augmentation import (
     apply_flip,
     apply_perspective,
     expand_affine_canvas,
+    expand_perspective_canvas,
     sample_affine,
     sample_crop,
     sample_flip,
@@ -38,6 +39,14 @@ def _output_size(params: AffineParameters) -> tuple[int, int]:
     # Narrows AffineParameters.output_size (tuple[int, int] | None) for
     # Pyright at call sites that already know, from how params was built,
     # that expand_affine_canvas has set it.
+    assert params.output_size is not None
+    return params.output_size
+
+
+def _perspective_output_size(params: PerspectiveParameters) -> tuple[int, int]:
+    # Narrows PerspectiveParameters.output_size (tuple[int, int] | None) for
+    # Pyright at call sites that already know, from how params was built,
+    # that expand_perspective_canvas has set it.
     assert params.output_size is not None
     return params.output_size
 
@@ -3267,6 +3276,7 @@ def test_perspective_parameters_does_not_have_distortion_scale_field() -> None:
         "matrix",
         "source_size",
         "destination_points",
+        "output_size",
     }
 
 
@@ -4867,3 +4877,686 @@ def test_augmentation_module_still_does_not_import_new_dependencies() -> None:
     disallowed = ["scipy", "torch", "torchvision", "albumentations"]
     for name in disallowed:
         assert name not in source
+
+
+def _affine_equivalent_perspective_matrix(affine_matrix: np.ndarray) -> np.ndarray:
+    matrix = np.eye(3, dtype=np.float64)
+    matrix[:2, :] = affine_matrix
+    return matrix
+
+
+_ARBITRARY_DESTINATION_POINTS = ((0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0))
+
+
+# --- PerspectiveParameters: output_size field compatibility ---
+
+
+def test_perspective_parameters_three_positional_arguments_still_construct_with_output_size() -> (
+    None
+):
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    assert params.output_size is None
+
+
+def test_perspective_parameters_output_size_is_keyword_only_fourth_positional_rejected() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    with pytest.raises(TypeError):
+        PerspectiveParameters(
+            matrix,
+            (5, 4),
+            _ARBITRARY_DESTINATION_POINTS,
+            (5, 4),  # type: ignore[misc]
+        )
+
+
+def test_perspective_parameters_output_size_accepted_as_keyword() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(20, 16)
+    )
+    assert params.output_size == (20, 16)
+
+
+def test_perspective_parameters_match_args_excludes_output_size() -> None:
+    assert PerspectiveParameters.__match_args__ == (
+        "matrix",
+        "source_size",
+        "destination_points",
+    )
+
+
+def test_perspective_parameters_three_positional_pattern_matching_unaffected_by_output_size() -> (
+    None
+):
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(20, 16)
+    )
+    match params:
+        case PerspectiveParameters(m, s, d):
+            assert m is params.matrix
+            assert s == (5, 4)
+            assert d == _ARBITRARY_DESTINATION_POINTS
+        case _:
+            pytest.fail("pattern match failed")
+
+
+def test_perspective_parameters_equality_includes_output_size() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    a = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(20, 16))
+    b = PerspectiveParameters(
+        matrix.copy(), (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(20, 16)
+    )
+    c = PerspectiveParameters(
+        matrix.copy(), (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(21, 16)
+    )
+    assert a == b
+    assert a != c
+
+
+def test_perspective_parameters_old_params_default_output_size_none_equality_unaffected() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    a = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    b = PerspectiveParameters(matrix.copy(), (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    assert a == b
+    assert a.output_size is None
+    assert b.output_size is None
+
+
+def test_perspective_parameters_repr_and_asdict_contain_output_size() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(20, 16)
+    )
+    assert "output_size" in repr(params)
+    d = dataclasses.asdict(params)
+    assert d["output_size"] == (20, 16)
+
+
+def test_perspective_parameters_default_output_size_is_none() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    assert params.output_size is None
+
+
+def test_perspective_parameters_output_size_does_not_restore_hashability() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(20, 16)
+    )
+    with pytest.raises(TypeError):
+        hash(params)
+
+
+# --- PerspectiveParameters: output_size validation (apply_perspective integration) ---
+
+
+@pytest.mark.parametrize("bad", [(10,), (10, 8, 1), "10x8", [10, 8]])
+def test_apply_perspective_rejects_malformed_hand_built_output_size(bad: object) -> None:
+    rng = np.random.default_rng(0)
+    base = sample_perspective(rng, source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=bad)  # type: ignore[arg-type]
+    image = _make_image(4, 5)
+    with pytest.raises((TypeError, ValueError)):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_bool_in_hand_built_output_size() -> None:
+    rng = np.random.default_rng(0)
+    base = sample_perspective(rng, source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(True, 8))  # type: ignore[arg-type]
+    image = _make_image(4, 5)
+    with pytest.raises(TypeError):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_non_positive_hand_built_output_size() -> None:
+    rng = np.random.default_rng(0)
+    base = sample_perspective(rng, source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(0, 8))
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="positive"):
+        apply_perspective(image, params)
+
+
+def test_apply_perspective_rejects_hand_built_output_size_overflow() -> None:
+    rng = np.random.default_rng(0)
+    base = sample_perspective(rng, source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(2_500_000_000, 8))
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="int32"):
+        apply_perspective(image, params)
+
+
+# --- sample_perspective: output_size regression ---
+
+
+def test_sample_perspective_output_size_is_none() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    assert params.output_size is None
+
+
+def test_sample_perspective_identity_output_size_is_none() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.0)
+    assert params.output_size is None
+
+
+# --- expand_perspective_canvas: API/validation ---
+
+
+def test_expand_perspective_canvas_is_exported() -> None:
+    assert im.expand_perspective_canvas is expand_perspective_canvas
+
+
+def test_expand_perspective_canvas_rejects_non_perspective_parameters() -> None:
+    with pytest.raises(TypeError, match="PerspectiveParameters"):
+        expand_perspective_canvas("not-params")  # type: ignore[arg-type]
+
+
+def test_expand_perspective_canvas_rejects_invalid_matrix() -> None:
+    bad = dataclasses.replace(
+        sample_perspective(np.random.default_rng(0), source_size=(5, 4)),
+        matrix=np.eye(2, 3, dtype=np.float64),  # type: ignore[arg-type]
+    )
+    with pytest.raises(ValueError, match=r"\(3, 3\)"):
+        expand_perspective_canvas(bad)
+
+
+@pytest.mark.parametrize("bad", [(10,), (10, 8, 1), "10x8", [10, 8]])
+def test_expand_perspective_canvas_rejects_malformed_hand_built_output_size(bad: object) -> None:
+    base = sample_perspective(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=bad)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError)):
+        expand_perspective_canvas(params)
+
+
+def test_expand_perspective_canvas_rejects_bool_in_hand_built_output_size() -> None:
+    base = sample_perspective(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(True, 8))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        expand_perspective_canvas(params)
+
+
+def test_expand_perspective_canvas_rejects_non_positive_hand_built_output_size() -> None:
+    base = sample_perspective(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(0, 8))
+    with pytest.raises(ValueError, match="positive"):
+        expand_perspective_canvas(params)
+
+
+# --- expand_perspective_canvas: idempotence/fail-fast ---
+
+
+def test_expand_perspective_canvas_rejects_already_expanded_params() -> None:
+    params = sample_perspective(np.random.default_rng(0), source_size=(5, 4), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    with pytest.raises(ValueError, match="already define an output_size"):
+        expand_perspective_canvas(expanded)
+
+
+def test_expand_perspective_canvas_rejects_hand_built_params_with_output_size_set() -> None:
+    base = sample_perspective(np.random.default_rng(0), source_size=(5, 4))
+    params = dataclasses.replace(base, output_size=(20, 16))
+    with pytest.raises(ValueError, match="already define an output_size"):
+        expand_perspective_canvas(params)
+
+
+def test_expand_perspective_canvas_does_not_mutate_input_params() -> None:
+    params = sample_perspective(np.random.default_rng(0), source_size=(5, 4), distortion_scale=0.3)
+    original_matrix = params.matrix.copy()
+    expand_perspective_canvas(params)
+    np.testing.assert_array_equal(params.matrix, original_matrix)
+    assert params.output_size is None
+
+
+# --- expand_perspective_canvas: bounds and matrix (manual oracles) ---
+
+
+def test_expand_perspective_canvas_identity() -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    expanded = expand_perspective_canvas(params)
+    assert expanded.output_size == (5, 4)
+    np.testing.assert_array_equal(expanded.matrix, matrix)
+    assert expanded.source_size == (5, 4)
+    assert expanded.destination_points == _ARBITRARY_DESTINATION_POINTS
+
+
+@pytest.mark.parametrize("source_size", [(1, 1), (1, 10), (10, 1)])
+def test_expand_perspective_canvas_singleton_dimensions_identity(
+    source_size: tuple[int, int],
+) -> None:
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(matrix, source_size, _ARBITRARY_DESTINATION_POINTS)
+    expanded = expand_perspective_canvas(params)
+    assert expanded.output_size == source_size
+
+
+def test_expand_perspective_canvas_uses_matrix_not_mismatched_metadata() -> None:
+    # Regression test: destination_points are deliberately a legal but
+    # meaningless 4-tuple, unrelated to the matrix's own translation -- bounds
+    # must follow the matrix, never destination_points.
+    matrix = np.array([[1.0, 0.0, 3.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix=matrix,
+        source_size=(5, 4),
+        destination_points=((99.0, 99.0), (99.0, 99.0), (99.0, 99.0), (99.0, 99.0)),
+    )
+    expanded = expand_perspective_canvas(params)
+    assert expanded.output_size == (8, 4)  # matches matrix's dx=3, not the metadata
+    assert expanded.destination_points == ((99.0, 99.0),) * 4  # metadata copied unchanged
+
+
+# --- expand_perspective_canvas: pixel-cell footprint vs pixel-center ---
+
+
+def test_expand_perspective_canvas_uses_full_pixel_cell_footprint_not_center() -> None:
+    # source_size=(5, 4), dx=2 translation: pixel-cell-footprint-based union gives
+    # output_width=7 (matches expand_affine_canvas's own answer for the identical
+    # affine case); a pixel-center-only calculation would instead give 6. This
+    # permanently guards against accidentally switching to pixel-center bounds.
+    affine_matrix = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    matrix = _affine_equivalent_perspective_matrix(affine_matrix)
+    params = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    expanded = expand_perspective_canvas(params)
+    assert expanded.output_size == (7, 4)
+    assert expanded.output_size != (6, 4)
+
+
+# --- expand_perspective_canvas: source+transformed union (grow-only) ---
+
+
+def test_expand_perspective_canvas_transformed_inside_source_stays_source_size() -> None:
+    # A scale-down-about-center homography: the transformed footprint lies
+    # entirely inside the source footprint -- grow-only semantics require the
+    # result to stay exactly source_size, never a tighter transformed-only crop.
+    source_size = (10, 8)
+    cx, cy = (source_size[0] - 1) / 2.0, (source_size[1] - 1) / 2.0
+    scale = 0.5
+    affine_matrix = np.array(
+        [[scale, 0.0, (1 - scale) * cx], [0.0, scale, (1 - scale) * cy]], dtype=np.float64
+    )
+    matrix = _affine_equivalent_perspective_matrix(affine_matrix)
+    params = PerspectiveParameters(matrix, source_size, _ARBITRARY_DESTINATION_POINTS)
+    expanded = expand_perspective_canvas(params)
+    assert expanded.output_size == source_size
+
+
+@pytest.mark.parametrize(
+    "distortion_scale",
+    [0.0, 0.1, 0.3, 0.5],
+)
+def test_expand_perspective_canvas_is_always_grow_only(distortion_scale: float) -> None:
+    rng = np.random.default_rng(0)
+    source_size = (10, 8)
+    params = sample_perspective(rng, source_size=source_size, distortion_scale=distortion_scale)
+    expanded = expand_perspective_canvas(params)
+    assert _perspective_output_size(expanded)[0] >= source_size[0]
+    assert _perspective_output_size(expanded)[1] >= source_size[1]
+
+
+# --- expand_perspective_canvas: horizon taxonomy ---
+
+
+def test_expand_perspective_canvas_rejects_center_rectangle_horizon_crossing() -> None:
+    # Case A: horizon already crosses the pixel-center rectangle -- rejected by
+    # the existing, unchanged _require_perspective_matrix_geometry/apply_perspective
+    # path, before expand_perspective_canvas's own footprint-specific check ever runs.
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, -2.0]], dtype=np.float64)
+    params = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    image = _make_image(4, 5)
+    with pytest.raises(ValueError, match="horizon"):
+        apply_perspective(image, params)
+    with pytest.raises(ValueError, match="horizon"):
+        expand_perspective_canvas(params)
+
+
+def test_expand_perspective_canvas_fringe_only_horizon_crossing_rejected() -> None:
+    # Case B: w(x, y) = x - 4.25 -- consistent negative at all 4 pixel-center
+    # corners (x in {0, 4}: w = -4.25, -0.25) so apply_perspective succeeds
+    # today, but changes sign within the pixel-cell footprint (x in
+    # {-0.5, 4.5}: w = -4.75, +0.25) -- expand_perspective_canvas must reject
+    # this even though apply_perspective(image, params) does not.
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, -4.25]], dtype=np.float64)
+    params = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    image = _make_image(4, 5)
+
+    result = apply_perspective(image, params)  # must succeed
+    assert result.shape == image.shape
+
+    with pytest.raises(ValueError) as exc_info:
+        expand_perspective_canvas(params)
+    message = str(exc_info.value)
+    assert "expand_perspective_canvas" in message
+    assert "horizon" in message
+    assert "footprint" in message
+
+
+def test_expand_perspective_canvas_near_horizon_but_valid_succeeds() -> None:
+    # w(x, y) = x - 5.0: the horizon (x=5) lies strictly outside the full
+    # pixel-cell footprint (x in [-0.5, 4.5]) -- close, but valid, and must
+    # succeed with no arbitrary epsilon rejection.
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, -5.0]], dtype=np.float64)
+    params = PerspectiveParameters(matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS)
+    expanded = expand_perspective_canvas(params)
+    output_size = _perspective_output_size(expanded)
+    assert output_size[0] > 0
+    assert output_size[1] > 0
+    assert np.all(np.isfinite(expanded.matrix))
+
+    image = _make_image(4, 5)
+    result = apply_perspective(image, expanded)
+    assert result.shape[:2] == (output_size[1], output_size[0])
+
+
+# --- expand_perspective_canvas: scale invariance ---
+
+
+@pytest.mark.parametrize("factor", [1.0, 1e200, 1e-200])
+def test_expand_perspective_canvas_scale_invariant_accept_and_output_size(factor: float) -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.4)
+    scaled_matrix = params.matrix * factor
+    assert np.all(np.isfinite(scaled_matrix))
+    scaled_params = PerspectiveParameters(
+        matrix=scaled_matrix,
+        source_size=params.source_size,
+        destination_points=params.destination_points,
+    )
+    expanded = expand_perspective_canvas(scaled_params)  # must not raise
+    expected = expand_perspective_canvas(params)
+    assert expanded.output_size == expected.output_size
+
+
+# --- expand_perspective_canvas: non-finite / dsize guards ---
+
+
+def test_expand_perspective_canvas_rejects_non_finite_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    def boom(*args: object, **kwargs: object) -> tuple[np.ndarray, np.ndarray]:
+        return np.array([0.0, np.inf, 0.0, 0.0]), np.array([0.0, 0.0, 0.0, 0.0])
+
+    monkeypatch.setattr(augmentation_module, "_project_perspective_footprint", boom)
+
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    with pytest.raises(ValueError, match="finite"):
+        expand_perspective_canvas(params)
+
+
+def test_expand_perspective_canvas_rejects_output_size_overflow() -> None:
+    huge = 3_000_000_000.0
+    matrix = np.array([[huge, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    params = PerspectiveParameters(matrix, (10, 10), _ARBITRARY_DESTINATION_POINTS)
+    with pytest.raises(ValueError, match="int32"):
+        expand_perspective_canvas(params)
+
+
+def test_expand_perspective_canvas_no_floating_point_error_under_seterr_raise() -> None:
+    previous = np.seterr(all="raise")
+    try:
+        rng = np.random.default_rng(0)
+        params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+        expanded = expand_perspective_canvas(params)
+        assert np.all(np.isfinite(expanded.matrix))
+    finally:
+        np.seterr(**previous)
+
+
+def test_expand_perspective_canvas_no_warning_under_warnings_as_errors() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        rng = np.random.default_rng(0)
+        params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+        expand_perspective_canvas(params)
+
+
+# --- expand_perspective_canvas: adjusted-matrix construction ---
+
+
+def test_expand_perspective_canvas_adjusted_matrix_is_independent_read_only_float64() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    assert expanded.matrix.shape == (3, 3)
+    assert expanded.matrix.dtype == np.float64
+    assert expanded.matrix.flags["C_CONTIGUOUS"]
+    assert not expanded.matrix.flags.writeable
+    assert not np.shares_memory(expanded.matrix, params.matrix)
+    with pytest.raises(ValueError):
+        expanded.matrix[0, 0] = 1.0
+
+
+def test_expand_perspective_canvas_bottom_row_preserved() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.4)
+    expanded = expand_perspective_canvas(params)
+    np.testing.assert_array_equal(expanded.matrix[2, :], params.matrix[2, :])
+
+
+# --- expand_perspective_canvas: destination_points regression ---
+
+
+def test_expand_perspective_canvas_destination_points_unchanged() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.4)
+    expanded = expand_perspective_canvas(params)
+    assert expanded.destination_points == params.destination_points
+
+
+# --- expand_perspective_canvas: affine-equivalent oracle ---
+
+
+def _affine_equivalent_oracle_cases() -> list[tuple[tuple[int, int], np.ndarray]]:
+    identity = ((5, 4), np.eye(2, 3, dtype=np.float64))
+    positive_translation = (
+        (5, 4),
+        np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 0.0]], dtype=np.float64),
+    )
+    negative_translation = (
+        (5, 4),
+        np.array([[1.0, 0.0, -2.0], [0.0, 1.0, 0.0]], dtype=np.float64),
+    )
+    rotation_center = ((2 - 1) / 2.0, (2 - 1) / 2.0)
+    rotation_45deg = (
+        (2, 2),
+        np.asarray(cv2.getRotationMatrix2D(rotation_center, 45.0, 1.0), dtype=np.float64),
+    )
+    shear = ((6, 4), np.array([[1.0, 0.6, -0.9], [0.0, 1.0, 0.0]], dtype=np.float64))
+    anisotropic_scale = (
+        (10, 8),
+        np.array([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64),
+    )
+    near_right_angle_center = ((3 - 1) / 2.0, (2 - 1) / 2.0)
+    near_right_angle_90deg = (
+        (3, 2),
+        np.asarray(cv2.getRotationMatrix2D(near_right_angle_center, 90.0, 1.0), dtype=np.float64),
+    )
+    return [
+        identity,
+        positive_translation,
+        negative_translation,
+        rotation_45deg,
+        shear,
+        anisotropic_scale,
+        near_right_angle_90deg,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_size", "affine_matrix"),
+    _affine_equivalent_oracle_cases(),
+    ids=[
+        "identity",
+        "positive_translation",
+        "negative_translation",
+        "rotation_45deg",
+        "shear",
+        "anisotropic_scale",
+        "near_right_angle_90deg",
+    ],
+)
+def test_expand_perspective_canvas_matches_affine_equivalent_oracle(
+    source_size: tuple[int, int], affine_matrix: np.ndarray
+) -> None:
+    affine_params = AffineParameters(affine_matrix, source_size, 0.0, (0.0, 0.0), 1.0)
+    expanded_affine = expand_affine_canvas(affine_params)
+
+    perspective_matrix = _affine_equivalent_perspective_matrix(affine_matrix)
+    perspective_params = PerspectiveParameters(
+        matrix=perspective_matrix,
+        source_size=source_size,
+        destination_points=_ARBITRARY_DESTINATION_POINTS,
+    )
+    expanded_perspective = expand_perspective_canvas(perspective_params)
+
+    assert expanded_perspective.output_size == expanded_affine.output_size
+    np.testing.assert_allclose(
+        expanded_perspective.matrix[:2, :], expanded_affine.matrix, atol=1e-9
+    )
+    np.testing.assert_array_equal(expanded_perspective.matrix[2, :], [0.0, 0.0, 1.0])
+
+
+# --- apply_perspective: expanded canvas ---
+
+
+def test_apply_perspective_with_expanded_params_changes_output_shape() -> None:
+    image = _make_image(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    result = apply_perspective(image, expanded)
+    assert result.shape == (
+        _perspective_output_size(expanded)[1],
+        _perspective_output_size(expanded)[0],
+        3,
+    )
+
+
+def test_apply_perspective_with_expanded_params_uses_same_output_size_for_mask() -> None:
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    pair = apply_perspective(image, expanded, mask=mask)
+    assert (
+        pair.image.shape[:2]
+        == pair.mask.shape[:2]
+        == (_perspective_output_size(expanded)[1], _perspective_output_size(expanded)[0])
+    )
+
+
+def test_apply_perspective_default_none_output_size_unchanged_behavior() -> None:
+    image = _make_image(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    assert params.output_size is None
+    result = apply_perspective(image, params)
+    assert result.shape == image.shape
+
+
+def test_apply_perspective_accepts_valid_hand_built_output_size() -> None:
+    # A valid, hand-built output_size (never produced via
+    # expand_perspective_canvas) must be accepted identically -- this locks in
+    # output_size's (width, height) convention against result.shape's
+    # (height, width) one, proving output_size is genuine replay state even
+    # when manually set.
+    image = _make_image(4, 5, channels=None)
+    matrix = np.eye(3, dtype=np.float64)
+    params = PerspectiveParameters(
+        matrix, (5, 4), _ARBITRARY_DESTINATION_POINTS, output_size=(7, 6)
+    )
+    result = apply_perspective(image, params)
+    assert result.shape == (6, 7)
+    assert result.dtype == image.dtype
+
+
+def test_apply_perspective_expanded_singleton_channel_shape_restored() -> None:
+    image = _make_image(8, 10, channels=None).reshape(8, 10, 1)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    result = apply_perspective(image, expanded)
+    assert result.shape == (
+        _perspective_output_size(expanded)[1],
+        _perspective_output_size(expanded)[0],
+        1,
+    )
+
+
+def test_apply_perspective_expanded_does_not_mutate_or_alias_input() -> None:
+    image = _make_image(8, 10)
+    original = image.copy()
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    result = apply_perspective(image, expanded)
+    np.testing.assert_array_equal(image, original)
+    assert not np.shares_memory(result, image)
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16])
+def test_apply_perspective_expanded_supports_all_mask_dtypes(dtype: type) -> None:
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10, dtype=dtype)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    pair = apply_perspective(image, expanded, mask=mask)
+    assert pair.mask.dtype == dtype
+    assert pair.mask.shape[:2] == pair.image.shape[:2]
+
+
+def test_apply_perspective_expanded_mask_uses_nearest_neighbor_and_constant_border(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import improcv.augmentation as augmentation_module
+
+    calls = []
+    real_warp_perspective = augmentation_module._warp_perspective
+
+    def spy(image, matrix, output_size, **kwargs):
+        calls.append((kwargs.get("interpolation"), kwargs.get("border_mode")))
+        return real_warp_perspective(image, matrix, output_size, **kwargs)
+
+    monkeypatch.setattr(augmentation_module, "_warp_perspective", spy)
+
+    image = _make_image(8, 10, channels=None)
+    mask = _make_mask(8, 10)
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    expanded = expand_perspective_canvas(params)
+    apply_perspective(image, expanded, mask=mask)
+
+    assert calls[-1] == (cv2.INTER_NEAREST, cv2.BORDER_CONSTANT)
+
+
+# --- expand_perspective_canvas: RNG regression (sample_perspective untouched) ---
+
+
+def test_expand_perspective_canvas_does_not_consume_rng() -> None:
+    rng = np.random.default_rng(0)
+    params = sample_perspective(rng, source_size=(10, 8), distortion_scale=0.3)
+    state_before = rng.bit_generator.state
+    expand_perspective_canvas(params)
+    assert rng.bit_generator.state == state_before
+
+
+def test_sample_perspective_unaffected_by_expand_perspective_canvas_existing() -> None:
+    rng_a = np.random.default_rng(0)
+    rng_b = np.random.default_rng(0)
+    params_a = sample_perspective(rng_a, source_size=(10, 8), distortion_scale=0.3)
+    params_b = sample_perspective(rng_b, source_size=(10, 8), distortion_scale=0.3)
+    expand_perspective_canvas(params_a)  # exercise the new function in between
+    params_c = sample_perspective(rng_b, source_size=(10, 8), distortion_scale=0.3)
+    np.testing.assert_array_equal(params_a.matrix, params_b.matrix)
+    assert params_b.destination_points == params_a.destination_points
+    # rng_b advanced normally for its second call, independent of expand usage on rng_a's params
+    assert params_c is not None
