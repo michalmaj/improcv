@@ -17,10 +17,10 @@ translation, all composed around the image center. Perspective coverage is
 a single, replayable homography sampled by displacing each of the source
 rectangle's four corners inward, independently, within a bound controlled by
 `distortion_scale`. Both `apply_affine` and `apply_perspective` render to
-the source size by default (no canvas expansion); `expand_affine_canvas` is
-a separate, deterministic, RNG-free conversion that grows an
-`AffineParameters`' stored output size (and adjusts its matrix accordingly)
-so no transformed content is cropped -- perspective canvas expansion,
+the source size by default (no canvas expansion); `expand_affine_canvas` and
+`expand_perspective_canvas` are separate, deterministic, RNG-free grow-only
+conversions that each expand their respective parameters' stored output size
+(and adjust the matrix accordingly) so no transformed content is cropped --
 resize, photometric augmentation, bounding boxes/keypoints/polygons, and any
 `Compose`-style pipeline remain out of scope for this slice.
 """
@@ -67,6 +67,7 @@ __all__ = [
     "apply_flip",
     "apply_perspective",
     "expand_affine_canvas",
+    "expand_perspective_canvas",
     "sample_affine",
     "sample_crop",
     "sample_flip",
@@ -221,21 +222,39 @@ class AffineParameters:
 class PerspectiveParameters:
     """The result of `sample_perspective`: a full `3x3` projective transform matrix.
 
-    `matrix` (shape ``(3, 3)``, dtype ``float64``, finite, a new read-only buffer) is the sole
-    source of truth for replay -- `apply_perspective` applies it directly. `destination_points`
-    is sampling metadata only: the four `(x, y)` destination corners actually used to build
-    `matrix` via `cv2.getPerspectiveTransform`, in `top-left, top-right, bottom-right,
-    bottom-left` order, recorded *after* the `float32` quantization that OpenCV itself requires
-    for its input points -- so this is exactly what the solver saw, not the pre-quantization
-    draw. `apply_perspective` never reconstructs `matrix` from `destination_points`, nor
-    cross-checks the two numerically, mirroring `AffineParameters`' own metadata-is-not-truth
-    contract. The corresponding source corners are never stored -- they are always
-    deterministically `(0, 0)`, `(width - 1, 0)`, `(width - 1, height - 1)`, `(0, height - 1)`
-    for `source_size == (width, height)`, in the same corner order.
+    `matrix` (shape ``(3, 3)``, dtype ``float64``, finite, a new read-only buffer) together with
+    `output_size` (when not `None`) is the source of truth for replay -- `apply_perspective`
+    applies `matrix` directly and renders to `output_size` if set, or to `source_size` otherwise.
+    `destination_points` is sampling/debug metadata only: the four `(x, y)` destination corners
+    actually used to build `matrix` via `cv2.getPerspectiveTransform`, in `top-left, top-right,
+    bottom-right, bottom-left` order, recorded *after* the `float32` quantization that OpenCV
+    itself requires for its input points -- so this is exactly what the solver saw, not the
+    pre-quantization draw. `apply_perspective` never reconstructs `matrix` from
+    `destination_points`, nor cross-checks the two numerically, mirroring `AffineParameters`' own
+    metadata-is-not-truth contract. For parameters returned by `expand_perspective_canvas`,
+    `destination_points` continues to describe the original `sample_perspective` draw and does
+    not reflect the canvas-origin translation `expand_perspective_canvas` applies -- exactly as
+    `AffineParameters.translation` remains silent about `expand_affine_canvas`'s own shift. The
+    corresponding source corners are never stored -- they are always deterministically `(0, 0)`,
+    `(width - 1, 0)`, `(width - 1, height - 1)`, `(0, height - 1)` for `source_size == (width,
+    height)`, in the same corner order.
 
     `source_size` is `(width, height)`, matching `AffineParameters`'/`CropParameters`' own
     convention, and exists for the same reason: `apply_perspective` refuses to replay these
     parameters against a differently-sized image.
+
+    `output_size` is `(width, height)` or `None` (the default), keyword-only so the pre-existing
+    three-positional-argument construction (`PerspectiveParameters(matrix, source_size,
+    destination_points)`) keeps working unchanged and `__match_args__` stays exactly the three
+    original field names. `None` means `apply_perspective` renders to `source_size`, exactly as
+    before this field existed; `sample_perspective` always produces `output_size=None`.
+    `expand_perspective_canvas` is the canonical library operation that computes and sets a
+    non-`None` value -- but a manually constructed `PerspectiveParameters` may also legally supply
+    a validated non-`None` `output_size` keyword-only, exactly like `AffineParameters.output_size`.
+    Unlike `destination_points`/etc., a non-`None` `output_size` is *not* mere sampling metadata:
+    together with `matrix` it is part of the full source of truth `apply_perspective` replays,
+    since `matrix` alone no longer determines the destination canvas size once it can differ from
+    `source_size`.
     """
 
     matrix: npt.NDArray[np.float64]
@@ -243,6 +262,7 @@ class PerspectiveParameters:
     destination_points: tuple[
         tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]
     ]
+    output_size: tuple[int, int] | None = field(default=None, kw_only=True)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, PerspectiveParameters):
@@ -251,6 +271,7 @@ class PerspectiveParameters:
             bool(np.array_equal(self.matrix, other.matrix))
             and self.source_size == other.source_size
             and self.destination_points == other.destination_points
+            and self.output_size == other.output_size
         )
 
     __hash__ = None  # type: ignore[assignment]
@@ -1176,6 +1197,174 @@ def expand_affine_canvas(params: AffineParameters) -> AffineParameters:
     )
 
 
+def _project_perspective_footprint(
+    matrix: np.ndarray, footprint_corners: tuple[tuple[float, float], ...]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project `footprint_corners` through `matrix`'s full homogeneous divide, in `float64`.
+
+    A separate, narrowly-scoped function (rather than inlined in `expand_perspective_canvas`)
+    purely so the projection step has its own testable seam -- see
+    `docs/design/0.5.0a2-expand-perspective-canvas.md` §14.
+    """
+    corners_h = np.array([[x, y, 1.0] for x, y in footprint_corners], dtype=np.float64)
+    with np.errstate(over="ignore", invalid="ignore"):
+        transformed_h = corners_h @ matrix.T
+    w = transformed_h[:, 2]
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        transformed_x = transformed_h[:, 0] / w
+        transformed_y = transformed_h[:, 1] / w
+    return transformed_x, transformed_y
+
+
+def expand_perspective_canvas(params: PerspectiveParameters) -> PerspectiveParameters:
+    """Grow `params`' output canvas so `apply_perspective` no longer crops any transformed content.
+
+    The perspective counterpart to `expand_affine_canvas`, mirroring its contract exactly except
+    for the genuine projective divide a homography (unlike an affine matrix) requires. A purely
+    deterministic conversion -- it never touches any RNG, and never calls `sample_perspective`
+    internally. It transforms `params`' full ``(width, height)`` source *pixel-cell footprint*
+    (the continuous region ``[-0.5, width - 0.5] x [-0.5, height - 0.5]``, not just the rectangle
+    of pixel centers `_require_perspective_matrix_geometry` itself validates) through
+    `params.matrix` directly -- never through `destination_points`, which is sampling metadata a
+    hand-constructed `params` need not agree with `matrix` on (exactly as everywhere else in this
+    module, `matrix` is the only source of geometric truth). The new output canvas is the
+    smallest axis-aligned, integer-pixel region that contains the *union* of that transformed
+    footprint and the original, untransformed source footprint -- the result is never smaller
+    than `source_size` in either dimension, and no part of the transformed content is cropped,
+    mirroring `expand_affine_canvas`'s own grow-only, union-with-source contract exactly.
+
+    Before trusting the projective divide, this function performs its own, additional,
+    *stricter* horizon check over the full pixel-cell footprint -- `_require_perspective_
+    parameters` (called first, applying today's unchanged validation) only checks the narrower
+    pixel-center rectangle, which is sufficient for `apply_perspective`'s own fixed-canvas
+    contract but not for this function's wider footprint. This means a `params` for which
+    `apply_perspective` already succeeds can still be legally rejected here, when its horizon
+    lies only in the half-pixel fringe between the pixel-center rectangle and the full pixel-cell
+    footprint -- this is intentional, not a bug, and never tightens `apply_perspective`'s own,
+    separately validated acceptance domain. No epsilon margin is used: the same strict,
+    scale-invariant sign check `_require_perspective_matrix_geometry` already uses.
+
+    Bounds/shift computation is done in `float64` and snapped to the nearest integer only within
+    a few ULPs of floating-point noise (via the same `_snap_near_integer` `expand_affine_canvas`
+    uses), never a fixed decimal-place rounding.
+
+    Returns
+    -------
+    PerspectiveParameters
+        A new instance with an adjusted, independent, read-only `matrix` (`params.matrix` itself
+        is never modified) and `output_size` set to the computed ``(width, height)``;
+        `source_size`/`destination_points` are copied unchanged from `params` and are not
+        cross-checked against the new matrix, exactly as `apply_perspective` never cross-checks
+        them against `matrix` today. `destination_points` continues to describe the original
+        `sample_perspective` draw and does not reflect the canvas-origin translation this
+        function applies.
+
+    Raises
+    ------
+    TypeError
+        If `params` is not a `PerspectiveParameters`, or if its fields are not the expected
+        types (same validation as `apply_perspective`).
+    ValueError
+        If `params.output_size` is already set (this function requires unexpanded parameters --
+        it is not idempotent, and a hand-set `output_size` is not guaranteed to be this
+        function's own prior output), if `params.matrix`'s projective horizon crosses the full
+        pixel-cell footprint (even if it does not cross the narrower pixel-center rectangle
+        `apply_perspective` itself validates), if transforming the footprint produces a
+        non-finite coordinate, bound, span, or shift, or if the computed output size is not
+        representable as a positive OpenCV ``int`` destination size (``<= 2**31 - 1`` per
+        dimension).
+    RuntimeError
+        If this function's own postconditions are violated.
+    """
+    _require_perspective_parameters(params)
+    if params.output_size is not None:
+        raise ValueError(
+            "params already define an output_size; expand_perspective_canvas requires "
+            "unexpanded parameters (it is not idempotent)"
+        )
+
+    width, height = params.source_size
+    footprint_corners = _perspective_pixel_cell_corners((width, height))
+
+    _require_consistent_denominator_sign(
+        params.matrix,
+        footprint_corners,
+        "expand_perspective_canvas: params.matrix",
+        "source footprint",
+    )
+
+    transformed_x, transformed_y = _project_perspective_footprint(params.matrix, footprint_corners)
+
+    if not (np.all(np.isfinite(transformed_x)) and np.all(np.isfinite(transformed_y))):
+        raise ValueError(
+            "expand_perspective_canvas: transforming the source footprint through "
+            "params.matrix does not produce finite coordinates"
+        )
+
+    source_left, source_top = -0.5, -0.5
+    source_right, source_bottom = width - 0.5, height - 0.5
+    transformed_left = float(np.min(transformed_x))
+    transformed_top = float(np.min(transformed_y))
+    transformed_right = float(np.max(transformed_x))
+    transformed_bottom = float(np.max(transformed_y))
+
+    left = min(source_left, transformed_left)
+    top = min(source_top, transformed_top)
+    right = max(source_right, transformed_right)
+    bottom = max(source_bottom, transformed_bottom)
+    if not all(math.isfinite(value) for value in (left, top, right, bottom)):
+        raise ValueError("expand_perspective_canvas: computed canvas bounds are not finite")
+
+    magnitude_x = max(1.0, abs(left), abs(right), float(width))
+    magnitude_y = max(1.0, abs(top), abs(bottom), float(height))
+
+    span_x = _snap_near_integer(right - left, magnitude=magnitude_x)
+    span_y = _snap_near_integer(bottom - top, magnitude=magnitude_y)
+    if not (math.isfinite(span_x) and math.isfinite(span_y)):
+        raise ValueError("expand_perspective_canvas: computed canvas spans are not finite")
+    if span_x <= 0.0 or span_y <= 0.0:
+        raise RuntimeError(
+            f"internal error: expand_perspective_canvas computed a non-positive span "
+            f"({span_x}, {span_y})"
+        )
+
+    output_width = math.ceil(span_x)
+    output_height = math.ceil(span_y)
+    if output_width > _OPENCV_SIZE_MAX or output_height > _OPENCV_SIZE_MAX:
+        raise ValueError(
+            "expand_perspective_canvas: computed output_size exceeds OpenCV's int32 dsize "
+            f"limit ({_OPENCV_SIZE_MAX} per dimension), got ({output_width}, {output_height})"
+        )
+
+    shift_x = _snap_near_integer(-0.5 - left, magnitude=magnitude_x)
+    shift_y = _snap_near_integer(-0.5 - top, magnitude=magnitude_y)
+    if not (math.isfinite(shift_x) and math.isfinite(shift_y)):
+        raise ValueError("expand_perspective_canvas: computed canvas shift is not finite")
+
+    shift_matrix = np.array(
+        [[1.0, 0.0, shift_x], [0.0, 1.0, shift_y], [0.0, 0.0, 1.0]], dtype=np.float64
+    )
+    with np.errstate(over="ignore", invalid="ignore"):
+        expanded_3x3 = shift_matrix @ params.matrix
+    expanded_matrix = np.array(expanded_3x3, dtype=np.float64, order="C", copy=True)
+
+    if expanded_matrix.shape != (3, 3) or expanded_matrix.dtype != np.float64:
+        raise RuntimeError(
+            f"internal error: expanded perspective matrix has shape {expanded_matrix.shape} and "
+            f"dtype {expanded_matrix.dtype}, expected (3, 3) float64"
+        )
+    if not np.all(np.isfinite(expanded_matrix)):
+        raise ValueError("expand_perspective_canvas: adjusted matrix is not finite")
+    expanded_matrix.setflags(write=False)
+
+    return PerspectiveParameters(
+        matrix=expanded_matrix,
+        source_size=params.source_size,
+        destination_points=params.destination_points,
+        output_size=(output_width, output_height),
+    )
+
+
 def sample_perspective(
     rng: np.random.Generator,
     source_size: tuple[int, int],
@@ -1371,15 +1560,19 @@ def apply_perspective(
     OpenCV.
 
     `image`'s spatial size (`(width, height)`) must equal `params.source_size` *exactly* -- the
-    same replay guard as `apply_affine`/`apply_crop`. A `PerspectiveParameters` built by hand
+    same replay guard as `apply_affine`/`apply_crop`; this guard is about the *input*, not the
+    output, so it is unaffected by `params.output_size`. A `PerspectiveParameters` built by hand
     for a `source_size` with a dimension of `1` remains legal here (unlike `sample_perspective`,
     which refuses to construct one) as long as its `matrix` independently passes the checks
     above -- `apply_perspective` does not require the 4-corner correspondence `sample_
-    perspective` needs, only a valid matrix and a matching image. Output spatial size always
-    equals `params.source_size` (this slice does not expand the canvas). Applies `improcv.
-    transforms.warp_perspective` directly (never raw `cv2.warpPerspective`); `image`'s dtype/
-    shape contract is exactly `warp_perspective`'s own (identical to `warp_affine`'s, verified
-    directly).
+    perspective` needs, only a valid matrix and a matching image. Output spatial size equals
+    `params.source_size` when `params.output_size` is `None` (the default, unchanged from before
+    canvas expansion existed), or `params.output_size` itself when set -- typically by
+    `expand_perspective_canvas`, though any manually constructed, valid `output_size` is accepted
+    identically; `apply_perspective` never computes or adjusts bounds itself, it only reads
+    whichever size is already stored. Applies `improcv.transforms.warp_perspective` directly
+    (never raw `cv2.warpPerspective`); `image`'s dtype/shape contract is exactly
+    `warp_perspective`'s own (identical to `warp_affine`'s, verified directly).
 
     `interpolation` selects an OpenCV interpolation mode only -- it does not accept
     `cv2.WARP_INVERSE_MAP` or any other warp-control flag bit, exactly as in `apply_affine`.
@@ -1416,8 +1609,10 @@ def apply_perspective(
         If `image`/`mask` has an unsupported shape, `image`'s (or `mask`'s) spatial size does
         not match `params.source_size` (or `image`'s), `interpolation` includes
         `WARP_INVERSE_MAP` or any other non-interpolation flag bit, `mask_border_value` does not
-        fit `mask`'s dtype range, or `params.matrix` is not numerically full-rank or has a
-        projective horizon crossing `params.source_size`'s rectangle.
+        fit `mask`'s dtype range, `params.output_size` is set but not a 2-tuple of positive ints
+        each representable as an OpenCV `int` destination size, or `params.matrix` is not
+        numerically full-rank or has a projective horizon crossing `params.source_size`'s
+        rectangle.
     RuntimeError
         If the underlying `cv2.error` occurs after full validation (for either the image or the
         mask warp), or if this function's own postconditions are violated.
@@ -1427,10 +1622,12 @@ def apply_perspective(
     require_image_ndim(image, ndims=(2, 3))
     _require_matches_source_size(image, params.source_size, "image")
 
+    output_size = params.source_size if params.output_size is None else params.output_size
+
     augmented_image = _apply_perspective_to_array(
-        image, params, interpolation, border_mode, border_value
+        image, params, output_size, interpolation, border_mode, border_value
     )
-    _check_shape_preserving_postconditions(image, augmented_image, "image")
+    _check_warp_postconditions(image, augmented_image, output_size, "image")
 
     if mask is None:
         return augmented_image
@@ -1441,9 +1638,9 @@ def apply_perspective(
     require_fits_dtype(mask_border_value, mask.dtype, "mask_border_value")
 
     augmented_mask = _apply_perspective_to_array(
-        mask, params, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT, mask_border_value
+        mask, params, output_size, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT, mask_border_value
     )
-    _check_shape_preserving_postconditions(mask, augmented_mask, "mask")
+    _check_warp_postconditions(mask, augmented_mask, output_size, "mask")
 
     return AugmentedImageMask(image=augmented_image, mask=augmented_mask)
 
@@ -1729,6 +1926,25 @@ def _perspective_source_corners(
     )
 
 
+def _perspective_pixel_cell_corners(
+    source_size: tuple[int, int],
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]:
+    """The four corners of `source_size`'s continuous pixel-cell footprint
+    (``[-0.5, width - 0.5] x [-0.5, height - 0.5]``), in the same top-left, top-right,
+    bottom-right, bottom-left order as `_perspective_source_corners`.
+
+    Used only by `expand_perspective_canvas` -- the wider footprint `expand_affine_canvas`
+    already uses for its own (affine) bounds, half a pixel larger on each side than
+    `_perspective_source_corners`'s pixel-center rectangle."""
+    width, height = source_size
+    return (
+        (-0.5, -0.5),
+        (float(width) - 0.5, -0.5),
+        (float(width) - 0.5, float(height) - 0.5),
+        (-0.5, float(height) - 0.5),
+    )
+
+
 def _require_convex_quadrilateral(points: tuple[tuple[float, float], ...], name: str) -> None:
     """Raise ValueError unless `points` (in cyclic order) form a strictly convex,
     consistently-oriented quadrilateral.
@@ -1796,21 +2012,39 @@ def _require_perspective_matrix_geometry(
             f"singularity, got numerical rank {rank}"
         )
 
+    _require_consistent_denominator_sign(
+        matrix, _perspective_source_corners(source_size), name, "source rectangle"
+    )
+
+
+def _require_consistent_denominator_sign(
+    matrix: np.ndarray,
+    corners: tuple[tuple[float, float], ...],
+    name: str,
+    region: str,
+) -> None:
+    """Raise ValueError unless `matrix`'s homogeneous denominator keeps one strict sign across
+    `corners` (each an `(x, y)` point).
+
+    Shared, scale-invariant primitive behind both `_require_perspective_matrix_geometry`'s
+    existing pixel-center-rectangle check (`region="source rectangle"`, reproducing its exact,
+    unchanged message) and `expand_perspective_canvas`'s own, additional, stricter pixel-cell-
+    footprint check (`region="source footprint"`) -- see `docs/design/
+    0.5.0a2-expand-perspective-canvas.md` §11.
+    """
     h20, h21, h22 = float(matrix[2, 0]), float(matrix[2, 1]), float(matrix[2, 2])
     row_scale = max(abs(h20), abs(h21), abs(h22))
     if row_scale == 0.0:
         raise ValueError(f"{name} third row must not be entirely zero")
     a, b, c = h20 / row_scale, h21 / row_scale, h22 / row_scale
 
-    denominators = [
-        math.fsum((a * x, b * y, c)) for x, y in _perspective_source_corners(source_size)
-    ]
+    denominators = [math.fsum((a * x, b * y, c)) for x, y in corners]
     if not (
         all(value > 0.0 for value in denominators) or all(value < 0.0 for value in denominators)
     ):
         raise ValueError(
             f"{name}'s homogeneous denominator changes sign (or reaches zero) within the "
-            f"source rectangle -- its projective horizon crosses the image"
+            f"{region} -- its projective horizon crosses the image"
         )
 
 
@@ -1840,11 +2074,13 @@ def _require_perspective_parameters(params: object) -> None:
         require_point_2d(point, f"params.destination_points[{index}]")
 
     _require_perspective_matrix_geometry(params.matrix, params.source_size, "params.matrix")
+    _require_optional_output_size(params.output_size)
 
 
 def _apply_perspective_to_array(
     array: np.ndarray,
     params: PerspectiveParameters,
+    output_size: tuple[int, int],
     interpolation: int,
     border_mode: int,
     border_value: float | tuple[float, ...],
@@ -1853,14 +2089,15 @@ def _apply_perspective_to_array(
         result = _warp_perspective(
             array,
             params.matrix,
-            params.source_size,
+            output_size,
             interpolation=interpolation,
             border_mode=border_mode,
             border_value=border_value,
         )
     except cv2.error as exc:
         raise RuntimeError("OpenCV failed to apply perspective augmentation") from exc
-    return _restore_singleton_channel(array, result, array.shape[:2])
+    output_width, output_height = output_size
+    return _restore_singleton_channel(array, result, (output_height, output_width))
 
 
 def _require_matches_source_size(

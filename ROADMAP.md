@@ -71,7 +71,8 @@ version decided at the time each is actually published, rather than mechanically
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-and-anisotropic-scale sampling/replay implemented;
   affine canvas expansion (`expand_affine_canvas`) implemented; perspective sampling/replay
-  implemented; perspective canvas expansion remains planned, not started), and
+  implemented; perspective canvas expansion (`expand_perspective_canvas`) implemented in
+  `0.5.0a2.dev0`, targeted for `0.5.0a2`, not yet released), and
   dataset discovery (deterministic,
   extension-based image discovery implemented; deterministic image/mask pairing implemented;
   deterministic train/validation/test dataset splitting (`improcv.dataset.split_dataset`,

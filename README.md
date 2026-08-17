@@ -1531,9 +1531,35 @@ code" on Windows for the exact `opencv-python-headless` version that works corre
 macOS -- a genuine, platform-specific upstream OpenCV limitation, so `int16` is excluded outright
 rather than supported unreliably depending on the caller's platform.
 
+Perspective canvas expansion:
+
+```python
+expanded_perspective_params = im.expand_perspective_canvas(perspective_params)
+print(expanded_perspective_params.output_size)  # never smaller than source_size
+
+pair = im.apply_perspective(image, expanded_perspective_params, mask=mask, mask_border_value=255)
+print(pair.image.shape[:2], pair.mask.shape[:2])  # both (height, width), the reverse of output_size
+```
+
+`expand_perspective_canvas` is `expand_affine_canvas`'s perspective counterpart, with the same
+deterministic, RNG-free, grow-only, never-idempotent contract: it grows `params`' stored
+`output_size` (and returns an adjusted `matrix`) using the same source-plus-transformed
+*pixel-cell footprint* union, so `apply_perspective` no longer crops transformed content. The
+genuine projective divide a homography requires (unlike an affine matrix) means it also performs
+one extra check `expand_affine_canvas` never needs: `sample_perspective`/`apply_perspective` only
+validate that a matrix's projective horizon stays clear of the *pixel-center* source rectangle,
+which is sufficient for their own fixed-canvas contract; `expand_perspective_canvas` additionally
+requires the horizon to stay clear of the *full* pixel-cell footprint, half a pixel larger on
+each side. This means a `params` for which `apply_perspective` already succeeds can still be
+legally rejected by `expand_perspective_canvas` -- not every valid `apply_perspective` call can be
+expanded, and this is intentional, not a bug: `apply_perspective`'s own acceptance domain is never
+tightened by this feature. `destination_points` is unaffected by expansion -- it continues to
+describe the original `sample_perspective` draw, exactly as `AffineParameters.translation` remains
+silent about `expand_affine_canvas`'s own canvas-origin shift.
+
 This slice covers flip, crop, a shear+rotation+translation+isotropic/anisotropic-scale affine
-transform (with optional canvas expansion via `expand_affine_canvas`), and a single-homography
-perspective transform: no perspective canvas expansion, no resize/crop-to-fit after expansion, no
+transform and a single-homography perspective transform, each with optional canvas expansion
+(`expand_affine_canvas`/`expand_perspective_canvas`): no resize/crop-to-fit after expansion, no
 photometric augmentation (brightness/contrast/blur/noise), no bounding box/keypoint/polygon support,
 no probability/application policy for perspective (it always samples, like `sample_affine`), and no
 `Compose`-style augmentation pipeline.

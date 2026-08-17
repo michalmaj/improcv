@@ -10,6 +10,25 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `expand_perspective_canvas(params) -> PerspectiveParameters` (`src/improcv/augmentation.py`):
+  deterministic, RNG-free, grow-only canvas expansion for `PerspectiveParameters`, the
+  perspective counterpart to `expand_affine_canvas`. Adds one new public function and zero new
+  public types; additively extends the existing `PerspectiveParameters` with an optional,
+  keyword-only `output_size: tuple[int, int] | None = None` field (mirroring
+  `AffineParameters.output_size`) -- the pre-existing 3-positional constructor and
+  `__match_args__` are unaffected, and `apply_perspective`'s default behavior (`output_size is
+  None`) is unchanged. Transforms the source's full pixel-cell footprint through `params.matrix`
+  and unions it with the untransformed source footprint, so `apply_perspective` no longer crops
+  transformed content; rejects a homography whose projective horizon crosses that footprint with
+  `ValueError`, using the same strict, epsilon-free, scale-invariant check
+  `sample_perspective`/`apply_perspective` already use over the narrower pixel-center rectangle --
+  `apply_perspective`'s own acceptance domain is unchanged, so a `params` it already accepts can
+  still legally be rejected by `expand_perspective_canvas` when the horizon lies only in the
+  half-pixel fringe between the two. Not idempotent (raises on an already-expanded `params`).
+  `destination_points` is copied unchanged as original sampling metadata, never translated or
+  reconstructed. No new dependency.
+
 ## [0.5.0a1] - 2026-08-16
 
 ### Added
