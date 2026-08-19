@@ -65,9 +65,12 @@ version decided at the time each is actually published, rather than mechanically
   `multiclass_precision_recall_curve_micro`, returning the existing `RocCurve`/
   `PrecisionRecallCurve` types, built via the same flattening `average="micro"` already uses
   above) released in `0.4.0a5`, see
-  `docs/design/0.4.0a5-multiclass-micro-curves.md`; macro/weighted curve aggregates, one-vs-one
-  mode, a classification-report public API, and a public plotting API remain planned, not started,
-  see [CHANGELOG.md](CHANGELOG.md)), image augmentation
+  `docs/design/0.4.0a5-multiclass-micro-curves.md`; a structured, prediction-only classification
+  report (`classification_report`/`ClassificationReport`, composing `confusion_matrix`'s result
+  with per-class and macro `classification_metrics` -- no ranking data of any kind) implemented in
+  `0.5.0a3.dev0`, see `docs/design/0.5.0a3-classification-report.md`; macro/weighted curve
+  aggregates, one-vs-one mode, and a public plotting API remain planned, not started, see
+  [CHANGELOG.md](CHANGELOG.md)), image augmentation
   (flip and crop sampling/replay for image + optional segmentation mask implemented; affine
   shear/rotation/translation/isotropic-and-anisotropic-scale sampling/replay implemented;
   affine canvas expansion (`expand_affine_canvas`) implemented; perspective sampling/replay

@@ -10,6 +10,24 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `classification_report(y_true, y_pred, *, labels=None, zero_division=0.0, sample_weight=None)
+  -> ClassificationReport` (`src/improcv/evaluation.py`): a structured, prediction-only
+  classification report bundling `confusion_matrix`'s result with per-class and macro
+  precision/recall/F1/support -- no `y_score` parameter, no ROC/AUC/average-precision, no curves,
+  no plotting, no sklearn-compatible text/dict output. `ClassificationReport` (frozen, slotted
+  dataclass; `confusion: ConfusionMatrixResult`, `per_class: ClassificationMetrics` with
+  `average=None`, `macro: ClassificationMetrics` with `average="macro"`) composes the existing
+  result objects directly -- no new numeric representation. The confusion matrix is built exactly
+  once via a single `confusion_matrix` call; `per_class`/`macro` are derived from that same result
+  via the existing `classification_metrics_from_confusion_matrix`, avoiding the redundant
+  confusion-matrix rebuild a naive three-call composition would otherwise incur. Unlike
+  `confusion_matrix` alone, empty `y_true`/`y_pred` and an all-zero `sample_weight` are always
+  rejected, even with an explicit `labels`, adopting `classification_metrics`'s stricter rule
+  since this report always includes a `classification_metrics`-shaped view. Adds one new public
+  function and one new public type; no new dependency. See
+  `docs/design/0.5.0a3-classification-report.md` for the full frozen contract.
+
 ## [0.5.0a2] - 2026-08-17
 
 ### Added
