@@ -61,6 +61,7 @@ from improcv._validation import require_integral, require_one_of
 
 __all__ = [
     "ClassificationMetrics",
+    "ClassificationReport",
     "ConfusionMatrixResult",
     "MulticlassPrecisionRecallCurve",
     "MulticlassRocCurve",
@@ -70,6 +71,7 @@ __all__ = [
     "average_precision_score",
     "classification_metrics",
     "classification_metrics_from_confusion_matrix",
+    "classification_report",
     "confusion_matrix",
     "multiclass_average_precision_score",
     "multiclass_precision_recall_curve",
@@ -599,6 +601,127 @@ def classification_metrics_from_confusion_matrix(
     zero_division_value = _normalize_zero_division(zero_division)
     _require_confusion_matrix_result(confusion)
     return _compute_classification_metrics(confusion, average, zero_division_value)
+
+
+@dataclass(frozen=True, slots=True)
+class ClassificationReport:
+    """The result of `classification_report`: confusion matrix plus per-class and macro metrics.
+
+    Prediction-only: built entirely from `y_true`/`y_pred`, never from ranking scores. `confusion`,
+    `per_class` (`classification_metrics_from_confusion_matrix(confusion, average=None, ...)`), and
+    `macro` (the same, `average="macro"`) are existing public result objects, composed directly --
+    never copied into new fields. `confusion.labels == per_class.labels == macro.labels` always,
+    since all three are derived from the same single confusion-matrix computation (see
+    `classification_report`).
+
+    Equality (`==`) and `repr` use the plain, dataclass-generated defaults -- correct here because
+    `ConfusionMatrixResult.__eq__`/`ClassificationMetrics.__eq__` already return a plain `bool`
+    (never NumPy's "truth value of an array is ambiguous" error), so field-by-field equality
+    delegates to those without any special handling, exactly as `MulticlassRocCurve`/
+    `MulticlassPrecisionRecallCurve` already do for the same reason. Instances are unhashable
+    (`hash()` raises `TypeError`), for consistency with every other result type in this module.
+    """
+
+    confusion: ConfusionMatrixResult
+    per_class: ClassificationMetrics
+    macro: ClassificationMetrics
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def classification_report(
+    y_true: Sequence[int] | npt.NDArray[np.integer],
+    y_pred: Sequence[int] | npt.NDArray[np.integer],
+    *,
+    labels: Sequence[int] | npt.NDArray[np.integer] | None = None,
+    zero_division: float | Literal["nan"] = 0.0,
+    sample_weight: Sequence[float]
+    | npt.NDArray[np.floating]
+    | npt.NDArray[np.integer]
+    | None = None,
+) -> ClassificationReport:
+    """Compute a structured, prediction-only classification report.
+
+    Bundles a confusion matrix with per-class and macro precision/recall/F1/support, computed
+    from hard predictions (`y_true`/`y_pred`) only -- there is no `y_score` parameter, and this
+    function never computes or accepts anything ranking-related (ROC, AUC, average precision, or
+    any curve). This is a deliberate scope boundary, not an oversight: hard-prediction metrics and
+    ranking metrics are different statistical objects, and `y_score` becoming a required parameter
+    here would make this function unusable for a caller who only has predicted labels. If you also
+    need ranking metrics, compute them separately with `multiclass_roc_auc_score`/
+    `multiclass_average_precision_score`/`multiclass_roc_curve`/`multiclass_precision_recall_curve`.
+
+    This also does not promise sklearn-compatible behavior: no text/table formatting, no `dict`/
+    JSON-style output, no `target_names` parameter, and no multilabel support.
+    `ClassificationReport` is a plain structured result of existing numeric types, not a
+    sklearn-equivalent report object.
+
+    `y_true`/`y_pred`/`labels`/`sample_weight` follow exactly `confusion_matrix`'s own contract
+    (see that function's docstring for the full accepted-container/dtype/label-resolution rules);
+    `zero_division` follows exactly `classification_metrics_from_confusion_matrix`'s own contract.
+    Unlike `confusion_matrix` alone, empty `y_true`/`y_pred` and an all-zero `sample_weight` are
+    always rejected here, even with an explicit `labels` -- because this report also always
+    includes a `classification_metrics`-shaped view, and `classification_metrics` itself never
+    accepts either of those (its own zero-observation/all-zero-weight rejection applies
+    unconditionally, regardless of `labels`); adopting `confusion_matrix`'s laxer rule here would
+    make this report succeed while implying a well-defined `per_class`/`macro` view that could not
+    actually exist.
+
+    The confusion matrix is built exactly once, from a single `confusion_matrix` call; `per_class`
+    and `macro` are then derived from that same `ConfusionMatrixResult` via
+    `classification_metrics_from_confusion_matrix` (`average=None`, then `average="macro"`) --
+    never by calling `classification_metrics` a second and third time, which would redundantly
+    rebuild the confusion matrix from `y_true`/`y_pred` again for each call. `report.confusion` is
+    bit-for-bit identical to calling `confusion_matrix(y_true, y_pred, labels=labels,
+    sample_weight=sample_weight)` directly; `report.per_class`/`report.macro` are bit-for-bit
+    identical to calling `classification_metrics_from_confusion_matrix(report.confusion,
+    average=None/"macro", zero_division=zero_division)` directly.
+
+    Raises
+    ------
+    TypeError
+        Same as `confusion_matrix`, plus the same `zero_division` type checks
+        `classification_metrics_from_confusion_matrix` raises.
+    ValueError
+        Same as `confusion_matrix`, plus an empty `y_true`/`y_pred` (with or without explicit
+        `labels`, unconditionally -- see above), an all-zero `sample_weight` (unconditionally,
+        regardless of `labels` -- see above), or an invalid `zero_division`.
+    RuntimeError
+        If the computed result fails a constituent function's own postconditions.
+    """
+    # Validated here only for the frozen error-ordering guarantee (an invalid zero_division must
+    # be reported before an empty-input/all-zero-weight error, matching classification_metrics's
+    # own order) -- the *raw* zero_division argument, not this normalized value, is what actually
+    # gets passed to classification_metrics_from_confusion_matrix below, since that function does
+    # its own normalization and normalizing an already-normalized `float("nan")` a second time
+    # would incorrectly reject it (only the literal string `"nan"` is an accepted raw input).
+    _normalize_zero_division(zero_division)
+
+    true_list = _normalize_label_sequence(y_true, "y_true")
+    pred_list = _normalize_label_sequence(y_pred, "y_pred")
+    if len(true_list) != len(pred_list):
+        raise ValueError(
+            f"y_true and y_pred must have the same length, got {len(true_list)} and "
+            f"{len(pred_list)}"
+        )
+    if len(true_list) == 0:
+        raise ValueError("classification_report requires at least one observation")
+
+    if sample_weight is not None:
+        weights = _normalize_nonnegative_weight_sequence(
+            sample_weight, len(true_list), allow_empty=False
+        )
+        if not np.any(weights > 0.0):
+            raise ValueError("sample_weight must contain at least one positive value")
+
+    confusion = confusion_matrix(y_true, y_pred, labels=labels, sample_weight=sample_weight)
+    per_class = classification_metrics_from_confusion_matrix(
+        confusion, average=None, zero_division=zero_division
+    )
+    macro = classification_metrics_from_confusion_matrix(
+        confusion, average="macro", zero_division=zero_division
+    )
+    return ClassificationReport(confusion=confusion, per_class=per_class, macro=macro)
 
 
 def _exact_nonnegative_int64_sum(values: np.ndarray) -> int:

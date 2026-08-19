@@ -98,6 +98,7 @@ from improcv.drawing import draw_bounding_boxes, draw_contours, montage
 from improcv.edges import auto_canny, harris_corner, laplacian_edge, sobel_edge
 from improcv.evaluation import (
     ClassificationMetrics,
+    ClassificationReport,
     ConfusionMatrixResult,
     MulticlassPrecisionRecallCurve,
     MulticlassRocCurve,
@@ -107,6 +108,7 @@ from improcv.evaluation import (
     average_precision_score,
     classification_metrics,
     classification_metrics_from_confusion_matrix,
+    classification_report,
     confusion_matrix,
     multiclass_average_precision_score,
     multiclass_precision_recall_curve,
@@ -235,6 +237,7 @@ __all__ = [
     "Centroids",
     "Circle",
     "ClassificationMetrics",
+    "ClassificationReport",
     "ComponentStats",
     "ConfusionMatrixResult",
     "Connectivity",
@@ -314,6 +317,7 @@ __all__ = [
     "clahe",
     "classification_metrics",
     "classification_metrics_from_confusion_matrix",
+    "classification_report",
     "compare_perceptual_hash_manifests",
     "confusion_matrix",
     "connected_components",

@@ -17,6 +17,7 @@ from numpy.testing import assert_array_equal
 import improcv as im
 from improcv.evaluation import (
     ClassificationMetrics,
+    ClassificationReport,
     ConfusionMatrixResult,
     MulticlassPrecisionRecallCurve,
     MulticlassRocCurve,
@@ -26,6 +27,7 @@ from improcv.evaluation import (
     average_precision_score,
     classification_metrics,
     classification_metrics_from_confusion_matrix,
+    classification_report,
     confusion_matrix,
     multiclass_average_precision_score,
     multiclass_precision_recall_curve,
@@ -830,6 +832,395 @@ def test_evaluation_exports_from_top_level_package() -> None:
     assert im.PrecisionRecallCurve is PrecisionRecallCurve
     assert im.average_precision_score is average_precision_score
     assert im.auc is auc
+    assert im.classification_report is classification_report
+    assert im.ClassificationReport is ClassificationReport
+    assert "classification_report" in im.__all__
+    assert "ClassificationReport" in im.__all__
+
+
+# =====================================================================================
+# classification_report: structured, prediction-only report (confusion + per_class + macro)
+# =====================================================================================
+
+
+def _direct_report(y_true, y_pred, *, labels=None, zero_division=0.0, sample_weight=None):
+    """The compositional oracle: build a report by calling the constituent primitives directly,
+    exactly as the design's frozen composition path does internally.
+    """
+    confusion = confusion_matrix(y_true, y_pred, labels=labels, sample_weight=sample_weight)
+    per_class = classification_metrics_from_confusion_matrix(
+        confusion, average=None, zero_division=zero_division
+    )
+    macro = classification_metrics_from_confusion_matrix(
+        confusion, average="macro", zero_division=zero_division
+    )
+    return confusion, per_class, macro
+
+
+# --- basic case, labels=None inference, explicit/reordered/non-contiguous labels ---
+
+
+def test_classification_report_basic_multiclass_case() -> None:
+    y_true = [0, 1, 1, 2, 0, 2]
+    y_pred = [0, 1, 0, 2, 0, 1]
+
+    report = classification_report(y_true, y_pred)
+
+    confusion, per_class, macro = _direct_report(y_true, y_pred)
+    assert report.confusion == confusion
+    assert report.per_class == per_class
+    assert report.macro == macro
+    assert report.per_class == classification_metrics(y_true, y_pred, average=None)
+    assert report.macro == classification_metrics(y_true, y_pred, average="macro")
+
+
+def test_classification_report_labels_none_infers_sorted_union() -> None:
+    y_true = [5, 3, 3, 5]
+    y_pred = [3, 3, 5, 5]
+
+    report = classification_report(y_true, y_pred)
+
+    assert report.confusion.labels == (3, 5)
+    assert report.per_class.labels == (3, 5)
+    assert report.macro.labels == (3, 5)
+
+
+def test_classification_report_explicit_non_default_label_order() -> None:
+    y_true = [0, 1, 2, 0, 1, 2]
+    y_pred = [0, 1, 2, 0, 1, 1]
+    labels = [2, 0, 1]
+
+    report = classification_report(y_true, y_pred, labels=labels)
+
+    assert report.confusion.labels == (2, 0, 1)
+    assert report.per_class.labels == (2, 0, 1)
+    assert report.macro.labels == (2, 0, 1)
+    confusion, per_class, macro = _direct_report(y_true, y_pred, labels=labels)
+    assert report.confusion == confusion
+    assert report.per_class == per_class
+    assert report.macro == macro
+
+
+def test_classification_report_non_contiguous_arbitrary_labels() -> None:
+    y_true = [20, 10, 30, 20, 10, 30]
+    y_pred = [20, 10, 30, 20, 30, 10]
+    labels = [20, 10, 30]
+
+    report = classification_report(y_true, y_pred, labels=labels)
+
+    confusion, per_class, macro = _direct_report(y_true, y_pred, labels=labels)
+    assert report.confusion == confusion
+    assert report.per_class == per_class
+    assert report.macro == macro
+    assert report.confusion.labels == (20, 10, 30)
+
+
+# --- zero-support labels ---
+
+
+def test_classification_report_label_absent_from_y_true() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 1, 1]
+    labels = [0, 1, 2]
+
+    report = classification_report(y_true, y_pred, labels=labels)
+
+    assert report.confusion.labels == (0, 1, 2)
+    support = report.per_class.support
+    assert isinstance(support, np.ndarray)
+    assert support.tolist() == [2, 2, 0]
+    confusion, per_class, macro = _direct_report(y_true, y_pred, labels=labels)
+    assert report.confusion == confusion
+    assert report.per_class == per_class
+    assert report.macro == macro
+
+
+def test_classification_report_label_absent_from_y_pred() -> None:
+    y_true = [0, 0, 1, 1, 2]
+    y_pred = [0, 0, 0, 0, 0]
+    labels = [0, 1, 2]
+
+    report = classification_report(y_true, y_pred, labels=labels)
+
+    matrix = report.confusion.matrix
+    # columns for labels 1 and 2 (never predicted) are all zero
+    assert matrix[:, 1].sum() == 0
+    assert matrix[:, 2].sum() == 0
+    precision = report.per_class.precision
+    assert isinstance(precision, np.ndarray)
+    # zero_division default (0.0) fills the undefined precision for never-predicted classes
+    assert precision[1] == 0.0
+    assert precision[2] == 0.0
+
+
+def test_classification_report_zero_support_explicit_class() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 1, 0]
+    labels = [0, 1, 9]
+
+    report = classification_report(y_true, y_pred, labels=labels, zero_division=1.0)
+
+    support = report.per_class.support
+    assert isinstance(support, np.ndarray)
+    assert support.tolist() == [2, 2, 0]
+    precision = report.per_class.precision
+    recall = report.per_class.recall
+    assert isinstance(precision, np.ndarray)
+    assert isinstance(recall, np.ndarray)
+    # class 9 has no true positives, false positives, or false negatives at all --
+    # zero_division fills both precision and recall for it
+    assert precision[2] == 1.0
+    assert recall[2] == 1.0
+
+
+def test_classification_report_prediction_label_not_in_explicit_labels_raises() -> None:
+    y_true = [0, 1, 0, 1]
+    y_pred = [0, 1, 2, 1]  # 2 is not in labels below
+
+    with pytest.raises(ValueError, match="not.*present.*labels|labels"):
+        classification_report(y_true, y_pred, labels=[0, 1])
+
+
+# --- sample_weight ---
+
+
+def test_classification_report_sample_weight_integer() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 1, 1]
+    sample_weight = [1, 2, 3, 4]
+
+    report = classification_report(y_true, y_pred, sample_weight=sample_weight)
+
+    confusion, per_class, macro = _direct_report(y_true, y_pred, sample_weight=sample_weight)
+    assert report.confusion == confusion
+    assert report.per_class == per_class
+    assert report.macro == macro
+    assert report.confusion.matrix.dtype == np.float64
+
+
+def test_classification_report_sample_weight_float_non_uniform() -> None:
+    y_true = [0, 1, 1, 2, 0, 2]
+    y_pred = [0, 1, 0, 2, 0, 1]
+    sample_weight = [1.5, 2.25, 0.5, 3.0, 1.0, 4.25]
+
+    report = classification_report(y_true, y_pred, sample_weight=sample_weight)
+
+    confusion, per_class, macro = _direct_report(y_true, y_pred, sample_weight=sample_weight)
+    assert report.confusion == confusion
+    assert report.per_class == per_class
+    assert report.macro == macro
+
+
+def test_classification_report_sample_weight_with_zero_entries() -> None:
+    y_true = [0, 0, 1, 1, 2]
+    y_pred = [0, 1, 1, 0, 2]
+    sample_weight = [1.0, 0.0, 2.0, 0.0, 3.0]
+
+    report = classification_report(y_true, y_pred, sample_weight=sample_weight)
+
+    confusion, per_class, macro = _direct_report(y_true, y_pred, sample_weight=sample_weight)
+    assert report.confusion == confusion
+    assert report.per_class == per_class
+    assert report.macro == macro
+    assert report.confusion.matrix.dtype == np.float64
+
+
+def test_classification_report_all_zero_sample_weight_raises() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 1, 0]
+
+    with pytest.raises(ValueError, match="sample_weight must contain at least one positive value"):
+        classification_report(y_true, y_pred, sample_weight=[0.0, 0.0, 0.0, 0.0])
+
+
+def test_classification_report_all_zero_sample_weight_raises_even_with_explicit_labels() -> None:
+    """The design's frozen decision: classification_report is unconditionally strict about
+    all-zero sample_weight, adopting classification_metrics's rule -- unlike confusion_matrix
+    alone, which would tolerate this when labels is given explicitly.
+    """
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 1, 0]
+
+    # confusion_matrix alone would accept this (explicit labels, all-zero weight legal there)
+    confusion_matrix(y_true, y_pred, labels=[0, 1], sample_weight=[0.0, 0.0, 0.0, 0.0])
+
+    with pytest.raises(ValueError, match="sample_weight must contain at least one positive value"):
+        classification_report(y_true, y_pred, labels=[0, 1], sample_weight=[0.0, 0.0, 0.0, 0.0])
+
+
+# --- zero_division ---
+
+
+@pytest.mark.parametrize("zero_division", [0.0, 1.0, "nan"])
+def test_classification_report_zero_division_values(zero_division) -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 0, 0, 0]  # class 1 never predicted -> undefined precision for class 1
+    labels = [0, 1]
+
+    report = classification_report(y_true, y_pred, labels=labels, zero_division=zero_division)
+
+    precision = report.per_class.precision
+    assert isinstance(precision, np.ndarray)
+    if zero_division == "nan":
+        assert math.isnan(precision[1])
+    else:
+        assert precision[1] == zero_division
+
+
+def test_classification_report_zero_division_invalid_raises() -> None:
+    y_true = [0, 1]
+    y_pred = [0, 1]
+    with pytest.raises(ValueError):
+        classification_report(y_true, y_pred, zero_division=0.5)
+
+
+# --- empty input, one-class input ---
+
+
+def test_classification_report_empty_input_raises() -> None:
+    with pytest.raises(ValueError, match="at least one observation"):
+        classification_report([], [])
+
+
+def test_classification_report_empty_input_raises_even_with_explicit_labels() -> None:
+    """The design's frozen decision: classification_report is unconditionally strict about
+    empty input, adopting classification_metrics's rule -- unlike confusion_matrix alone,
+    which would tolerate this when labels is given explicitly (an all-zero matrix).
+    """
+    # confusion_matrix alone would accept this (explicit labels, empty input legal there)
+    confusion_matrix([], [], labels=[0, 1])
+
+    with pytest.raises(ValueError, match="at least one observation"):
+        classification_report([], [], labels=[0, 1])
+
+
+def test_classification_report_one_class_input() -> None:
+    y_true = [0, 0, 0]
+    y_pred = [0, 0, 0]
+
+    report = classification_report(y_true, y_pred)
+
+    assert report.confusion.labels == (0,)
+    assert report.confusion.matrix.tolist() == [[3]]
+    precision = report.per_class.precision
+    assert isinstance(precision, np.ndarray)
+    assert precision.tolist() == [1.0]
+
+
+# --- determinism, non-mutation ---
+
+
+def test_classification_report_deterministic_across_repeated_calls() -> None:
+    y_true = [0, 1, 1, 2, 0, 2]
+    y_pred = [0, 1, 0, 2, 0, 1]
+
+    first = classification_report(y_true, y_pred)
+    second = classification_report(y_true, y_pred)
+
+    assert first == second
+
+
+def test_classification_report_does_not_mutate_or_alias_inputs() -> None:
+    y_true = np.array([0, 1, 1, 2, 0, 2])
+    y_pred = np.array([0, 1, 0, 2, 0, 1])
+    labels = [0, 1, 2]
+    sample_weight = np.array([1.0, 2.0, 3.0, 1.0, 2.0, 3.0])
+    y_true_copy = y_true.copy()
+    y_pred_copy = y_pred.copy()
+    sample_weight_copy = sample_weight.copy()
+
+    report = classification_report(y_true, y_pred, labels=labels, sample_weight=sample_weight)
+
+    assert_array_equal(y_true, y_true_copy)
+    assert_array_equal(y_pred, y_pred_copy)
+    assert_array_equal(sample_weight, sample_weight_copy)
+    assert not np.shares_memory(report.confusion.matrix, y_true)
+    assert not np.shares_memory(report.confusion.matrix, y_pred)
+    assert not np.shares_memory(report.confusion.matrix, sample_weight)
+
+
+# --- result type: exact shape, frozen/slots, construction/equality/repr ---
+
+
+def test_classification_report_result_type_fields() -> None:
+    report = classification_report([0, 1], [0, 1])
+
+    assert dataclasses.is_dataclass(ClassificationReport)
+    field_names = [f.name for f in dataclasses.fields(ClassificationReport)]
+    assert field_names == ["confusion", "per_class", "macro"]
+    assert isinstance(report.confusion, ConfusionMatrixResult)
+    assert isinstance(report.per_class, ClassificationMetrics)
+    assert isinstance(report.macro, ClassificationMetrics)
+
+
+def test_classification_report_result_type_is_frozen() -> None:
+    report = classification_report([0, 1], [0, 1])
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        report.confusion = report.confusion  # type: ignore[misc]
+
+
+def test_classification_report_result_type_has_slots() -> None:
+    report = classification_report([0, 1], [0, 1])
+    with pytest.raises(AttributeError):
+        _ = report.__dict__  # type: ignore[attr-defined]
+
+
+def test_classification_report_result_type_equality() -> None:
+    a = classification_report([0, 1, 1], [0, 1, 0])
+    b = classification_report([0, 1, 1], [0, 1, 0])
+    c = classification_report([0, 1, 1], [0, 1, 1])
+    assert a == b
+    assert a is not b
+    assert a != c
+    assert a != "not a report"
+    assert (a == "not a report") is False
+
+
+def test_classification_report_result_type_unhashable() -> None:
+    report = classification_report([0, 1], [0, 1])
+    with pytest.raises(TypeError):
+        hash(report)
+
+
+def test_classification_report_result_type_repr_contains_field_names() -> None:
+    report = classification_report([0, 1], [0, 1])
+    text = repr(report)
+    assert "ClassificationReport" in text
+    assert "confusion=" in text
+    assert "per_class=" in text
+    assert "macro=" in text
+
+
+def test_classification_report_result_type_construction_order() -> None:
+    """Fields are positional in the frozen order: confusion, per_class, macro."""
+    confusion = confusion_matrix([0, 1], [0, 1])
+    per_class = classification_metrics_from_confusion_matrix(confusion, average=None)
+    macro = classification_metrics_from_confusion_matrix(confusion, average="macro")
+    manual = ClassificationReport(confusion, per_class, macro)
+    assert manual.confusion == confusion
+    assert manual.per_class == per_class
+    assert manual.macro == macro
+
+
+# --- no ranking data anywhere in the public contract ---
+
+
+def test_classification_report_has_no_ranking_parameters() -> None:
+    sig = inspect.signature(classification_report)
+    assert list(sig.parameters) == [
+        "y_true",
+        "y_pred",
+        "labels",
+        "zero_division",
+        "sample_weight",
+    ]
+    assert "y_score" not in sig.parameters
+
+
+def test_classification_report_result_type_has_no_ranking_fields() -> None:
+    field_names = {f.name for f in dataclasses.fields(ClassificationReport)}
+    assert field_names == {"confusion", "per_class", "macro"}
+    assert not field_names & {"auc", "roc_auc", "ap", "average_precision", "roc_curves", "curves"}
 
 
 # =====================================================================================

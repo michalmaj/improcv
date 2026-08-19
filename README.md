@@ -41,7 +41,8 @@ Three workflows cover most first uses of `improcv`:
    `sample_perspective`, apply it identically to an image and its segmentation mask, and replay it
    later (see "Augmentation sampling and replay" below).
 3. **Classification evaluation** -- confusion matrices and per-class metrics
-   (`confusion_matrix`/`classification_metrics`), multiclass one-vs-rest ranking evaluation
+   (`confusion_matrix`/`classification_metrics`), a bundled prediction-only report
+   (`classification_report`), multiclass one-vs-rest ranking evaluation
    (`multiclass_roc_auc_score`/`multiclass_average_precision_score`), and the per-class curves
    themselves (`multiclass_roc_curve`/`multiclass_precision_recall_curve`) (see "Classification
    evaluation" below).
@@ -1023,6 +1024,36 @@ summation as the matrix/support sums above.
 
 This is a numeric core only: no plotting, no multilabel classification, and no `scikit-learn`
 dependency.
+
+`classification_report` bundles a `confusion_matrix` result with per-class and macro
+precision/recall/F1/support in one call, built from hard predictions only:
+
+```python
+import improcv as im
+
+report = im.classification_report(
+    y_true=[0, 0, 1, 1],
+    y_pred=[0, 1, 1, 1],
+    labels=[0, 1],
+)
+
+report.confusion   # ConfusionMatrixResult
+report.per_class    # ClassificationMetrics, average=None -- per-class arrays
+report.macro        # ClassificationMetrics, average="macro" -- scalar aggregate
+```
+
+`ClassificationReport` is a plain, structured, numeric result -- a frozen dataclass composing the
+existing `ConfusionMatrixResult`/`ClassificationMetrics` objects directly, not a new numeric
+representation and not sklearn-compatible text/table/`dict` output (no `target_names`, no
+multilabel support). `report.confusion`, `report.per_class`, and `report.macro` are each
+bit-for-bit identical to calling `confusion_matrix`/`classification_metrics_from_confusion_matrix`
+directly -- the confusion matrix is computed exactly once, internally, and reused for both metric
+views. **This function has no `y_score` parameter and computes no ranking metric of any kind** --
+it accepts only `y_true`/`y_pred` (plus the same `labels`/`zero_division`/`sample_weight` as
+`classification_metrics`), and always rejects empty input or an all-zero `sample_weight`, even with
+an explicit `labels` (unlike `confusion_matrix` alone). For ROC/AUC/average-precision/curves, call
+`multiclass_roc_auc_score`/`multiclass_average_precision_score`/`multiclass_roc_curve`/
+`multiclass_precision_recall_curve` separately -- see below.
 
 Binary one-vs-rest ranking curves -- ROC, precision-recall, ROC AUC, and average precision:
 
