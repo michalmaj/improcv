@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.5.0a3] - 2026-08-19
+
 ### Added
 - `classification_report(y_true, y_pred, *, labels=None, zero_division=0.0, sample_weight=None)
   -> ClassificationReport` (`src/improcv/evaluation.py`): a structured, prediction-only

@@ -1767,12 +1767,15 @@ priority over new features. `0.4.0b1` remains the last public `0.4` release: no 
 `0.4.0` was ever published, and the `0.4.0` scope stays frozen as described above. `0.5.0a1` opened
 a new, additive `0.5.0` feature line on top of that frozen `0.4.0` scope: it was the first alpha of
 `0.5.0`, containing exactly one slice -- Unicode-safe single-image writing, the write-side
-counterpart to `load_image` (`save_image`, see [Usage](#usage) above). `0.5.0a2` is the current
-public prerelease, the second alpha of that same additive `0.5.x` feature line, adding
+counterpart to `load_image` (`save_image`, see [Usage](#usage) above). `0.5.0a2` added
 deterministic, RNG-free canvas expansion for `PerspectiveParameters` -- the perspective
-counterpart to `expand_affine_canvas` (`expand_perspective_canvas`, see
-[Usage](#usage) above). The `0.5.0` functional scope is not complete and this line has not entered
-beta -- further alphas may still add feature slices before any `0.5.0bN` stabilization begins. The
+counterpart to `expand_affine_canvas` (`expand_perspective_canvas`, see [Usage](#usage) above).
+`0.5.0a3` is the current public prerelease, the third alpha of that same additive `0.5.x` feature
+line, adding a structured, prediction-only classification report bundling a confusion matrix with
+per-class and macro precision/recall/F1/support (`classification_report`, see [Usage](#usage)
+above) -- no ranking scores, no plotting, and no sklearn-compatible text/dict output. The `0.5.0`
+functional scope is not complete and this line has not entered beta -- further alphas may still
+add feature slices before any `0.5.0bN` stabilization begins. The
 `aN`/`bN` in `0.4.0aN`/`0.4.0bN`/`0.5.0aN` describes how far along a
 given `0.MINOR` release is in its own release cycle, separate from the project's overall maturity
 classifier, which was already Beta before `0.4.0b1` (set at the `0.3.0b1` transition) and remains
@@ -1788,9 +1791,9 @@ and why it doesn't match the project's original one-phase-per-minor-version plan
 - Releases through `0.3.0a3` were alpha releases; `0.3.0b1` began the beta line for the `0.3.0`
   scope, which remains in beta stabilization. `0.4.0a1`-`0.4.0a5` were the alpha phase of the
   additive `0.4.x` feature line; `0.4.0b1` was the first (and, as published, only) beta of that
-  line, and remains the last public `0.4` release. `0.5.0a1`-`0.5.0a2` are the alpha phase of a
+  line, and remains the last public `0.4` release. `0.5.0a1`-`0.5.0a3` are the alpha phase of a
   new, additive `0.5.x` feature line opened on top of that frozen `0.4.0` scope, with its
-  functional scope not yet settled -- `0.5.0a2` does not mark entry into beta. Beta means the
+  functional scope not yet settled -- `0.5.0a3` does not mark entry into beta. Beta means the
   planned functional scope for a line has settled and the focus has shifted to stabilization;
   alpha means the opposite -- neither status means the public API is declared stable, and a
   backwards-incompatible change may still land in any `0.MINOR` release before `1.0.0`, including
