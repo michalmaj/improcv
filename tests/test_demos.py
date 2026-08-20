@@ -274,6 +274,31 @@ def test_build_classification_inputs_returns_the_documented_contract(
     assert not np.allclose(inputs.y_score.sum(axis=1), 1.0)
 
 
+def test_compute_classification_report_returns_the_public_report_type(
+    classification_module: types.ModuleType,
+) -> None:
+    """Regression: the demo's hard-prediction portion must be the public `im.ClassificationReport`
+    -- not a demo-local reimplementation -- and its fields must match a direct call to the public
+    `im.classification_report(...)` exactly.
+    """
+    inputs = classification_module.build_classification_inputs()
+
+    report = classification_module.compute_classification_report(inputs)
+
+    assert type(report) is im.ClassificationReport
+    assert not hasattr(classification_module, "ClassificationReport"), (
+        "the demo must not define its own private ClassificationReport any more -- the public "
+        "im.ClassificationReport is used directly"
+    )
+
+    direct = im.classification_report(
+        y_true=inputs.y_true, y_pred=inputs.y_pred, labels=list(inputs.labels)
+    )
+    assert report.confusion == direct.confusion
+    assert report.per_class == direct.per_class
+    assert report.macro == direct.macro
+
+
 def test_compute_classification_report_confusion_matrix(
     classification_module: types.ModuleType,
 ) -> None:
@@ -316,47 +341,62 @@ def test_compute_classification_report_classification_metrics(
     assert report.macro.f1 == pytest.approx(7 / 9)
 
 
+def test_compute_ranking_summary_is_demo_local_and_independent_of_the_public_report(
+    classification_module: types.ModuleType,
+) -> None:
+    """Regression: ranking evaluation stays out of the public `ClassificationReport` -- it is a
+    separate, demo-local `RankingSummary`, not a field bundled onto the public report.
+    """
+    inputs = classification_module.build_classification_inputs()
+
+    ranking = classification_module.compute_ranking_summary(inputs)
+
+    assert type(ranking) is classification_module.RankingSummary
+    assert not hasattr(im, "RankingSummary"), "RankingSummary must never leak into public API"
+    assert "RankingSummary" not in im.__all__
+
+
 def test_compute_classification_report_ranking_metrics(
     classification_module: types.ModuleType,
 ) -> None:
     inputs = classification_module.build_classification_inputs()
-    report = classification_module.compute_classification_report(inputs)
+    ranking = classification_module.compute_ranking_summary(inputs)
 
-    assert isinstance(report.auc_per_class, np.ndarray)
-    assert isinstance(report.ap_per_class, np.ndarray)
-    assert report.auc_per_class.shape == (3,)
-    assert report.ap_per_class.shape == (3,)
-    assert all(np.isfinite(report.auc_per_class))
-    assert all(np.isfinite(report.ap_per_class))
+    assert isinstance(ranking.auc_per_class, np.ndarray)
+    assert isinstance(ranking.ap_per_class, np.ndarray)
+    assert ranking.auc_per_class.shape == (3,)
+    assert ranking.ap_per_class.shape == (3,)
+    assert all(np.isfinite(ranking.auc_per_class))
+    assert all(np.isfinite(ranking.ap_per_class))
     for scalar in (
-        report.auc_macro,
-        report.auc_weighted,
-        report.auc_micro,
-        report.ap_macro,
-        report.ap_weighted,
-        report.ap_micro,
+        ranking.auc_macro,
+        ranking.auc_weighted,
+        ranking.auc_micro,
+        ranking.ap_macro,
+        ranking.ap_weighted,
+        ranking.ap_micro,
     ):
         assert np.isfinite(scalar)
 
     # Matches examples/classification_evaluation.py's printed output for this exact fixed
     # example, with a reasonable tolerance -- not hand-copied into the generator itself.
-    assert report.auc_per_class.tolist() == pytest.approx([1.0, 0.9444444, 1.0], abs=1e-6)
-    assert report.auc_macro == pytest.approx(0.9814815, abs=1e-6)
-    assert report.auc_weighted == pytest.approx(0.9814815, abs=1e-6)
-    assert report.auc_micro == pytest.approx(0.9783951, abs=1e-6)
-    assert report.ap_per_class.tolist() == pytest.approx([1.0, 0.9166667, 1.0], abs=1e-6)
-    assert report.ap_macro == pytest.approx(0.9722222, abs=1e-6)
-    assert report.ap_weighted == pytest.approx(0.9722222, abs=1e-6)
-    assert report.ap_micro == pytest.approx(0.9658120, abs=1e-6)
+    assert ranking.auc_per_class.tolist() == pytest.approx([1.0, 0.9444444, 1.0], abs=1e-6)
+    assert ranking.auc_macro == pytest.approx(0.9814815, abs=1e-6)
+    assert ranking.auc_weighted == pytest.approx(0.9814815, abs=1e-6)
+    assert ranking.auc_micro == pytest.approx(0.9783951, abs=1e-6)
+    assert ranking.ap_per_class.tolist() == pytest.approx([1.0, 0.9166667, 1.0], abs=1e-6)
+    assert ranking.ap_macro == pytest.approx(0.9722222, abs=1e-6)
+    assert ranking.ap_weighted == pytest.approx(0.9722222, abs=1e-6)
+    assert ranking.ap_micro == pytest.approx(0.9658120, abs=1e-6)
 
 
 def test_compute_classification_report_roc_curves(
     classification_module: types.ModuleType,
 ) -> None:
     inputs = classification_module.build_classification_inputs()
-    report = classification_module.compute_classification_report(inputs)
+    ranking = classification_module.compute_ranking_summary(inputs)
 
-    roc_curves = report.roc_curves
+    roc_curves = ranking.roc_curves
     assert isinstance(roc_curves, im.MulticlassRocCurve)
     assert roc_curves.labels == (20, 10, 30)
     assert len(roc_curves.curves) == 3
@@ -368,7 +408,7 @@ def test_compute_classification_report_roc_curves(
     # per-class multiclass_roc_auc_score(average=None) entries.
     for index, curve in enumerate(roc_curves.curves):
         area = im.auc(curve.false_positive_rate, curve.true_positive_rate)
-        assert area == report.auc_per_class[index]
+        assert area == ranking.auc_per_class[index]
 
 
 def test_score_column_mapping_comes_from_a_real_enumeration_of_labels(
@@ -398,21 +438,22 @@ def test_classification_report_text_contains_the_required_terms(
 ) -> None:
     inputs = classification_module.build_classification_inputs()
     report = classification_module.compute_classification_report(inputs)
+    ranking = classification_module.compute_ranking_summary(inputs)
 
     contract_text = classification_module._report_contract_text(inputs.labels)
     classification_text = classification_module._classification_table_text(
         inputs.labels, report.per_class, report.macro
     )
     ranking_table_text = classification_module._ranking_table_text(
-        inputs.labels, report.auc_per_class, report.ap_per_class
+        inputs.labels, ranking.auc_per_class, ranking.ap_per_class
     )
     ranking_summary_text = classification_module._ranking_summary_text(
-        report.auc_macro,
-        report.auc_weighted,
-        report.auc_micro,
-        report.ap_macro,
-        report.ap_weighted,
-        report.ap_micro,
+        ranking.auc_macro,
+        ranking.auc_weighted,
+        ranking.auc_micro,
+        ranking.ap_macro,
+        ranking.ap_weighted,
+        ranking.ap_micro,
     )
     combined = "\n".join(
         [
@@ -445,21 +486,22 @@ def test_classification_report_figure_renders_real_per_class_roc_curves(
 ) -> None:
     inputs = classification_module.build_classification_inputs()
     report = classification_module.compute_classification_report(inputs)
+    ranking = classification_module.compute_ranking_summary(inputs)
 
-    fig, _panel_texts = classification_module.build_classification_figure(inputs, report)
+    fig, _panel_texts = classification_module.build_classification_figure(inputs, report, ranking)
     try:
         roc_axes = fig.axes[2]  # confusion matrix, ROC curves, then the report column's axes
         assert roc_axes.get_title(loc="left") == "Per-class ROC curves"
 
         # One line per label plus the diagonal reference line -- drawn directly from
-        # report.roc_curves.curves, never through improcv.visualization.
+        # ranking.roc_curves.curves, never through improcv.visualization.
         lines = roc_axes.get_lines()
-        assert len(lines) == len(report.roc_curves.curves) + 1
+        assert len(lines) == len(ranking.roc_curves.curves) + 1
 
         legend_labels = [text.get_text() for text in roc_axes.get_legend().get_texts()]
-        assert legend_labels == [f"label {label}" for label in report.roc_curves.labels]
+        assert legend_labels == [f"label {label}" for label in ranking.roc_curves.labels]
 
-        for index, curve in enumerate(report.roc_curves.curves):
+        for index, curve in enumerate(ranking.roc_curves.curves):
             line = lines[index]
             np.testing.assert_array_equal(line.get_xdata(), curve.false_positive_rate)
             np.testing.assert_array_equal(line.get_ydata(), curve.true_positive_rate)
@@ -478,8 +520,9 @@ def test_classification_report_panel_text_never_overflows_its_axes(
     # own axes' bounding box directly via find_text_overflow. No OCR, no PNG involved.
     inputs = classification_module.build_classification_inputs()
     report = classification_module.compute_classification_report(inputs)
+    ranking = classification_module.compute_ranking_summary(inputs)
 
-    fig, panel_texts = classification_module.build_classification_figure(inputs, report)
+    fig, panel_texts = classification_module.build_classification_figure(inputs, report, ranking)
     try:
         assert len(panel_texts) == 6, (
             "expected the top contract strip, the report column's four sections, and the "
@@ -495,6 +538,49 @@ def test_classification_report_panel_text_never_overflows_its_axes(
         import matplotlib.pyplot as plt
 
         plt.close(fig)
+
+
+def test_classification_report_demo_migration_leaks_no_new_public_symbols(
+    classification_module: types.ModuleType,
+) -> None:
+    """Regression: neither `RankingSummary` nor `ClassificationInputs` (this demo's own private
+    types) may appear in `improcv`'s public API -- the migration to the public
+    `classification_report` must not accidentally widen it.
+    """
+    assert len(im.__all__) == 198
+    assert len(im.__all__) == len(set(im.__all__))
+    for private_name in ("RankingSummary", "ClassificationInputs"):
+        assert not hasattr(im, private_name)
+        assert private_name not in im.__all__
+        assert hasattr(classification_module, private_name), (
+            f"{private_name} should still exist as a demo-local type"
+        )
+
+
+def test_classification_report_demo_is_deterministic_across_repeated_execution(
+    classification_module: types.ModuleType,
+) -> None:
+    inputs = classification_module.build_classification_inputs()
+
+    report_a = classification_module.compute_classification_report(inputs)
+    ranking_a = classification_module.compute_ranking_summary(inputs)
+    report_b = classification_module.compute_classification_report(inputs)
+    ranking_b = classification_module.compute_ranking_summary(inputs)
+
+    assert report_a == report_b
+
+    # RankingSummary is a plain NamedTuple holding raw ndarray fields, so field-by-field
+    # comparison is required -- unlike ClassificationReport, whose ConfusionMatrixResult/
+    # ClassificationMetrics fields already define a safe, array-aware __eq__.
+    assert np.array_equal(ranking_a.auc_per_class, ranking_b.auc_per_class)
+    assert ranking_a.auc_macro == ranking_b.auc_macro
+    assert ranking_a.auc_weighted == ranking_b.auc_weighted
+    assert ranking_a.auc_micro == ranking_b.auc_micro
+    assert np.array_equal(ranking_a.ap_per_class, ranking_b.ap_per_class)
+    assert ranking_a.ap_macro == ranking_b.ap_macro
+    assert ranking_a.ap_weighted == ranking_b.ap_weighted
+    assert ranking_a.ap_micro == ranking_b.ap_micro
+    assert ranking_a.roc_curves == ranking_b.roc_curves
 
 
 # --- pairing_diagnostics.py --------------------------------------------------------------
