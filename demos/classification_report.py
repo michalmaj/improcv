@@ -2,9 +2,12 @@
 
 Runs the existing public classification workflow --
 
-    y_true + y_pred + y_score
-    -> confusion_matrix
-    -> classification_metrics
+    y_true + y_pred
+    -> classification_report (confusion matrix + per-class/macro metrics,
+       composed internally from confusion_matrix and
+       classification_metrics_from_confusion_matrix)
+
+    y_true + y_score
     -> multiclass_roc_auc_score
     -> multiclass_average_precision_score
     -> multiclass_roc_curve
@@ -17,6 +20,15 @@ this workflow depends on: rows/columns of the confusion matrix are
 `labels[i]` -- in exactly the (deliberately unsorted) order `labels` is
 given, never a sorted one -- and `multiclass_roc_curve`'s own `result.curves[i]`
 follows that same order, rendered here as real per-class ROC curves.
+
+The prediction-level portion (confusion matrix, per-class metrics, macro
+metrics) comes from the public `improcv.classification_report`/
+`ClassificationReport`, introduced in `0.5.0a3` -- this demo no longer builds
+that part itself. The ranking-level portion (AUC/AP/ROC curves, from
+`y_score`) stays out of `ClassificationReport` by design (see
+`docs/design/0.5.0a3-classification-report.md`) and remains demo-local,
+computed via the existing multiclass ranking functions and bundled into the
+demo-local `RankingSummary` below.
 
 This script does not call `multiclass_precision_recall_curve` or render a
 precision-recall curve -- one rendered curve type is enough to demonstrate the
@@ -81,12 +93,15 @@ class ClassificationInputs(NamedTuple):
     y_score: np.ndarray
 
 
-class ClassificationReport(NamedTuple):
-    """Every real result `build_classification_figure` renders."""
+class RankingSummary(NamedTuple):
+    """Ranking-only evaluation results this demo renders, computed from `y_score`.
 
-    confusion: im.ConfusionMatrixResult
-    per_class: im.ClassificationMetrics
-    macro: im.ClassificationMetrics
+    Kept explicitly separate from the public, prediction-only `improcv.ClassificationReport`
+    (which has no `y_score`/ranking data of any kind, by design -- see
+    `docs/design/0.5.0a3-classification-report.md`). This is demo-local rendering input, not a
+    public type.
+    """
+
     auc_per_class: np.ndarray
     auc_macro: float
     auc_weighted: float
@@ -132,23 +147,56 @@ def build_classification_inputs() -> ClassificationInputs:
     return ClassificationInputs(labels=labels, y_true=y_true, y_pred=y_pred, y_score=y_score)
 
 
-def compute_classification_report(inputs: ClassificationInputs) -> ClassificationReport:
-    """Run the real public workflow and assert its documented contract before rendering.
+def compute_classification_report(inputs: ClassificationInputs) -> im.ClassificationReport:
+    """Run the public `classification_report` and assert its documented contract before rendering.
 
-    Only shape/finiteness/label-alignment and a handful of exactly-known classification values
-    (this fixed example's confusion matrix, precision/recall/F1, accuracy, and macro F1 are all
-    simple rationals) are asserted here -- the ranking scores' exact values are checked with a
-    tolerance in tests/test_demos.py instead, not hand-typed into the generator.
+    Only a handful of exactly-known classification values (this fixed example's confusion matrix,
+    precision/recall/F1, accuracy, and macro F1 are all simple rationals) are asserted here -- this
+    demo never independently calls `confusion_matrix`/`classification_metrics`/
+    `classification_metrics_from_confusion_matrix`: `report.confusion`/`report.per_class`/
+    `report.macro` are the single source of truth for those values.
     """
     labels = list(inputs.labels)
 
-    confusion = im.confusion_matrix(y_true=inputs.y_true, y_pred=inputs.y_pred, labels=labels)
-    per_class = im.classification_metrics(
-        y_true=inputs.y_true, y_pred=inputs.y_pred, labels=labels, average=None
+    report = im.classification_report(y_true=inputs.y_true, y_pred=inputs.y_pred, labels=labels)
+
+    assert report.confusion.labels == inputs.labels
+    assert report.confusion.matrix.shape == (3, 3)
+    assert np.array_equal(
+        report.confusion.matrix,
+        np.array([[3, 0, 0], [0, 2, 1], [0, 1, 2]], dtype=np.int64),
     )
-    macro = im.classification_metrics(
-        y_true=inputs.y_true, y_pred=inputs.y_pred, labels=labels, average="macro"
-    )
+
+    assert report.per_class.labels == inputs.labels
+    assert report.per_class.average is None
+    assert isinstance(report.per_class.precision, np.ndarray)
+    assert isinstance(report.per_class.recall, np.ndarray)
+    assert isinstance(report.per_class.f1, np.ndarray)
+    assert report.per_class.precision.shape == (3,)
+    assert report.per_class.recall.shape == (3,)
+    assert report.per_class.f1.shape == (3,)
+    assert report.per_class.support.tolist() == [3, 3, 3]
+    assert np.allclose(report.per_class.precision, [1.0, 2 / 3, 2 / 3])
+    assert np.allclose(report.per_class.recall, [1.0, 2 / 3, 2 / 3])
+    assert np.allclose(report.per_class.f1, [1.0, 2 / 3, 2 / 3])
+
+    assert report.macro.average == "macro"
+    assert np.isclose(report.macro.accuracy, 7 / 9)
+    assert np.isclose(report.macro.f1, 7 / 9)
+
+    return report
+
+
+def compute_ranking_summary(inputs: ClassificationInputs) -> RankingSummary:
+    """Compute ranking-only values from `y_score` and assert their documented contract.
+
+    Kept independent of `compute_classification_report`: ranking evaluation stays out of the
+    public `ClassificationReport` by design, so this demo computes it separately via the existing
+    multiclass ranking functions, exactly as before this module's `classification_report`
+    migration -- only its container type changed (`RankingSummary` instead of the old private
+    `ClassificationReport`), not its computation.
+    """
+    labels = list(inputs.labels)
 
     auc_per_class = im.multiclass_roc_auc_score(
         inputs.y_true, inputs.y_score, labels=labels, average=None
@@ -178,30 +226,6 @@ def compute_classification_report(inputs: ClassificationInputs) -> Classificatio
 
     roc_curves = im.multiclass_roc_curve(inputs.y_true, inputs.y_score, labels=labels)
 
-    assert confusion.labels == inputs.labels
-    assert confusion.matrix.shape == (3, 3)
-    assert np.array_equal(
-        confusion.matrix,
-        np.array([[3, 0, 0], [0, 2, 1], [0, 1, 2]], dtype=np.int64),
-    )
-
-    assert per_class.labels == inputs.labels
-    assert per_class.average is None
-    assert isinstance(per_class.precision, np.ndarray)
-    assert isinstance(per_class.recall, np.ndarray)
-    assert isinstance(per_class.f1, np.ndarray)
-    assert per_class.precision.shape == (3,)
-    assert per_class.recall.shape == (3,)
-    assert per_class.f1.shape == (3,)
-    assert per_class.support.tolist() == [3, 3, 3]
-    assert np.allclose(per_class.precision, [1.0, 2 / 3, 2 / 3])
-    assert np.allclose(per_class.recall, [1.0, 2 / 3, 2 / 3])
-    assert np.allclose(per_class.f1, [1.0, 2 / 3, 2 / 3])
-
-    assert macro.average == "macro"
-    assert np.isclose(macro.accuracy, 7 / 9)
-    assert np.isclose(macro.f1, 7 / 9)
-
     assert isinstance(auc_per_class, np.ndarray) and auc_per_class.shape == (3,)
     assert isinstance(ap_per_class, np.ndarray) and ap_per_class.shape == (3,)
     assert all(np.isfinite(auc_per_class))
@@ -219,10 +243,7 @@ def compute_classification_report(inputs: ClassificationInputs) -> Classificatio
         area = im.auc(curve.false_positive_rate, curve.true_positive_rate)
         assert area == auc_per_class[index]
 
-    return ClassificationReport(
-        confusion=confusion,
-        per_class=per_class,
-        macro=macro,
+    return RankingSummary(
         auc_per_class=auc_per_class,
         auc_macro=float(auc_macro),
         auc_weighted=float(auc_weighted),
@@ -460,9 +481,14 @@ def find_text_overflow(
 
 
 def build_classification_figure(
-    inputs: ClassificationInputs, report: ClassificationReport
+    inputs: ClassificationInputs, report: im.ClassificationReport, ranking: RankingSummary
 ) -> tuple[Figure, tuple[tuple[Axes, Text], ...]]:
     """Build the classification report figure without saving or closing it.
+
+    `report` is the public, prediction-only `improcv.ClassificationReport`; `ranking` is this
+    demo's own ranking-only bundle -- kept as two separate parameters, matching the same
+    architectural boundary the public API itself draws (see `docs/design/0.5.0a3-classification-
+    report.md`), rather than merged back into one object here.
 
     Matplotlib is imported and configured here, inside the build path, not at module import
     time. Returns the figure alongside every `(axes, text)` pair placed in a controlled panel
@@ -516,7 +542,7 @@ def build_classification_figure(
     _render_confusion_matrix(cm_ax, report.confusion, labels)
 
     roc_ax = fig.add_subplot(main[1])
-    _render_roc_curves(roc_ax, report.roc_curves)
+    _render_roc_curves(roc_ax, ranking.roc_curves)
     _add_border(roc_ax, _ROC_ACCENT)
 
     report_grid = main[2].subgridspec(4, 1, height_ratios=(0.28, 0.30, 0.22, 0.20), hspace=0.12)
@@ -558,7 +584,7 @@ def build_classification_figure(
     ranking_table_text = ranking_table_ax.text(
         0.02,
         0.94,
-        _ranking_table_text(labels, report.auc_per_class, report.ap_per_class),
+        _ranking_table_text(labels, ranking.auc_per_class, ranking.ap_per_class),
         transform=ranking_table_ax.transAxes,
         fontsize=7.5,
         fontfamily="monospace",
@@ -575,12 +601,12 @@ def build_classification_figure(
         0.02,
         0.90,
         _ranking_summary_text(
-            report.auc_macro,
-            report.auc_weighted,
-            report.auc_micro,
-            report.ap_macro,
-            report.ap_weighted,
-            report.ap_micro,
+            ranking.auc_macro,
+            ranking.auc_weighted,
+            ranking.auc_micro,
+            ranking.ap_macro,
+            ranking.ap_weighted,
+            ranking.ap_micro,
         ),
         transform=ranking_summary_ax.transAxes,
         fontsize=8.5,
@@ -610,13 +636,16 @@ def build_classification_figure(
 
 
 def render_classification_report(
-    inputs: ClassificationInputs, report: ClassificationReport, output: Path
+    inputs: ClassificationInputs,
+    report: im.ClassificationReport,
+    ranking: RankingSummary,
+    output: Path,
 ) -> tuple[int, int]:
     """Render the classification report to `output` as a PNG.
 
     Returns the written image's `(width, height)` in pixels.
     """
-    fig, panel_texts = build_classification_figure(inputs, report)
+    fig, panel_texts = build_classification_figure(inputs, report, ranking)
 
     from matplotlib import pyplot as plt
     from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -667,9 +696,10 @@ def main() -> None:
     args = parse_args()
     inputs = build_classification_inputs()
     report = compute_classification_report(inputs)
+    ranking = compute_ranking_summary(inputs)
 
     try:
-        width, height = render_classification_report(inputs, report, args.output)
+        width, height = render_classification_report(inputs, report, ranking, args.output)
     except OSError as error:
         print(f"error: could not write {args.output}: {error}", file=sys.stderr)
         raise SystemExit(1) from None
