@@ -17,9 +17,11 @@ except ModuleNotFoundError as _exc:
         'installed by default. Install it with `pip install "improcv[viz]"`.'
     ) from _exc
 
+from improcv.visualization.evaluation import plot_confusion_matrix  # noqa: E402
 from improcv.visualization.image import plot_histogram, show_image  # noqa: E402
 
 __all__ = [
+    "plot_confusion_matrix",
     "plot_histogram",
     "show_image",
 ]
