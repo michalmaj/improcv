@@ -70,7 +70,7 @@ version decided at the time each is actually published, rather than mechanically
   with per-class and macro `classification_metrics` -- no ranking data of any kind) released in
   `0.5.0a3`, see `docs/design/0.5.0a3-classification-report.md`; a confusion-matrix plotting
   primitive (`plot_confusion_matrix`, in `improcv.visualization`, dtype-conditioned annotation
-  formatting with no truncation/rounding of weighted values) implemented in `0.5.0a4.dev0`, see
+  formatting with no truncation/rounding of weighted values) released in `0.5.0a4`, see
   `docs/design/0.5.0a4-plot-confusion-matrix.md`; ROC/PR-curve plotting, macro/weighted curve
   aggregates, and one-vs-one mode remain planned, not started, see
   [CHANGELOG.md](CHANGELOG.md)), image augmentation

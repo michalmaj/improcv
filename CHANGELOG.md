@@ -10,6 +10,8 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+## [0.5.0a4] - 2026-08-21
+
 ### Added
 - `plot_confusion_matrix(confusion: ConfusionMatrixResult, ax: Axes | None = None) -> Axes`
   (`improcv.visualization`, new `src/improcv/visualization/evaluation.py` module): displays a

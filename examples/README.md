@@ -9,7 +9,7 @@ summary. All seven run identically on Windows, Linux, and macOS.
 ## Installation
 
 ```bash
-pip install "improcv[cv-headless]==0.5.0a3"
+pip install "improcv[cv-headless]==0.5.0a4"
 ```
 
 For a development checkout of this repository:
