@@ -511,6 +511,41 @@ def test_classification_report_figure_renders_real_per_class_roc_curves(
         plt.close(fig)
 
 
+def test_render_confusion_matrix_delegates_to_public_plot_confusion_matrix(
+    classification_module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_render_confusion_matrix` must not reimplement the heatmap itself -- it must call the
+    public `improcv.visualization.plot_confusion_matrix` exactly once, with the exact
+    `ConfusionMatrixResult`/`Axes` it was given, and only add its own decoration on top.
+    """
+    import improcv.visualization as viz
+
+    real_plot_confusion_matrix = viz.plot_confusion_matrix
+    calls: list[tuple[object, object]] = []
+
+    def spy(confusion, ax=None):
+        calls.append((confusion, ax))
+        return real_plot_confusion_matrix(confusion, ax=ax)
+
+    monkeypatch.setattr(viz, "plot_confusion_matrix", spy)
+
+    inputs = classification_module.build_classification_inputs()
+    report = classification_module.compute_classification_report(inputs)
+    ranking = classification_module.compute_ranking_summary(inputs)
+
+    fig, _panel_texts = classification_module.build_classification_figure(inputs, report, ranking)
+    try:
+        assert len(calls) == 1, "plot_confusion_matrix must be called exactly once"
+        called_confusion, called_ax = calls[0]
+        assert called_confusion is report.confusion
+        assert called_ax is fig.axes[1]  # contract strip, then confusion matrix, then ROC curves
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
 def test_classification_report_panel_text_never_overflows_its_axes(
     classification_module: types.ModuleType,
 ) -> None:

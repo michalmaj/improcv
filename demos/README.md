@@ -83,24 +83,39 @@ affine replay, without any rendering), see
   width="880"
 >
 
-Runs the existing public evaluation workflow -- `confusion_matrix` -> `classification_metrics` ->
-`multiclass_roc_auc_score` -> `multiclass_average_precision_score` -- on a small, explicit,
-hand-written multiclass example (the same one used by
+Runs two independent public evaluation workflows on a small, explicit, hand-written multiclass
+example (the same one used by
 [`examples/classification_evaluation.py`](../examples/classification_evaluation.py), duplicated
-here so this generator stays self-contained). Shows:
+here so this generator stays self-contained):
+
+- **Prediction-level** (from `y_true`/`y_pred` only): `classification_report`, giving the
+  confusion matrix plus per-class and macro precision/recall/F1/support in one call -- this
+  report has no `y_score`/ranking data of any kind, by design.
+- **Ranking-level** (from `y_true`/`y_score`, computed and rendered independently of the report
+  above): `multiclass_roc_auc_score` -> `multiclass_average_precision_score` ->
+  `multiclass_roc_curve`, giving per-class ROC AUC/average precision (plus macro/weighted/micro
+  summaries for both) and real per-class ROC curves.
+
+Shows:
 
 - `labels = [20, 10, 30]`, deliberately unsorted: it fixes both the confusion matrix's row/column
   order and which `y_score` column belongs to which class -- `y_score[:, i]` corresponds to
-  `labels[i]`, never a sorted order;
-- the confusion matrix (rows are true labels, columns are predicted labels);
+  `labels[i]`, never a sorted order, and `multiclass_roc_curve`'s own `result.curves[i]` follows
+  that same order;
+- the confusion matrix (rows are true labels, columns are predicted labels), rendered via the
+  public `improcv.visualization.plot_confusion_matrix` -- this demo adds only its own title,
+  cell-annotation fontsize, and explanatory caption on top of that public heatmap;
 - per-class precision, recall, F1, and support, plus accuracy and macro F1;
-- per-class ROC AUC and average precision, plus macro/weighted/micro summaries for both;
+- per-class ROC AUC and average precision, plus macro/weighted/micro summaries for both, and the
+  per-class ROC curves themselves, rendered as plain, demo-local Matplotlib -- `improcv` has no
+  public ROC-curve plotting API yet;
 - that `y_score`'s rows do not need to sum to `1.0` -- `improcv`'s multiclass ranking functions
   never require a probability simplex.
 
-This demo does not call `roc_curve`/`precision_recall_curve` and does not render any curve --
-`improcv` does not yet have a public multiclass curve result type, so this shows the stable
-score-based API only, not a design for API that does not exist yet.
+This demo does not call `multiclass_precision_recall_curve` or render a precision-recall curve --
+one rendered curve type is enough to demonstrate the ranking side without turning this generator
+into a general plotting surface. There is still no public combined-report figure/layout API, and
+ranking evaluation stays deliberately separate from the prediction-only `classification_report`.
 
 For a copyable, executable version of the same workflow, see
 [`examples/classification_evaluation.py`](../examples/classification_evaluation.py).
