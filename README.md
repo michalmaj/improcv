@@ -303,11 +303,24 @@ annotated = im.draw_bounding_boxes(annotated, [region.bounding_box for region in
 Visualization (optional, requires `pip install "improcv[viz]"`):
 
 ```python
+import improcv as im
 import improcv.visualization as viz
 
 viz.show_image(image, title="input")  # handles BGR->RGB, hides axes by default
 viz.plot_histogram(image)              # one line per channel (B/G/R or grayscale)
+
+confusion = im.confusion_matrix(y_true=[0, 0, 1, 1], y_pred=[0, 1, 1, 1], labels=[0, 1])
+viz.plot_confusion_matrix(confusion)   # "Blues" heatmap with per-cell value annotations
 ```
+
+`improcv.visualization` (including `plot_confusion_matrix`) is available only via that explicit
+import -- `import improcv` alone never imports matplotlib and has no `im.plot_confusion_matrix`.
+`plot_confusion_matrix` accepts any `ConfusionMatrixResult` (from `confusion_matrix` or hand-built)
+and renders it without requiring a non-zero total: a structurally valid, non-empty, all-zero
+matrix is legal and renders. Cell annotations depend on `confusion.matrix`'s dtype: an unweighted
+(`int64`) matrix shows a plain exact integer (e.g. `"2"`); a weighted (`float64`, via
+`sample_weight`) matrix shows `str(float(value))` (e.g. `"2.0"`, `"123456.789"`) -- exact at every
+magnitude, never rounded or truncated.
 
 Image quality metrics:
 

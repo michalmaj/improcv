@@ -10,6 +10,23 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Added
+- `plot_confusion_matrix(confusion: ConfusionMatrixResult, ax: Axes | None = None) -> Axes`
+  (`improcv.visualization`, new `src/improcv/visualization/evaluation.py` module): displays a
+  confusion matrix as a `"Blues"` heatmap with per-cell value annotations. Fixes `vmin=0`/
+  `vmax=float(confusion.matrix.max())` explicitly and derives per-cell text-contrast color from
+  the real `AxesImage.norm(value)` -- not a separately hand-computed formula, which would
+  disagree with the actual displayed color whenever the matrix's minimum is greater than zero.
+  Annotation formatting is dtype-conditioned: an `int64` (unweighted) matrix formats each cell as
+  a plain, exact integer; a `float64` (weighted, via `sample_weight`) matrix formats via
+  `str(float(value))` -- exact at every magnitude, never rounded (`f"{value:g}"`) or truncated
+  (`int(value)`). Reuses `evaluation._require_confusion_matrix_result` privately for input
+  validation, so a structurally valid, non-empty, all-zero confusion matrix (a legal
+  `confusion_matrix` output) renders without rejection. Adds one new public visualization
+  function; `improcv.__all__` is unchanged (`improcv.visualization` stays isolated from top-level
+  `import improcv`), `improcv.visualization.__all__` grows from 2 to 3. No new dependency. See
+  `docs/design/0.5.0a4-plot-confusion-matrix.md` for the full frozen contract.
+
 ## [0.5.0a3] - 2026-08-19
 
 ### Added
