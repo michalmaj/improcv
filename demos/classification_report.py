@@ -30,13 +30,21 @@ that part itself. The ranking-level portion (AUC/AP/ROC curves, from
 computed via the existing multiclass ranking functions and bundled into the
 demo-local `RankingSummary` below.
 
+The confusion-matrix panel itself is drawn via the public
+`improcv.visualization.plot_confusion_matrix`, introduced in `0.5.0a4` (see
+`docs/design/0.5.0a4-plot-confusion-matrix.md`) -- this demo adds only its own
+title, a larger cell-annotation fontsize, and an explanatory caption on top
+(see `_render_confusion_matrix`). ROC-curve rendering has no public API yet,
+so `_render_roc_curves` remains plain, demo-local Matplotlib.
+
 This script does not call `multiclass_precision_recall_curve` or render a
 precision-recall curve -- one rendered curve type is enough to demonstrate the
 new API without turning this demo into a general plotting surface; the
 distinction between a PR curve's trapezoidal area and average precision is
 already demonstrated in `examples/classification_evaluation.py`. This remains
-a demo script rendering one fixed report figure, not a public plotting API --
-`improcv.visualization` is not extended by this file.
+a demo script rendering one fixed report figure, not a general-purpose
+plotting surface: there is still no public combined-report figure/layout API,
+and ROC/PR-curve plotting specifically remains demo-local.
 
 This script is the source of truth for `docs/assets/classification-report.png`;
 the PNG must never be edited by hand. Run with:
@@ -371,35 +379,29 @@ def _add_border(ax: Axes, color: str) -> None:
     ax.add_patch(border)
 
 
-def _render_confusion_matrix(
-    ax: Axes, confusion: im.ConfusionMatrixResult, labels: Sequence[int]
-) -> None:
-    """Draw the confusion matrix heatmap directly with Matplotlib -- never through
-    `improcv.visualization`, which this demo does not extend.
+def _render_confusion_matrix(ax: Axes, confusion: im.ConfusionMatrixResult) -> None:
+    """Draw the confusion matrix heatmap via the public
+    `improcv.visualization.plot_confusion_matrix`, then add this demo's own decoration on top --
+    a title, a larger cell-annotation fontsize, and an explanatory caption -- none of which are
+    part of that public function's own contract (it has no `title`/`fontsize`/caption parameter).
+
+    The heatmap itself (`imshow`, cmap, ticks/tick labels, axis labels, per-cell value
+    annotations, and their contrast color) is entirely `plot_confusion_matrix`'s responsibility
+    now -- this demo no longer independently calls `ax.imshow`, sets ticks, or picks annotation
+    text/color itself. Imported locally (not at module level) so importing this demo module never
+    imports matplotlib -- by the time this function actually runs, `build_classification_figure`
+    has already configured the `Agg` backend.
     """
-    matrix = confusion.matrix
-    positions = list(range(len(labels)))
+    from improcv.visualization import plot_confusion_matrix
 
-    ax.imshow(matrix, cmap="Blues", aspect="equal")
-    ax.set_xticks(positions)
-    ax.set_xticklabels([str(label) for label in labels])
-    ax.set_yticks(positions)
-    ax.set_yticklabels([str(label) for label in labels])
-    ax.set_xlabel("predicted label")
-    ax.set_ylabel("true label")
+    plot_confusion_matrix(confusion, ax=ax)
+
     ax.set_title("Confusion matrix", fontsize=10, loc="left")
-
-    max_value = float(matrix.max()) if matrix.size else 0.0
-    for row in positions:
-        for column in positions:
-            value = int(matrix[row, column])
-            normalized = value / max_value if max_value > 0 else 0.0
-            # Color is an addition, not the only signal -- every cell's count is always
-            # written as text, with its color chosen for contrast against that cell's fill.
-            text_color = "white" if normalized > 0.5 else "black"
-            ax.text(
-                column, row, str(value), ha="center", va="center", color=text_color, fontsize=12
-            )
+    # plot_confusion_matrix's own per-cell annotations use matplotlib's default fontsize; this
+    # demo wants them larger, in its own small heatmap panel -- adjusted here, after the fact,
+    # rather than exposing a fontsize parameter on the public function for one demo's preference.
+    for text in ax.texts:
+        text.set_fontsize(12)
 
     ax.text(
         0.5,
@@ -417,7 +419,9 @@ def _render_roc_curves(ax: Axes, roc_curves: im.MulticlassRocCurve) -> None:
 
     Curves are drawn in `roc_curves.labels`' own order (never sorted) -- the same order
     `multiclass_roc_curve` itself preserves from the caller's `labels` argument. Never goes
-    through `improcv.visualization`, which this demo does not extend.
+    through `improcv.visualization`, which has no ROC-curve plotting API yet -- unlike the
+    confusion-matrix panel (`_render_confusion_matrix`), which does use the public
+    `plot_confusion_matrix`.
     """
     for index, curve in enumerate(roc_curves.curves):
         color = _ROC_CURVE_COLORS[index % len(_ROC_CURVE_COLORS)]
@@ -539,7 +543,7 @@ def build_classification_figure(
     # either existing panel.
     main = outer[1].subgridspec(1, 3, width_ratios=(0.9, 0.95, 1.25), wspace=0.16)
     cm_ax = fig.add_subplot(main[0])
-    _render_confusion_matrix(cm_ax, report.confusion, labels)
+    _render_confusion_matrix(cm_ax, report.confusion)
 
     roc_ax = fig.add_subplot(main[1])
     _render_roc_curves(roc_ax, ranking.roc_curves)
