@@ -109,7 +109,14 @@ version decided at the time each is actually published, rather than mechanically
   planned, not started, with no version assigned yet). `0.4.0b1` begins beta stabilization after
   completion of the planned `0.4.0` functional scope described above -- the five slices released
   across `0.4.0a1`-`0.4.0a5` -- no additional independent feature slice is planned for `0.4` beta;
-  it is stabilization-focused, the same shift `0.3.0b1` made for `0.3.0`. Bounding boxes/
+  it is stabilization-focused, the same shift `0.3.0b1` made for `0.3.0`. The `0.5.0` functional
+  scope -- `save_image` (`0.5.0a1`), `expand_perspective_canvas` (`0.5.0a2`),
+  `classification_report`/`ClassificationReport` (`0.5.0a3`), and `plot_confusion_matrix`
+  (`0.5.0a4`) -- is now similarly settled, per a dedicated scope-closure audit; `0.5.0b1` begins
+  `0.5.0`'s own beta stabilization, currently in development as `0.5.0b1.dev0` and not yet
+  published -- no additional independent feature slice is planned for `0.5` beta either. A
+  `0.5.0a5.dev0` development checkpoint was used only for that audit and was never published as
+  `0.5.0a5`. Bounding boxes/
   keypoints/polygons in augmentation, a
   `Compose`-style augmentation pipeline, dataset manifests/batching, and DNN
   inference/model-specific wrappers are deferred, not approved. Release version(s) to be decided as
