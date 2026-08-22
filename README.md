@@ -1788,16 +1788,15 @@ with per-class and macro precision/recall/F1/support (`classification_report`, s
 [Usage](#usage) above) -- no ranking scores, no plotting, and no sklearn-compatible text/dict
 output. `0.5.0a4` added an optional visualization primitive that renders a `ConfusionMatrixResult`
 as a heatmap (`plot_confusion_matrix`, `from improcv.visualization import plot_confusion_matrix` --
-never `improcv.plot_confusion_matrix`; requires the `viz` extra, see [Usage](#usage) above) and
-**remains the latest published `0.5.0` release**. The planned functional scope for `0.5.0` is now
-settled at these four slices, following a dedicated scope-closure audit; `0.5.0b1` opens `0.5.0`'s
-own beta stabilization the same way `0.3.0b1`/`0.4.0b1` did for their own lines -- bug fixes,
-compatibility corrections, typing corrections, documentation corrections, and feedback from
-real-world usage take priority over new feature slices, which are deferred to a later development
-line, unless required to correct a bug, compatibility problem, or API-contract issue. **`0.5.0b1`
-has not been published yet** -- it is currently in development as `0.5.0b1.dev0`, and `0.5.0a4`
-remains the latest public prerelease until `0.5.0b1` actually ships. (A `0.5.0a5.dev0` development
-checkpoint existed briefly for that scope-closure audit but was never published as `0.5.0a5`.) The
+never `improcv.plot_confusion_matrix`; requires the `viz` extra, see [Usage](#usage) above).
+`0.5.0b1` is the current public prerelease: the first beta release of the `0.5.0` line. It
+introduces no fifth feature slice -- it freezes that four-slice scope for stabilization, the same
+shift `0.3.0b1`/`0.4.0b1` made for their own lines: bug fixes, compatibility corrections, typing
+corrections, documentation corrections, portability/test corrections, and feedback from
+real-world usage take priority over new features, which are deferred to a later development line
+unless required to correct a bug, compatibility problem, or API-contract issue. (A `0.5.0a5.dev0`
+development checkpoint existed briefly for the scope-closure audit that confirmed this freeze, but
+was never published as a release.) The
 `aN`/`bN` in `0.4.0aN`/`0.4.0bN`/`0.5.0aN`/`0.5.0bN` describes how far along a
 given `0.MINOR` release is in its own release cycle, separate from the project's overall maturity
 classifier, which was already Beta before `0.4.0b1` (set at the `0.3.0b1` transition) and remains
@@ -1814,10 +1813,8 @@ and why it doesn't match the project's original one-phase-per-minor-version plan
   scope, which remains in beta stabilization. `0.4.0a1`-`0.4.0a5` were the alpha phase of the
   additive `0.4.x` feature line; `0.4.0b1` was the first (and, as published, only) beta of that
   line, and remains the last public `0.4` release. `0.5.0a1`-`0.5.0a4` were the alpha phase of a
-  new, additive `0.5.x` feature line opened on top of that frozen `0.4.0` scope; that functional
-  scope is now settled, and `0.5.0b1` begins the beta line for `0.5.0` -- currently in development
-  as `0.5.0b1.dev0` and not yet published, so `0.5.0a4` remains the latest published `0.5.0`
-  release for now. Beta means the
+  new, additive `0.5.x` feature line opened on top of that frozen `0.4.0` scope; `0.5.0b1` began
+  the beta line for `0.5.0` once that functional scope settled. Beta means the
   planned functional scope for a line has settled and the focus has shifted to stabilization;
   alpha means the opposite -- neither status means the public API is declared stable, and a
   backwards-incompatible change may still land in any `0.MINOR` release before `1.0.0`, including
