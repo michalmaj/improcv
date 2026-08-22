@@ -10,6 +10,20 @@ breaking changes; post-`1.0.0`, only a `MAJOR` bump may.
 
 ## [Unreleased]
 
+### Changed
+- The planned functional scope for `0.5.0` is now settled at the four slices released across
+  `0.5.0a1`-`0.5.0a4` -- `save_image` (`0.5.0a1`), `expand_perspective_canvas` (`0.5.0a2`),
+  `classification_report`/`ClassificationReport` (`0.5.0a3`), and
+  `improcv.visualization.plot_confusion_matrix` (`0.5.0a4`) -- following a dedicated scope-closure
+  audit. Development has moved to `0.5.0b1.dev0`, opening `0.5.0`'s beta stabilization phase the
+  same way `0.3.0b1`/`0.4.0b1` did for their own lines: bug fixes, compatibility corrections,
+  typing corrections, documentation corrections, and feedback from real-world usage take priority
+  over new feature slices, which are deferred to a later development line. `0.5.0b1` has not been
+  published yet -- this is a development-only checkpoint, introducing zero new public symbols,
+  zero changed public signatures or defaults, zero new runtime behavior, and zero dependency
+  changes relative to `0.5.0a4`. A `0.5.0a5.dev0` checkpoint existed briefly for the audit itself
+  but was never published as `0.5.0a5`.
+
 ## [0.5.0a4] - 2026-08-21
 
 ### Added
