@@ -3,6 +3,12 @@
 Status: **speculative — no development line has been opened for this feature.** This document
 freezes a candidate API contract to determine whether one *can* be frozen durably; it does not by
 itself approve building it. See §0 for why this file is deliberately not named after any version.
+**Corrected post-merge, pre-implementation** — a static/runtime typing mismatch, a premature public
+`CameraMatrix` alias, an underspecified type/dtype validation contract, an inaccurate "excludes no
+real capability" claim, an unfrozen "tight tolerance" camera-matrix comparison, and an unstated
+dataclass-construction semantic were all found and fixed; see §1-§13, §16, §19-§21, §23, and §26
+for exactly what changed. No decision this document had already gotten right was reopened without
+new evidence (§7 of the correcting task, restated in each corrected section as it applies).
 
 ## 0. Filename and status convention
 
@@ -103,8 +109,9 @@ What this design adds over `ok, rvec, tvec = cv2.solvePnP(...)`:
 4. A structured, immediately-usable result (a 3x3 rotation matrix and a `(3,)` translation vector)
    instead of a raw Rodrigues vector and a `(3,1)` column vector that both need conversion before
    use.
-5. Pre-validated, specific `ValueError`s (bad shape, dtype, point count, camera-matrix structure,
-   distortion length) in place of `cv2`'s internal C++ assertion text (e.g. `"'6' is 6"`).
+5. Pre-validated, specific `TypeError`/`ValueError`s (wrong type, wrong dtype, bad shape, point
+   count, camera-matrix structure, distortion length — §23) in place of `cv2`'s internal C++
+   assertion text (e.g. `"'6' is 6"`).
 6. **Actively rejects** a silently-discarded skew term (§2b) rather than accepting it and
    discarding the caller's input without a trace — a real safety improvement raw `cv2` does not
    offer.
@@ -205,29 +212,56 @@ array content).
 - manual `__eq__` comparing both fields via `np.array_equal`
 - `__hash__ = None` (unhashable, matching every other array-bearing result type in this project)
 
+**Constructor-semantics clarification (explicit, to avoid a category of bug the original text
+invited by omission):** the copied/float64/read-only/fixed-shape guarantees above describe values
+*returned by* `estimate_object_to_camera_pose` — they are not enforced by `ObjectToCameraPose`
+itself. `ObjectToCameraPose` has no `__post_init__` and performs no validation of its own; like
+this project's other array-bearing result types, it is **a result container, not a
+self-validating domain object** — manual construction (e.g. `ObjectToCameraPose(rotation=np.zeros((2,2)),
+translation=np.array([1]))`) is never rejected, including with the wrong shape, a mutable array, or
+a non-float64 dtype. This follows `MulticlassRocCurve`'s own documented precedent exactly (`src/
+improcv/evaluation.py`: *"This is a result container, not a self-validating domain object --
+manual construction ... is never rejected ... Only [the producing function] itself guarantees the
+full contract ... for the value it returns"*) rather than inventing a new validating-dataclass
+philosophy this project does not otherwise use. The docstring must state this precisely so it
+never implies every manually-constructed `ObjectToCameraPose` is automatically copied, read-only,
+or correctly shaped.
+
 ## 8. Object-point contract
 
-- Public shape: **exactly `(N, 3)`** — never `cv2`'s `(N,1,3)`/`(1,N,3)` forms, rejected explicitly
-  with a clear message.
-- Must be `np.ndarray` (not a bare `Sequence` — unlike some evaluation functions that accept
+- Must be `np.ndarray` — **not** a bare `Sequence` (unlike some evaluation functions that accept
   `Sequence[int]`, a 3D point set is naturally already array-shaped data, and requiring `ndarray`
-  keeps the shape contract simple and unambiguous for a first slice).
-- dtype policy: **accept `np.floating` (float32 or float64), normalize internally to float64**
-  before calling `cv2` — matches this project's general pattern of accepting a reasonably wide
-  numeric input and normalizing (e.g. `TransformMatrix = npt.NDArray[np.floating[Any]]`), rather
-  than gatekeeping to float64-only.
+  keeps the shape contract simple and unambiguous for a first slice). A non-`ndarray` input (a
+  list, tuple, string, or any other object) raises **`TypeError`** — checked first, before any
+  `.dtype`/`.ndim`/`.shape` access, so a plain Python object can never accidentally surface an
+  `AttributeError` instead of a clear improcv error (§23 of this correction freezes the exact
+  order across all four parameters).
+- dtype policy: **accept `np.floating` (float32 or float64) only, normalize internally to
+  float64** before calling `cv2` — matches this project's general pattern of accepting a
+  reasonably wide numeric input and normalizing (e.g. `TransformMatrix = npt.NDArray[np.floating[Any]]`),
+  rather than gatekeeping to float64-only. An integer-dtype (or any other non-floating-dtype)
+  array raises **`TypeError`**, matching this project's existing precedent (`src/improcv/evaluation.py`'s
+  `_normalize_zero_division`/label-validation helpers: `not isinstance(value, np.ndarray)` →
+  `TypeError`; `not np.issubdtype(value.dtype, np.integer)` → `TypeError`) — integers are silently
+  *not* accepted, never silently upcast.
+- Public shape: **exactly `(N, 3)`** — never `cv2`'s `(N,1,3)`/`(1,N,3)` forms. A wrong `ndim` or
+  wrong trailing shape raises **`ValueError`** (checked only after the type/dtype checks above have
+  already passed, per this project's established `TypeError`-for-type/dtype,
+  `ValueError`-for-shape/value convention, confirmed directly in `evaluation.py`'s validators).
 - Must be finite (reject NaN/Inf) — closes a real gap: `projectPoints` silently propagates NaN,
   and neither version catches Inf anywhere in the object/camera-matrix path (§2 of the prior
-  research spike).
+  research spike). Raises `ValueError`.
 - Internal C-contiguity is improcv's problem, not the caller's — normalize via
   `np.ascontiguousarray` internally rather than requiring the caller to think about it.
-- Minimum N: **6**, universally — see §10.
+- Minimum N: **6**, universally — see §10. Raises `ValueError`.
 
 ## 9. Image-point contract
 
-- Public shape: **exactly `(N, 2)`**, `N` identical to `object_points`'s `N` — mismatch is a
-  `ValueError`, not left to `cv2`'s own (already-confirmed-clear-enough) internal assertion.
-- Same dtype/finite/contiguity policy as §8.
+- Same type/dtype/shape/finiteness policy and exception types as §8: not-`ndarray` → `TypeError`;
+  non-floating dtype → `TypeError`; wrong `ndim`/trailing shape (≠ `(N,2)`) → `ValueError`;
+  non-finite → `ValueError`.
+- `N` must equal `object_points`'s `N` exactly — mismatch is a `ValueError`, not left to `cv2`'s
+  own (already-confirmed-clear-enough) internal assertion.
 - Never expose `cv2`'s `(N,1,2)`/`(1,N,2)` forms publicly.
 
 ## 10. Planarity / degeneracy policy — the central open question, now resolved
@@ -243,20 +277,35 @@ Three policies were compared, using §2a's decisive new evidence:
   fragile fixed absolute-rank tolerance without scale analysis") — solving it properly is a
   distinct piece of work this slice should not be blocked on.
 - **Policy B** (require N>=6 universally, regardless of planar/non-planar; no planarity detection
-  at all): §2a confirmed planar N=6 succeeds correctly in both OpenCV versions — so a universal
-  N>=6 minimum does not exclude *any* real capability, it only asks planar users for 2 more points
-  than OpenCV's own bare minimum. This entirely sidesteps the scale-dependent-tolerance problem,
-  requires zero geometry-classification code, and cannot disagree with `cv2`'s own internal
-  (not-fully-reverse-engineered) planarity test, because improcv never attempts to replicate it.
+  at all): §2a confirmed planar N=6 succeeds correctly in both OpenCV versions, so a universal
+  N>=6 minimum does not break anything for callers who already have 6+ points. This entirely
+  sidesteps the scale-dependent-tolerance problem, requires zero geometry-classification code, and
+  cannot disagree with `cv2`'s own internal (not-fully-reverse-engineered) planarity test, because
+  improcv never attempts to replicate it.
 - **Policy C** (support only non-planar): rejected — planar target scenarios (fiducial markers,
   calibration checkerboards used purely for pose, etc.) are one of the most common real-world PnP
   use cases; excluding them gives *less* value than raw `cv2`.
 
-**Frozen: Policy B.** `object_points`/`image_points` must have `N >= 6`; the function does not
-distinguish planar from non-planar internally at all. This is documented as a deliberate
-simplification, not an oversight, and is a strictly backward-compatible thing to relax later (a
-future slice could add planarity detection and lower the minimum for planar inputs without
-breaking any existing caller).
+**Frozen: Policy B — with an honest, explicitly-stated limitation.** `object_points`/
+`image_points` must have `N >= 6`; the function does not distinguish planar from non-planar
+internally at all. **This is a real, acknowledged capability restriction, not merely a
+convenience simplification**: it excludes otherwise-valid planar PnP calls with exactly 4 or 5
+correspondences — including the common case of a single planar four-corner fiducial/marker/square
+target, which `cv2.solvePnP` itself handles correctly today (§2a, planar N=4). Any prior or later
+wording in this document claiming this restriction "excludes no real capability" is **incorrect
+and superseded here** — it does exclude a real, common four-point planar workflow. The restriction
+is accepted anyway because it buys one uniform, deterministic public contract without any
+planarity classification or scale-dependent tolerance code; it is strictly backward-compatible to
+relax later (a future slice could add planarity detection and lower the minimum for planar inputs
+without breaking any existing caller); and **callers who need four- or five-point planar PnP today
+must call `cv2.solvePnP` directly** — this design does not yet serve them.
+
+Re-running the product-value gate (§3) with this limitation stated honestly: the value-adds listed
+there (canonical shapes, dtype normalization, explicit direction, structured result, safer
+validation, cross-version stability, skew rejection) all still hold independently of the N>=6
+restriction — none of them depended on the false "no capability excluded" claim. The gate still
+passes; it simply passes for a *smaller* population of valid inputs than raw `cv2.solvePnP`
+itself serves, which is an honest, disclosed trade-off rather than a hidden one.
 
 Rank-1/collinear/identical-point degeneracy: the research spike found `cv2.solvePnP` does **not**
 raise on identical or collinear point sets — it returns `ok=True` with silently wrong output.
@@ -273,33 +322,70 @@ correspondences.
 
 | Property | OpenCV's own behavior (both versions) | improcv policy |
 |---|---|---|
-| Shape ≠ (3,3) | Rejected (`cv2.error`) | **Require exactly (3,3)** |
-| dtype | float32/float64 both accepted | Accept both, normalize to float64 |
-| `K[0,1]`, `K[1,0]` ≠ 0 | **Silently ignored** (§2b) | **Require exactly 0** — this is the corrected decision from §2b |
-| `K[2,0]`, `K[2,1]` ≠ 0 | Not a supported pinhole parameterization | **Require exactly 0** |
-| `K[2,2]` ≠ 1 | Silently accepted, used as an unexplained scale | **Require exactly 1** (tight tolerance) — no known legitimate alternative parameterization |
+| Not an `np.ndarray` | n/a | **`TypeError`** — checked first, before any attribute access |
+| Non-floating dtype (e.g. integer) | n/a | **`TypeError`** — same convention as §8/§9, never silently upcast |
+| Shape ≠ (3,3) | Rejected (`cv2.error`) | **Require exactly (3,3)** — `ValueError` |
+| dtype (floating) | float32/float64 both accepted | Accept both, normalize to float64 |
+| `K[0,1]`, `K[1,0]` ≠ 0 | **Silently ignored** (§2b) | **Require exactly `== 0.0`** — this is the corrected decision from §2b |
+| `K[2,0]`, `K[2,1]` ≠ 0 | Not a supported pinhole parameterization | **Require exactly `== 0.0`** |
+| `K[2,2]` ≠ 1 | Silently accepted, used as an unexplained scale | **Require exactly `== 1.0`** — no known legitimate alternative parameterization |
 | fx, fy ≤ 0 | Silently accepted, produces sign-flipped/mirrored results | **Require > 0** — same "silently-wrong-but-accepted" hazard class as skew; a design choice, not independently re-tested this round, but justified by the same logic already validated for skew/Inf |
 | NaN | Caught by `solvePnP`'s own assertion, **not** caught by `projectPoints` | **Require finite** — closes the `projectPoints` gap |
 | Inf | **Neither version catches this** | **Require finite** — a real gap in `cv2` itself |
 | Principal point (cx, cy) | Unrestricted | No restriction beyond finiteness — legitimately can be anywhere |
 
+**Exact equality, no `rtol`/`atol`, frozen.** The five structural positions (`K[0,1]`, `K[1,0]`,
+`K[2,0]`, `K[2,1]`, `K[2,2]`) are compared with plain Python/NumPy `==` against `0.0`/`1.0` *after*
+dtype normalization to float64, not a tolerance-based comparison. This is safe because: a caller
+constructing a proper pinhole matrix by hand places literal `0.0`/`1.0` values, which are exactly
+representable in both float32 and float64 with no rounding error, and upcasting an exact float32
+`0.0`/`1.0` to float64 introduces no error either — there is no legitimate path by which a
+correctly-constructed camera matrix would have a merely-close-to-zero or merely-close-to-one value
+in these positions. `cv2.calibrateCamera`'s own output `K` is assembled the same way internally
+(the standard OpenCV calibration model fixes these positions structurally rather than fitting
+them), so exact equality does not reject legitimate calibration-produced matrices either. A
+tolerance-based comparison was considered and rejected as unnecessary complexity with no
+supporting evidence that it is needed — per the task's own "no real evidence this rejects
+legitimate matrices" test.
+
 Ownership: `camera_matrix` is read, never mutated; any dtype normalization happens on an internal
 copy, matching this project's "never hide expensive array copies, always document" rule.
 
-## 12. Public `CameraMatrix` type
+## 12. No public `CameraMatrix` type — corrected decision
 
-Directly extends the existing `TransformMatrix = npt.NDArray[np.floating[Any]]` precedent in
-`src/improcv/types.py` — a plain, coarse type alias documented with its shape/value contract in a
-docstring comment, not a validated dataclass. A type alias cannot itself enforce shape or the
-structural-zero/`K[2,2]==1`/positivity invariants from §11 — those remain the responsibility of a
-private validator called at the top of the function, exactly like every other validated-but-alias-
-typed parameter in this project.
+The originally-merged version of this document froze a public `CameraMatrix = npt.NDArray[np.float64]`
+alias, reasoning it extended the existing `TransformMatrix` precedent in `src/improcv/types.py`.
+**On correction, that decision is reversed: `CameraMatrix` is removed from this first slice.**
 
-**Frozen: `CameraMatrix = npt.NDArray[np.float64]`, public**, documented: *"A `(3,3)` standard
-pinhole camera intrinsic matrix `[[fx,0,cx],[0,fy,cy],[0,0,1]]` — `fx`,`fy` > 0, all other
-positions exactly as shown."* A validated dataclass wrapper (`CameraIntrinsics`-style) is rejected
-as premature for a single first-slice parameter, matching `TransformMatrix`'s own precedent of
-staying a plain alias.
+The `TransformMatrix` analogy does not actually hold up: `TransformMatrix` earns its place as a
+named alias because it is used across roughly six different functions throughout
+`src/improcv/augmentation.py` and `src/improcv/transforms.py` (`warp_affine`, `warp_perspective`,
+`sample_affine`, `sample_perspective`, `expand_affine_canvas`, `expand_perspective_canvas`) — its
+value comes from *consistent naming across many call sites*, not from labeling any single
+parameter. `CameraMatrix` would have exactly **one** call site in the entire codebase today. A
+type alias used in exactly one place adds no marginal signature-readability value the parameter
+name `camera_matrix` was not already providing on its own — Python type aliases are not nominal
+types; `CameraMatrix` and a bare `npt.NDArray[np.floating[Any]]` are literally interchangeable to
+every type checker and at runtime, so the alias's only possible value is human-readability, and
+one call site does not justify introducing a public symbol for that.
+
+Separately, the originally-merged alias was **float64-only** (`npt.NDArray[np.float64]`) while
+§11's own runtime contract accepts float32 *or* float64 and normalizes internally — meaning the
+alias actively misrepresented what the function actually accepted (§1 of this correction). Fixing
+the alias to the honest `npt.NDArray[np.floating[Any]]` would have made it *less* informative
+still, since at that point it says nothing more than "a floating-point ndarray," the same thing
+every other unaliased parameter in this design already says directly.
+
+None of this rules out introducing `CameraMatrix` — or a genuinely validated `CameraIntrinsics`-
+style object — later, once a second function in this codebase actually needs to accept the same
+kind of camera matrix, giving the alias real multi-site value the way `TransformMatrix` has.
+Adding a type alias to `src/improcv/types.py` (the project's existing shared location for such
+aliases — not `geometry.py`, matching where `TransformMatrix`/`Mask`/`Image` already live) at that
+point would be a purely additive, non-breaking change.
+
+**Frozen: no `CameraMatrix` symbol in this slice.** `camera_matrix` is typed directly as
+`npt.NDArray[np.floating[Any]]`, exactly matching what §11's validator actually accepts, and the
+parameter name alone carries the semantic meaning.
 
 ## 13. Distortion-coefficient contract
 
@@ -310,16 +396,22 @@ rejections anywhere (prior research spike). Given this permissiveness and simpli
 
 **Frozen**: keyword parameter named `distortion` (not `dist_coeffs` — matches this project's
 consistent preference for full English words over `cv2`-mirroring abbreviations, e.g.
-`sample_weight` not `s_weight`), typed `npt.NDArray[np.float64] | None = None`.
+`sample_weight` not `s_weight`), typed **`npt.NDArray[np.floating[Any]] | None = None`** — corrected
+from the originally-merged `npt.NDArray[np.float64] | None`, which contradicted this very section's
+own stated policy of accepting float32 as well (§1 of this correction).
 
-- `None` means zero distortion (matches `cv2`'s own semantics directly).
+- `None` means zero distortion (matches `cv2`'s own semantics directly) and skips all of the
+  following checks entirely.
+- When not `None`: not an `np.ndarray` → `TypeError`; non-floating dtype (e.g. integer) →
+  `TypeError` — same convention as §8/§9/§11, checked before any shape/value inspection.
 - An empty array (`shape (0,)`) is treated **identically to `None`** — a harmless, informationally
   equivalent representation some callers may naturally produce; rejecting it as an invalid length
   would be needlessly unforgiving.
-- Otherwise: must be exactly **1-D**, length in `{4, 5, 8, 12, 14}`, finite. `cv2`'s column-vector
-  forms (`(4,1)` etc.) are **not** accepted publicly — reshaped internally only if ever needed,
-  never exposed as a caller-facing shape choice.
-- Accepts float32 or float64, normalized to float64.
+- Otherwise: must be exactly **1-D** (wrong `ndim` → `ValueError`), length in `{4, 5, 8, 12, 14}`
+  (`ValueError`), finite (`ValueError`). `cv2`'s column-vector forms (`(4,1)` etc.) are **not**
+  accepted publicly — reshaped internally only if ever needed, never exposed as a caller-facing
+  shape choice.
+- Accepts float32 or float64, normalized to float64 internally.
 
 ## 14. `solvePnP` method scope
 
@@ -345,8 +437,12 @@ method-specific minimum-point relaxations not designed here. No evidence current
 
 ## 16. Solver failure contract
 
-- Every structural/numeric precondition from §8-§13 is validated **before** calling `cv2`,
-  raising a specific `ValueError` with a clear message (§23 freezes the exact order).
+- Every structural/numeric precondition from §8-§13 is validated **before** calling `cv2`, raising
+  either `TypeError` (wrong Python/array type, wrong dtype) or `ValueError` (wrong shape, wrong
+  value/count/structure) with a clear message — matching this project's existing, directly-verified
+  convention (`src/improcv/evaluation.py`'s validators: `not isinstance(x, np.ndarray)` and wrong
+  dtype both raise `TypeError`; wrong `ndim`/shape/value raises `ValueError`). §23 freezes the
+  exact order across all four parameters.
 - If `cv2.solvePnP` still raises an unanticipated `cv2.error` after all pre-validation passes, it
   is **not** caught or reinterpreted — it propagates unchanged. improcv should not blanket-catch
   an internal `cv2` error it cannot meaningfully translate (matches this project's "catch specific
@@ -402,8 +498,9 @@ abstractions until several real use cases justify one" applies to namespace deci
 function/type decisions).
 
 **Frozen: the existing top-level module pattern.** New module `src/improcv/geometry.py` holding
-`estimate_object_to_camera_pose`, `ObjectToCameraPose`, and `CameraMatrix`; all three re-exported
-from `improcv.__init__` exactly like every other domain module. `import improcv` imports this
+`estimate_object_to_camera_pose` and `ObjectToCameraPose` (no `CameraMatrix`, §12); both
+re-exported from `improcv.__init__` exactly like every other domain module. `import improcv`
+imports this
 module eagerly, same as every module except `visualization`.
 
 This explicitly revises the prior research spike's tentative lean toward examining a `geometry`
@@ -413,28 +510,35 @@ consistent choice for a *first* slice in a new domain. If a second or third geom
 is ever designed, *that* would be the natural point to revisit a namespace decision — not decided
 here.
 
-## 20. Exact public API delta
+## 20. Exact public API delta — corrected
 
 | Symbol | Kind | New? |
 |---|---|---|
 | `estimate_object_to_camera_pose` | function | + |
 | `ObjectToCameraPose` | result type | + |
-| `CameraMatrix` | type alias | + |
 
-`improcv.__all__`: **198 → 201**. `improcv.visualization.__all__`: unchanged at **3**. New module:
-`src/improcv/geometry.py`.
+**No `CameraMatrix` alias (§12, corrected).** `improcv.__all__`: **198 → 200** (corrected from the
+originally-merged 201, which counted the now-removed `CameraMatrix`). `improcv.visualization.__all__`:
+unchanged at **3**. New module: `src/improcv/geometry.py`. New public types: **+1**
+(`ObjectToCameraPose` only).
 
-## 21. Typing — candidate final signature
+## 21. Typing — candidate final signature (corrected)
 
 ```python
 def estimate_object_to_camera_pose(
     object_points: npt.NDArray[np.floating[Any]],
     image_points: npt.NDArray[np.floating[Any]],
-    camera_matrix: CameraMatrix,
+    camera_matrix: npt.NDArray[np.floating[Any]],
     *,
-    distortion: npt.NDArray[np.float64] | None = None,
+    distortion: npt.NDArray[np.floating[Any]] | None = None,
 ) -> ObjectToCameraPose:
 ```
+
+Corrected from the originally-merged signature, which typed `camera_matrix: CameraMatrix` (an
+alias defined as float64-only, §12) and `distortion: npt.NDArray[np.float64] | None` — both
+narrower than what §11/§13 actually validate and accept (float32 *or* float64, normalized
+internally). This signature says exactly what the runtime contract accepts: a valid float32 caller
+is never statically rejected by an annotation that doesn't match the function's real behavior.
 
 `object_points`/`image_points`/`camera_matrix` are positional (matching `cv2`'s own conventional
 ordering, already familiar to the target audience, and all three are always-required geometric
@@ -462,29 +566,52 @@ vs `(N,2)`; that contract lives in the docstring and in runtime validation (§23
   OpenCV 4.9 and 5.0 (the project's existing floor/current CI matrix already covers this, no new
   infrastructure needed).
 
-## 23. Validation tests and deterministic error order
+## 23. Validation tests and deterministic error order — corrected
 
-Frozen order (structural/shape checks first, cheapest-and-most-fundamental first):
+The originally-merged order started directly with shape checks, silently assuming every input was
+already a floating-dtype `np.ndarray` — a list, string, or integer array would have surfaced as an
+uncontrolled `AttributeError` from `.ndim`/`.dtype`, not a clear improcv error. Corrected order,
+grouped **type checks for every parameter first** (so nothing later ever touches `.ndim`/`.dtype`/
+`.shape` on a value that isn't already confirmed to be a floating-dtype ndarray), then static shape
+checks, then cross-parameter/value checks, then the `cv2` call:
 
-1. `object_points` wrong ndim/trailing shape (≠ `(N,3)`) → `ValueError`
-2. `image_points` wrong ndim/trailing shape (≠ `(N,2)`) → `ValueError`
-3. N mismatch between `object_points` and `image_points` → `ValueError`
-4. `N < 6` → `ValueError`
-5. non-finite `object_points` → `ValueError`
-6. non-finite `image_points` → `ValueError`
-7. `camera_matrix` shape ≠ `(3,3)` → `ValueError`
-8. `camera_matrix` non-finite → `ValueError`
-9. `camera_matrix` fails the strict pinhole-structure check (§11: skew/off-diagonal/`K[2,2]`/
-   fx,fy-positivity) → `ValueError`
-10. `distortion` invalid length (not in `{0,4,5,8,12,14}`, treating 0 as `None`-equivalent) →
-    `ValueError`
-11. `distortion` non-finite → `ValueError`
-12. only after all the above pass: call `cv2.solvePnP`; propagate any unanticipated `cv2.error`
+1. `object_points` is `np.ndarray` → else `TypeError`
+2. `object_points` dtype is floating → else `TypeError`
+3. `image_points` is `np.ndarray` → else `TypeError`
+4. `image_points` dtype is floating → else `TypeError`
+5. `camera_matrix` is `np.ndarray` → else `TypeError`
+6. `camera_matrix` dtype is floating → else `TypeError`
+7. `distortion`, if not `None`, is `np.ndarray` → else `TypeError`
+8. `distortion`, if not `None`, dtype is floating → else `TypeError`
+9. `object_points` shape is `(N, 3)` for some `N` → else `ValueError`
+10. `image_points` shape is `(M, 2)` for some `M` → else `ValueError`
+11. `camera_matrix` shape is exactly `(3, 3)` → else `ValueError`
+12. `distortion`, if not `None`, is 1-D with length in `{0, 4, 5, 8, 12, 14}` (0 treated as
+    `None`-equivalent, §13) → else `ValueError`
+13. `N == M` (`object_points`/`image_points` count match) → else `ValueError`
+14. `N >= 6` → else `ValueError`
+15. `object_points` all finite → else `ValueError`
+16. `image_points` all finite → else `ValueError`
+17. `camera_matrix` all finite → else `ValueError`
+18. `camera_matrix` passes the strict pinhole-structure check (§11: skew/off-diagonal zeros,
+    `K[2,2]==1`, fx/fy positivity) → else `ValueError`
+19. `distortion`, if not `None`, all finite → else `ValueError`
+20. only after all of the above pass: call `cv2.solvePnP`; propagate any unanticipated `cv2.error`
     unchanged; raise `RuntimeError` if it returns `ok=False`.
+
+Step 17 (camera-matrix finiteness) is deliberately checked immediately before step 18 (its
+structural comparison) rather than being grouped with steps 15-16: comparing a NaN camera-matrix
+entry against `0.0`/`1.0` via `==` would silently evaluate to `False` and misreport a finiteness
+problem as a structural-mismatch problem, so finiteness must be confirmed first for that specific
+array.
 
 Tests must include multiple-simultaneously-invalid-input cases confirming this exact firing order,
 matching this project's established "error ordering must be deterministic and documented" pattern
-used throughout `evaluation.py`'s validators.
+used throughout `evaluation.py`'s validators — including at least one case per corrected boundary:
+a Python `list` for `object_points` (must raise `TypeError`, never `AttributeError`), an
+integer-dtype `object_points` array (must raise `TypeError`, never be silently upcast), and a
+`camera_matrix` containing NaN in a structural position (must raise `ValueError` for
+non-finiteness, not a confusing structural-mismatch message).
 
 ## 24. Thin-wrapper gate — final check
 
@@ -517,24 +644,35 @@ the above is designed):
   removal); `SOLVEPNP_DLS`/`SOLVEPNP_UPNP` constants were also removed in 5.0 but were confirmed
   pure aliases of `EPNP`, so no real capability is lost.
 
-## 26. Version recommendation
+## 26. Version recommendation — corrected verdict
 
-**DESIGN READY — DO NOT OPEN 0.6 YET.**
+**DESIGN INTERNALLY CONSISTENT — READY FOR VERSION-GATE REAUDIT.**
 
-Every item this design needed to freeze was resolved into a concrete, justified decision: transform
-direction, naming, result-type shape and fields, ownership/equality, point-array and camera-matrix
-contracts (including two corrected findings from direct experiment), distortion contract,
-degeneracy/planarity policy, method scope, failure contract, rotation/translation normalization,
-namespace placement, exact public delta, a candidate final signature, a concrete test-oracle plan
-with real numeric tolerances, and a deterministic validation order. The design passes its own
-acceptance gate (§27) and the thin-wrapper gate (§24).
+(This supersedes the originally-merged verdict wording, "DESIGN READY — DO NOT OPEN 0.6 YET" — the
+substance is the same, but this correction pass exists precisely because the original document was
+*not yet* internally consistent: a static/runtime typing mismatch (§1 of this correction), a
+premature public `CameraMatrix` alias (§2), an underspecified type/dtype validation contract (§3),
+a materially inaccurate "excludes no real capability" claim (§4), an unfrozen "tight tolerance" for
+the camera-matrix structural check (§5), and an unstated dataclass-construction semantic (§6) have
+all now been corrected. The verdict vocabulary is deliberately different from the original
+document's own to make unmistakably clear that a corrected design being self-consistent is not the
+same claim as a design being *approved to build* — that remains, as before, a separate decision.)
 
-This does **not** mean 0.6 should open now. The preceding boundary audit's verdict (**NO IMMEDIATE
-0.6**, absent new user/workflow evidence) was a separate, timing/evidence question this design
-exercise does not change — producing a sound design for one candidate slice is not itself the kind
-of evidence that audit was looking for. Per this task's own explicit framing, "design soundness"
-and "whether to open a new development line" are two independent gates, and only the first is
-answered here.
+Every item this design needed to freeze is now resolved into a concrete, justified, and internally
+consistent decision: transform direction, naming, result-type shape/fields/construction semantics,
+ownership/equality, point-array and camera-matrix contracts (including two corrected empirical
+findings and one corrected typing/alias decision), distortion contract, degeneracy/planarity policy
+(now stated honestly, including its real capability limitation), method scope, failure contract,
+rotation/translation normalization, namespace placement, exact public delta, a corrected candidate
+final signature, a concrete test-oracle plan with real numeric tolerances, and a corrected
+deterministic validation order covering both type and shape/value failures. The design passes its
+own acceptance gate (§27) and the thin-wrapper gate (§24).
+
+This still does **not** mean 0.6 should open now. The preceding boundary audit's verdict (**NO
+IMMEDIATE 0.6**, absent new user/workflow evidence) remains a separate, timing/evidence question
+this correction does not touch — a design being internally consistent is not itself the kind of
+evidence that audit was looking for. Whether this design is *approved* is a distinct, still-open
+"version-gate reaudit" decision for whoever chooses to make it next, not concluded here.
 
 ## 27. Design acceptance gate — self-check
 
@@ -550,7 +688,7 @@ answered here.
 | Solver-failure policy frozen | ✓ §16 |
 | Method selection frozen/out-of-scope | ✓ §14 |
 | Namespace decision frozen | ✓ §19 |
-| Exact public delta known | ✓ §20 (198→201) |
+| Exact public delta known | ✓ §20 (198→200, corrected — no `CameraMatrix`) |
 | OpenCV 4/5 first-slice behavior demonstrated stable | ✓ §2, all instabilities found affect only out-of-scope functions (§25) |
 | Deterministic test oracle exists | ✓ §22 |
 | Thin-wrapper gate passes | ✓ §24 |
